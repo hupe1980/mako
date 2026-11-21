@@ -33,11 +33,13 @@
   <p class="stats-note wrap">{{ x.scope_note | markdown(inline=true) | safe }}</p>
 </section>
 
+{% include "partials/trace.html" %}
+
 <section class="roles section-pad" aria-labelledby="who">
   <div class="wrap">
     <h2 id="who">{{ x.roles_title }}</h2>
     <p class="section-lead">{{ x.roles_lead | markdown(inline=true) | safe }}</p>
-    <div class="card-grid card-grid-4">
+    <div class="card-grid card-grid-3">
       {%- for r in x.roles %}
       <div class="card">
         <h3><span class="role-abbr">{{ r.abbr }}</span> {{ r.name }}</h3>

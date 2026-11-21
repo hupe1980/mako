@@ -34,12 +34,12 @@ person decides; every answer, amount and Frist carries its source.
 
 | Layer | What it is |
 |---|---|
-| **Protocol** | `edi-energy`, `dvgw-edi`, `redispatch-xml` formats · `mako-engine` runtime · `makod` — 77 workflows over 499 Prüfidentifikatoren, AS4 with mutual TLS |
+| **Protocol** | `edi-energy`, `dvgw-edi`, `redispatch-xml` formats · `mako-engine` runtime · `makod` — 82 workflows over 499 Prüfidentifikatoren, AS4 with mutual TLS |
 | **Market data** | `mako-markt` · `marktd` hub: master data, registries, Referenzreihen, durable CloudEvents fan-out |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer** | `vertragd` contracts and online Vertragsschluss · `productd` catalogue · `accountingd` ledger · `outputd` documents · `portald` portal |
 | **Agents** | 11 of the 14 services expose an MCP server — **212 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
-| **Validator** | [Check an EDIFACT message in your browser](https://hupe1980.github.io/mako/validator/) — the validator makod runs, compiled to WebAssembly; nothing leaves the tab |
+| **Validator** | [Check an EDIFACT message in your browser](https://hupe1980.github.io/mako/validator/) — the validator makod runs, compiled to WebAssembly — beside an [Antwortcode lookup](https://hupe1980.github.io/mako/validator/codes/), a [Fristenrechner](https://hupe1980.github.io/mako/validator/fristen/) and an [ID check](https://hupe1980.github.io/mako/validator/ids/); nothing leaves the tab |
 | **Desk** | [`desk/`](desk/) — one inbox per Rolle, the rule behind every item, an assistant that cites every sentence ([guide](https://hupe1980.github.io/mako/docs/guide/desk/)) |
 | **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin · [`mako-conformance`](tools/mako-conformance/) — checks a replacement for a service against the contract mako's publishes ([guide](https://hupe1980.github.io/mako/docs/guide/replace-a-service/)) |
 
@@ -172,7 +172,7 @@ service's OpenAPI 3.1 document is published at
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 77 workflows over 499 Prüfidentifikatoren, AS4 · REST · iMS |
+| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 82 workflows over 499 Prüfidentifikatoren, AS4 · REST · iMS |
 | [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, Zuordnungsermächtigungen, Referenzreihen, CloudEvents fan-out |
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Answers the Entscheidungsbäume and escalates what it cannot decide; process KPIs, Fristen, the § 7a Abs. 5 EnWG report, the Sperrauftrag queue |
 | [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 19 MCP tools |
@@ -306,3 +306,8 @@ Licensed under either of [MIT](./LICENSE-MIT) or
 - [doubleentry](https://crates.io/crates/doubleentry) — the ledger beneath `accountingd`
 - [billing](https://crates.io/crates/billing) — the EN 16931 tariff and invoicing engine under the settlement crates
 - [SlateDB](https://slatedb.io/) — embedded storage behind `mako-engine`
+
+## Sister projects
+
+- [emob](https://hupe1980.github.io/emob/) — open-source charging operations: CSMS and eMSP back office, OCPP 2.1, OCPI 2.3.0, Eichrecht. mako covers the market side of e-mobility (`mako-emob`, NZR-EMob Modell 2).
+- [hems](https://hupe1980.github.io/hems/) — open-source home energy management: § 14a, § 9 EEG, MiSpeL. mako holds the § 14a module on the contract and prices its Netzentgelt reduction.

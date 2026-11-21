@@ -1,0 +1,64 @@
+{#- What happens to a message: the path every inbound message takes, shown
+    as six stages. Without JavaScript it is the static path; with it, a
+    sample or a dropped file travels through it and each stage shows what
+    the validator module (static/validator/) computes for that message.
+    The module loads on the first click only. -#}
+<section class="trace-section section-pad alt" aria-labelledby="trace-title">
+  <div class="wrap">
+    <h2 id="trace-title">{{ trans(key="trace_title", lang=lang) }}</h2>
+    <p class="section-lead">{{ trans(key="trace_lead", lang=lang) }}</p>
+
+    <div class="trace" data-wasm="{{ get_url(path='validator/mako.wasm') | safe }}"
+         data-validator="{{ get_url(path='@/validator.md', lang=lang) | safe }}" data-lang="{{ lang }}">
+      <div class="trace-bar">
+        <span class="trace-try">{{ trans(key="trace_try", lang=lang) }}</span>
+        <button type="button" class="trace-chip" data-sample="utilmd-55001">{{ trans(key="trace_s1", lang=lang) }}</button>
+        <button type="button" class="trace-chip" data-sample="utilmd-44001-gas">{{ trans(key="trace_s2", lang=lang) }}</button>
+        <button type="button" class="trace-chip is-bad" data-sample="utilmd-lokations-id">{{ trans(key="trace_s3", lang=lang) }}</button>
+        <label class="trace-chip trace-file">{{ trans(key="trace_own", lang=lang) }}
+          <input type="file" accept=".edi,.txt,.gz,text/plain">
+        </label>
+        <output class="trace-status" aria-live="polite"></output>
+      </div>
+
+      <ol class="trace-path" aria-live="polite">
+        {%- for s in ["in", "check", "route", "frist", "answer", "out"] %}
+        <li class="trace-stage{% if s == 'in' or s == 'out' %} is-prod{% endif %}" data-stage="{{ s }}">
+          <span class="trace-n" aria-hidden="true">{{ loop.index }}</span>
+          <strong>{{ trans(key="trace_" ~ s, lang=lang) }}</strong>
+          <span class="trace-sub">{{ trans(key="trace_" ~ s ~ "_sub", lang=lang) }}</span>
+          <span class="trace-live"></span>
+          {%- if s == 'in' or s == 'out' %}
+          <span class="trace-badge">{{ trans(key="trace_prod", lang=lang) }}</span>
+          {%- endif %}
+        </li>
+        {%- endfor %}
+      </ol>
+
+      <p class="trace-foot">
+        <span>{{ trans(key="trace_foot", lang=lang) }}</span>
+        <a class="trace-open" href="{{ get_url(path='@/validator.md', lang=lang) | safe }}">{{ trans(key="trace_open", lang=lang) }}</a>
+      </p>
+    </div>
+
+    <p>{{ trans(key="trace_after", lang=lang) }}</p>
+  </div>
+</section>
+<script type="application/json" id="trace-ui">{
+  "loading": {{ trans(key="trace_loading", lang=lang) | json_encode | safe }},
+  "failed": {{ trans(key="trace_failed", lang=lang) | json_encode | safe }},
+  "too_big": {{ trans(key="trace_too_big", lang=lang) | json_encode | safe }},
+  "not_edifact": {{ trans(key="trace_not_edifact", lang=lang) | json_encode | safe }},
+  "segments": {{ trans(key="trace_segments", lang=lang) | json_encode | safe }},
+  "no_findings": {{ trans(key="trace_no_findings", lang=lang) | json_encode | safe }},
+  "errors": {{ trans(key="trace_errors", lang=lang) | json_encode | safe }},
+  "no_route": {{ trans(key="trace_no_route", lang=lang) | json_encode | safe }},
+  "answers_by": {{ trans(key="trace_answers_by", lang=lang) | json_encode | safe }},
+  "decided_by": {{ trans(key="trace_decided_by", lang=lang) | json_encode | safe }},
+  "contrl_by": {{ trans(key="trace_contrl_by", lang=lang) | json_encode | safe }},
+  "aperak_anerkennung": {{ trans(key="trace_aperak_anerkennung", lang=lang) | json_encode | safe }},
+  "aperak_verarbeitbarkeitsfehler": {{ trans(key="trace_aperak_fehler", lang=lang) | json_encode | safe }},
+  "aperak_keine": {{ trans(key="trace_aperak_keine", lang=lang) | json_encode | safe }},
+  "then": {{ trans(key="trace_then", lang=lang) | json_encode | safe }}
+}</script>
+<script type="module" src="{{ get_url(path='validator/trace.js', cachebust=true) | safe }}"></script>

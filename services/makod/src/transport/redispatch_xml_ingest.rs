@@ -44,12 +44,13 @@ use mako_redispatch::aktivierung::{
     ACK_WINDOW_LABEL as AKT_ACK_WINDOW, ACTIVATION_RESPONSE_WINDOW_LABEL, Abrufart, Abwicklung,
     AktivierungCommand, AktivierungWorkflow,
 };
+use mako_redispatch::eiv::abruf::ANTWORTFENSTER_LABEL as EIV_ANTWORTFENSTER;
 use mako_redispatch::fristen::{ACK_FRIST, Betreiberfristen};
 use mako_redispatch::stammdaten::{
     ACK_WINDOW_LABEL as SD_ACK_WINDOW, FORWARD_WINDOW_LABEL as SD_FORWARD_WINDOW,
     StammdatenCommand, StammdatenWorkflow,
 };
-use mako_redispatch::{RedispatchDocumentKind, ack_forward};
+use mako_redispatch::{RedispatchDocumentKind, ack_forward, eiv};
 use redispatch_xml::Document;
 use redispatch_xml::documents::DocumentType;
 use time::{Duration, OffsetDateTime};
@@ -139,6 +140,13 @@ pub async fn dispatch_redispatch_xml(
     };
     let kind = document_kind(doc.document_type());
     let now = OffsetDateTime::now_utc();
+
+    // The receiver's role decides which side of the deployment answers: a
+    // document addressed to the Einsatzverantwortlichen (`A27`) never reaches
+    // a Netzbetreiber workflow, whatever its type.
+    if eiv::an_eiv_adressiert(doc.receiver_role()) {
+        return dispatch_an_eiv(dispatcher, &doc, now).await;
+    }
 
     match (&doc, kind) {
         (Document::Activation(d), _) => {
@@ -296,6 +304,174 @@ pub async fn dispatch_redispatch_xml(
             dispatch_ack_forward(dispatcher, kind, &mrid, workflow_name, cmd, ack_label).await
         }
     }
+}
+
+/// A document addressed to the Einsatzverantwortlichen.
+///
+/// The activation (`A96`) opens an [`eiv::AbrufWorkflow`] process held for a
+/// person's decision, with the operator's answer window armed in the spawn. An `AcknowledgementDocument`
+/// answers one of the EIV's own sendings and is delivered by correlation.
+/// Anything else addressed to the EIV has no workflow and is skipped, which
+/// dead-letters it — it is not handed to the Netzbetreiber side.
+async fn dispatch_an_eiv(
+    dispatcher: &EdifactIngestDispatcher,
+    doc: &Document,
+    now: OffsetDateTime,
+) -> Result<IngestOutcome, EngineError> {
+    let Some(antwortfenster) = dispatcher.eiv_antwortfenster() else {
+        return Ok(IngestOutcome::Skipped {
+            workflow_name: eiv::abruf::WORKFLOW_NAME,
+            reason: "addressed_to_the_eiv_which_this_deployment_is_not",
+        });
+    };
+    let received_at = now
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    match doc {
+        Document::Activation(d) if doc.type_code() == Some(eiv::abruf::ABRUF_DOKUMENTTYP) => {
+            let mrid = d.document_identification.v.as_str().to_owned();
+            let eingang = eiv::AbrufEingang {
+                mrid: mrid.clone(),
+                sender: d.sender_identification.v.as_str().to_owned(),
+                empfaenger: d.receiver_identification.v.as_str().to_owned(),
+                ressourcen: d
+                    .time_series
+                    .iter()
+                    .map(|ts| ts.resource_object.v.clone())
+                    .collect(),
+                zeitraum: d.activation_time_interval.v.to_string(),
+                eingegangen_at: received_at,
+            };
+            dispatcher
+                .spawn_or_resume_redispatch::<eiv::AbrufWorkflow>(
+                    now,
+                    &mrid,
+                    eiv::abruf::WORKFLOW_NAME,
+                    eiv::AbrufCommand::Empfangen(eingang),
+                    &[(EIV_ANTWORTFENSTER, now + antwortfenster)],
+                )
+                .await
+        }
+        Document::Acknowledgement(d) => {
+            let Some(quittierte_mrid) = d
+                .receiving_document_identification
+                .as_ref()
+                .map(|a| a.v.as_str().to_owned())
+            else {
+                return Ok(IngestOutcome::Skipped {
+                    workflow_name: eiv::abruf::WORKFLOW_NAME,
+                    reason: "ack_without_receiving_document_identification",
+                });
+            };
+            let quittung = eiv_quittung(d);
+            dispatch_eiv_quittung(dispatcher, now, quittung, &quittierte_mrid).await
+        }
+        _ => Ok(IngestOutcome::Skipped {
+            workflow_name: eiv::abruf::WORKFLOW_NAME,
+            reason: "no_eiv_workflow_for_this_document",
+        }),
+    }
+}
+
+/// An `AcknowledgementDocument` as the EIV workflows read it: accepted when
+/// it carries `A01` and no `A02` (`AcknowledgementDocument` FB 1.0g S. 14).
+struct EivQuittung {
+    ack_mrid: String,
+    angenommen: bool,
+    gruende: Vec<eiv::Quittungsgrund>,
+}
+
+fn eiv_quittung(d: &redispatch_xml::AcknowledgementDocument) -> EivQuittung {
+    use redispatch_xml::documents::acknowledgement::AckReasonCode;
+    let codes: Vec<AckReasonCode> = d.reasons.iter().map(|r| r.code.v).collect();
+    EivQuittung {
+        ack_mrid: d.document_identification.v.as_str().to_owned(),
+        angenommen: codes.contains(&AckReasonCode::FullyAccepted)
+            && !codes.contains(&AckReasonCode::FullyRejected),
+        gruende: d
+            .reasons
+            .iter()
+            .chain(
+                d.time_series_rejections
+                    .iter()
+                    .flat_map(|t| t.reasons.iter()),
+            )
+            .map(|r| eiv::Quittungsgrund {
+                code: r.code.v.code().to_owned(),
+                text: r.text.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Deliver an acknowledgement to the EIV process that sent the document it
+/// answers: the first of the EIV workflows holding that document's mRID.
+async fn dispatch_eiv_quittung(
+    dispatcher: &EdifactIngestDispatcher,
+    now: OffsetDateTime,
+    q: EivQuittung,
+    quittierte_mrid: &str,
+) -> Result<IngestOutcome, EngineError> {
+    let sendung = || eiv::SendungCommand::QuittungEmpfangen {
+        ack_mrid: q.ack_mrid.clone(),
+        quittierte_mrid: quittierte_mrid.to_owned(),
+        angenommen: q.angenommen,
+        gruende: q.gruende.clone(),
+    };
+    let attempts = [
+        dispatcher
+            .resume_redispatch::<eiv::PlanungsdatenSendungWorkflow>(
+                now,
+                quittierte_mrid,
+                eiv::planungsdaten::WORKFLOW_NAME,
+                sendung(),
+            )
+            .await?,
+        dispatcher
+            .resume_redispatch::<eiv::NichtbeanspruchbarkeitSendungWorkflow>(
+                now,
+                quittierte_mrid,
+                eiv::nichtbeanspruchbarkeit::WORKFLOW_NAME,
+                sendung(),
+            )
+            .await?,
+        dispatcher
+            .resume_redispatch::<eiv::StammdatenSendungWorkflow>(
+                now,
+                quittierte_mrid,
+                eiv::stammdaten::WORKFLOW_NAME,
+                sendung(),
+            )
+            .await?,
+        dispatcher
+            .resume_redispatch::<eiv::KostenblattSendungWorkflow>(
+                now,
+                quittierte_mrid,
+                eiv::kostenblatt::WORKFLOW_NAME,
+                sendung(),
+            )
+            .await?,
+        dispatcher
+            .resume_redispatch::<eiv::AbrufWorkflow>(
+                now,
+                quittierte_mrid,
+                eiv::abruf::WORKFLOW_NAME,
+                eiv::AbrufCommand::QuittungEmpfangen {
+                    ack_mrid: q.ack_mrid.clone(),
+                    quittierte_mrid: quittierte_mrid.to_owned(),
+                    angenommen: q.angenommen,
+                    gruende: q.gruende.clone(),
+                },
+            )
+            .await?,
+    ];
+    Ok(attempts
+        .into_iter()
+        .find(|o| matches!(o, IngestOutcome::Dispatched { .. }))
+        .unwrap_or(IngestOutcome::Skipped {
+            workflow_name: eiv::abruf::WORKFLOW_NAME,
+            reason: "process_not_found",
+        }))
 }
 
 /// Monomorphised dispatch for the six macro-generated ack-forward workflows.

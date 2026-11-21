@@ -53,6 +53,13 @@ share_warning = "The link carries the whole message in its address. A real messa
 share_cancel = "Cancel"
 share_confirm = "Create link"
 
+routed_to = "makod routes it to"
+
+[extra.ui.aperak]
+anerkennung = "APERAK: Anerkennungsmeldung"
+verarbeitbarkeitsfehler = "APERAK: Verarbeitbarkeitsfehlermeldung, if the receiver's check confirms the findings"
+keine = "No APERAK: Gas reports errors only"
+
 [extra.ui.severity]
 fehler = "Error"
 warnung = "Warning"

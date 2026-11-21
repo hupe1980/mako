@@ -294,7 +294,7 @@ declaration that could widen them.
 
 | TOML key | Required | Description |
 |---|---|---|
-| `rollen` | yes | `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom`. Each needs exactly one `[[party]]` MP-ID; see [Deployment roles](#deployment-roles) |
+| `rollen` | yes | `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom`, `eiv-strom`. Each needs exactly one `[[party]]` MP-ID; see [Deployment roles](#deployment-roles) |
 
 ### `[[party]]` — operator identities (required)
 
@@ -303,7 +303,7 @@ At least one entry; one per Marktpartner-ID.
 | TOML key | Required | Description |
 |---|---|---|
 | `mp_id` | yes | 13-digit BDEW- (`99…`) or DVGW-Codenummer (`98…`) or GS1 GLN. An EIC is refused: it is not an MP-ID (BDEW-AWH Identifikatoren V1.2 Kap. 2.1, S. 4). A Gas role under a `99…` code, or a Strom role under a `98…` code, is refused (BDEW-AWH Identifikatoren V1.2 Kap. 2.2, S. 5: Stelle 1+2 „99 = BDEW/Strom", „98 = DVGW/Gas") |
-| `roles` | yes | Case-insensitive. Strom: `NB`, `ANB`, `VNB` (`nb-strom`), `LF` (`lf-strom`), `MSB`, `NMSB`, `AMSB` (`msb-strom`), `ESA` (`esa-strom`), `BKV` (`bkv-strom`). Gas: `GNB` (`nb-gas`), `LFG` (`lf-gas`), `GMSB` (`msb-gas`). Each must belong to a declared `rollen` token; `UNB`, `BIKO`, `DP`, `EIV`, `MGV`, `FNB`, `KN` and `RB` have no module and are refused |
+| `roles` | yes | Case-insensitive. Strom: `NB`, `ANB`, `VNB` (`nb-strom`), `LF` (`lf-strom`), `MSB`, `NMSB`, `AMSB` (`msb-strom`), `ESA` (`esa-strom`), `BKV` (`bkv-strom`), `EIV` (`eiv-strom`). Gas: `GNB` (`nb-gas`), `LFG` (`lf-gas`), `GMSB` (`msb-gas`). Each must belong to a declared `rollen` token; `UNB`, `BIKO`, `DP`, `BTR`, `MGV`, `FNB`, `KN` and `RB` have no module and are refused |
 | `primary` | no | Storage partition key (derives the `TenantId`) and default sender MP-ID; the first entry when none is marked |
 | `agency` | no | NAD DE 3055 override, one of `9`, `293`, `332` — the MIGs' NAD code list (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18); anything else is refused. Derived from the MP-ID otherwise, by the same rule that renders the NAD: `99…` → `293`, `98…` → `332`, other 13 digits → `9` |
 
@@ -331,7 +331,7 @@ OIDC issuer, and when neither a policy directory nor `permit_all` is set.
 refuses a configuration that declares no role, a declared role without exactly
 one `[[party]]` MP-ID, an MP-ID for a role the deployment does not declare, and
 a `[[party]]` role no module answers for (`UNB`, `BIKO`, `FNB`, `MGV`, `KN`,
-`DP`, `EIV`, `RB`). One MP-ID per role and Sparte is BDEW-AWH
+`DP`, `BTR`, `RB`). One MP-ID per role and Sparte is BDEW-AWH
 Identifikatoren V1.2 Kap. 2.1 (S. 4): „Für jede Sparte (Gas bzw. Strom) und
 jede Rolle hat ein Markteilnehmer genau eine MP-ID."
 
@@ -354,6 +354,7 @@ roles = ["NB", "MSB"]
 | `msb-gas` | `GMSB` | `GeliGasModule` (the Anfrage Sperrung 17116 only) · `WimModule` |
 | `esa-strom` | `ESA` | `WimModule` (`esa-wertebestellung` and its `wim-wertebestellung` counterpart) |
 | `bkv-strom` | `BKV` | `MabisModule` (`mako_mabis::BKV_PIDS`: 13003, 13020, 21004, 21005, 55067, 55070, 17203, 17204, 17207, 19204) |
+| `eiv-strom` | `EIV` | `EivModule` (the five `redispatch-eiv-*` workflows; see [Redispatch 2.0 as Einsatzverantwortlicher](#redispatch-eiv)) |
 
 `WimModule` covers both Sparten. `bkv-strom` is the BKV of MaBiS, which is
 Strom; it makes the `mabis.abrechnung.*` commands licensable. The BKV's
@@ -362,13 +363,18 @@ Zuordnungsermächtigung (55071/55072) are not routed to it, so a 13003 for a
 MaBiS-ZP whose Aktivierung it has not recorded is refused by name.
 `RedispatchModule` is NB Strom only — LF, MSB
 and gas-only deployments have no §§ 13/13a obligations (BK6-20-059/060/061 as
-consolidated by BK6-23-241).
+consolidated by BK6-23-241). `EivModule` is the other side of the same
+documents and is loaded by `eiv-strom` alone: no Netzbetreiber deployment
+answers as EIV, and no EIV deployment as Netzbetreiber. `BTR`, the Betreiber
+der technischen Ressource, is a known role without a module: the only
+document any Anwendungstabelle addresses to it is the activation the EIV
+forwards in the Duldungsfall (`ActivationDocument` AWT 1.1f, S. 7).
 
 Every build links every domain crate; makod has no role cargo features and
 enables SlateDB through its `mako-engine` dependency, so a plain
 `cargo build -p makod` is the binary every deployment runs. The declaration
 selects registrations, and `--marktrollen` additionally refuses commands at runtime. Declaring every
-role registers the full **77 workflows over 499 Prüfidentifikatoren**, and the
+role registers the full **82 workflows over 499 Prüfidentifikatoren**, and the
 startup log records the counts a declaration registers. Which principal may
 read which role's processes is the Cedar policy's decision
 ([Authorization](#authorization)).
@@ -621,6 +627,12 @@ under `[erp] webhook_secret` — which is then required.
 
 It is a development and ERP-integration path; `MaloIdentCallback` messages still
 go to the MaLo-ID sender.
+
+### `[redispatch_eiv]` — the Einsatzverantwortliche's window
+
+| TOML key | Required | Description |
+|---|---|---|
+| `abruf_antwortfenster_minuten` | with `eiv-strom` | Minutes within which the EIV answers an activation in the Aufforderungsfall with the Rückmeldung zur Umsetzbarkeit. No published document fixes the window — BK6-23-241 Tenorziffer 7 leaves the bundesweit einheitliche Prozessbeschreibungen to the ÜNB — so it is the value agreed with the anweisende Netzbetreiber. Unset or `0` on an `eiv-strom` deployment is a blocking finding at this path; there is no default |
 
 ### `[format_impact]` — the next Formatwechsel as a diff
 
@@ -1286,8 +1298,9 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `geli.kuendigung.bestaetigen` | `LFG` | GeLi Gas | 44017 | LFA confirms the Kündigung (`G_0006`) |
 | `geli.eog.bestaetigen` | `LFG` | GeLi Gas | 44014 | E/G confirms the EoG Zuordnung |
 
-The ESA commands are listed under [ESA messages](#esa-messages) and the §20b
-commands under [Netzzugangsplattform](#netzzugangsplattform).
+The ESA commands are listed under [ESA messages](#esa-messages), the
+Einsatzverantwortliche's under [Redispatch 2.0 as Einsatzverantwortlicher](#redispatch-eiv)
+and the §20b commands under [Netzzugangsplattform](#netzzugangsplattform).
 Commands listing two Marktrollen always require `marktrolle`.
 
 The NB's Lieferende (`gpke.nb-lieferende.ankuendigen`) waits for the LF's
@@ -1544,6 +1557,58 @@ fact or a Grund the column does not admit is `invalid_payload` naming the
 segment, and the 55001 passes the pre-send gate before anything is written.
 `processd` `POST /api/v1/start-supply` builds it from the supply contract
 `vertragd` holds.
+
+### Redispatch 2.0 as Einsatzverantwortlicher {#redispatch-eiv}
+
+An `eiv-strom` deployment is the Einsatzverantwortliche of its steuerbare
+Ressourcen. Every document it sends goes to the Data Provider (`ReceiverRole`
+`A39`) — the ANB unless the ANB hands that role to a third party (BK6-23-241,
+Anlage `BilAReM` Kap. 1) — with `SenderRole` `A27`, as the Anwendungstabellen
+fix it:
+
+| Command | Marktrolle | Document | Workflow |
+|---|---|---|---|
+| `redispatch.eiv.planungsdaten.senden` | `EIV` | `PlannedResourceScheduleDocument` `A14` / `Z11` (AWT 1.0f S. 3) | `redispatch-eiv-planungsdaten` |
+| `redispatch.eiv.nichtbeanspruchbarkeit.senden` | `EIV` | `Unavailability_MarketDocument` `A76` / `A80` (AWT 1.1b S. 3) | `redispatch-eiv-nichtbeanspruchbarkeit` |
+| `redispatch.eiv.stammdaten.senden` | `EIV` | `Stammdaten` `Z02` (AWT 1.4b S. 3) | `redispatch-eiv-stammdaten` |
+| `redispatch.eiv.kostenblatt.senden` | `EIV` | `Kostenblatt` `Z05` (AWT 1.0d S. 3) | `redispatch-eiv-kostenblatt` |
+| `redispatch.eiv.abruf.freigeben` | `EIV` | `ActivationDocument` `A41`, the Rückmeldung zur Umsetzbarkeit (AWT 1.1f S. 35) | `redispatch-eiv-abruf` |
+
+A sending's payload is `{ "dokument": "<xml>" }`: the document the EIV's own
+systems produced. makod parses and validates it through `redispatch-xml`,
+refuses another document type or another `SenderRole`/`ReceiverRole`, and
+records it under its `DocumentIdentification` with the Data Provider's
+`AcknowledgementDocument` window of 3 minutes armed in the same write. A
+positive acknowledgement (`A01`) closes the sending; a negative one (`A02` with
+its Fehlercode) or none within the window ends it in a Klärfall, announced as a
+`ProcessFailed` notice naming the document and the reason — a missing
+acknowledgement means the receiver does not process the file
+(`AcknowledgementDocument` FB 1.0g S. 11).
+
+makod does not transmit Redispatch XML itself. The Übertragungsweg for it is
+AS2, E-Mail, SFTP or REST, one per pair of MP-IDs (Regelungen zum
+Übertragungsweg 1.11 Kap. 3.2 and 4.2), so the operator's own channel carries
+the validated document, and the acknowledgement comes back through the XML
+ingest.
+
+**An activation waits for a person.** An `ActivationDocument` `A96` addressed
+to the EIV (`ReceiverRole` `A27`) opens `redispatch-eiv-abruf` in
+`EntscheidungOffen`, with the source document's identification, the SR-IDs and
+the interval, and with the `[redispatch_eiv] abruf_antwortfenster_minuten`
+window armed. The EIV's own `AcknowledgementDocument` for the activation, owed
+within 3 minutes, is the operator's channel's to send, like every Redispatch
+XML transmission. Nothing answers
+it on a timer: a lapsed window is recorded as `FristAbgelaufen` and the
+decision stays open. `redispatch.eiv.abruf.freigeben` takes
+`{ "abruf_mrid": "…", "dokument": "<A41 xml>" }`, refuses a caller that is not
+a person, holds the Rückmeldung's sender and receiver against the activation's,
+and records who released it; the Data Provider's acknowledgement of the
+Rückmeldung then closes the process. A changed plan is a further
+`redispatch.eiv.planungsdaten.senden`.
+
+The `ReceiverRole` decides the side: a document addressed to `A27` never
+reaches a Netzbetreiber workflow, and a deployment without `eiv-strom` skips it
+(and dead-letters it) rather than answering as EIV.
 
 ### Integrated operators (NB + MSB, same MP-ID)
 

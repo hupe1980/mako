@@ -25,7 +25,7 @@ from ._native import (
     release_for,
 )
 from .generators import EpexGenerator, LastgangGenerator
-from .simulators import BikoSim, ImsysSim, MarktpartnerSim
+from .simulators import BikoSim, ImsysSim, MarktpartnerSim, MgvSim
 
 __all__ = [
     "biko_sim",
@@ -36,6 +36,7 @@ __all__ = [
     "mako_endpoint",
     "makotest_on",
     "makotest_seed",
+    "mgv_sim",
     "nb_sim",
     "pytest_addoption",
     "pytest_configure",
@@ -59,6 +60,8 @@ DEFAULT_REFERENCE_DATE = "2026-04-01"
 NB_ID = "9900357000003"  # BDEW-Codenummer, Kap. 8.1 check digit
 LF_ID = "4012345000023"  # GS1 GLN, EAN-13 check digit
 BIKO_ID = "9979999000002"  # BDEW-Codenummer, Kap. 8.1 check digit
+GAS_NB_ID = "9800357000005"  # DVGW-Codenummer, Kap. 8.1 check digit
+MGV_ID = "9879999000004"  # DVGW-Codenummer, Kap. 8.1 check digit
 
 #: `(message_type, sparte)` every fixture in this plugin can be asked to build.
 #: `makotest_on` resolves each on the session date, so a reference date with a
@@ -326,6 +329,12 @@ def nb_sim(makotest_on: str) -> MarktpartnerSim:
 def biko_sim(makotest_on: str) -> BikoSim:
     """A Bilanzkoordinator that accepts submissions until told otherwise."""
     return BikoSim(mp_id=BIKO_ID, reference_date=makotest_on)
+
+
+@pytest.fixture
+def mgv_sim(makotest_on: str) -> MgvSim:
+    """A Marktgebietsverantwortlicher that pays MMM-Rechnungen until told otherwise."""
+    return MgvSim(mp_id=MGV_ID, reference_date=makotest_on)
 
 
 @pytest.fixture

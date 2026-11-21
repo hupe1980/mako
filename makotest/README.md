@@ -13,7 +13,7 @@ exercise any MaKo implementation, not only
 | **Build** | PyO3 extension over mako's Rust crates, built with maturin; one abi3 wheel for Python ≥ 3.11 |
 | **Rust core** | `edi-energy` (EDIFACT, MIG/AHB validation), `rubo4e` (check digits), `mako-fristen` (Werktage, Fristen), `mako-pruefung` (Antwortcodes), `mako-events` (CloudEvent types) |
 | **pytest** | plugin via `pytest11`: simulator, clock and seed fixtures, `@pytest.mark.regulatory` |
-| **Fixtures** | `nb_sim`, `biko_sim`, `imsys_sim`, `epex`, `lastgang`, `frozen_clock`, `makotest_seed`, `makotest_on`, `mako_endpoint` |
+| **Fixtures** | `nb_sim`, `biko_sim`, `mgv_sim`, `imsys_sim`, `epex`, `lastgang`, `frozen_clock`, `makotest_seed`, `makotest_on`, `mako_endpoint` |
 | **Options** | `--makotest-on ISO_DATE`, `--makotest-seed N`, `--mako-endpoint URL` |
 | **CLI** | `makotest validate`, `frist`, `id`, `pids`, `codes`, … |
 

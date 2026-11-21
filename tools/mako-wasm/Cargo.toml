@@ -19,6 +19,9 @@ crate-type = ["cdylib", "rlib"]
 edi-energy   = { workspace = true, features = ["utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp", "quotes", "comdis", "pricat", "utilts"] }
 edifact      = { workspace = true }
 mako-fristen = { workspace = true }
+# The Antwortcode catalogue only; no role's Prüfung runs here.
+mako-pruefung = { workspace = true }
+rubo4e       = { workspace = true }
 serde        = { workspace = true }
 # Insertion order in every build: another workspace crate turns
 # `preserve_order` on, and the parity check compares bytes, so the module's
@@ -28,3 +31,16 @@ time         = { workspace = true }
 
 [lints]
 workspace = true
+
+# `mako-pruefung` carries `uuid` and, through the workspace `rust_decimal`,
+# `getrandom`; both refuse to compile for wasm32 without a randomness source.
+# The module never draws a random number — it reads the code tables — so the
+# backends only let it compile; the page's import stubs fail loudly if one is
+# ever called.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+uuid      = { workspace = true, features = ["js"] }
+
+# Named by no code: they only give wasm32 the backends above.
+[package.metadata.cargo-machete]
+ignored = ["getrandom", "uuid"]

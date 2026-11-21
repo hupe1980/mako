@@ -5,7 +5,7 @@ declares: it assembles the domain workflow crates into one process engine on a
 durable [SlateDB](https://github.com/slatedb/slatedb) event store, receives and
 sends EDIFACT over AS4, takes ERP commands over REST and serves the BDEW
 API-Webdienste Strom.
-Seven modules register **77 workflows** over 499 Prüfidentifikatoren; which
+Eight modules register **82 workflows** over 499 Prüfidentifikatoren; which
 ones run is decided by `[deployment] rollen`.
 
 | | |
@@ -51,7 +51,7 @@ or `[as4] allow_no_signing`).
 default) requires:
 
 - `[deployment] rollen` — any of `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`,
-  `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom`; each needs exactly one
+  `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom`, `eiv-strom`; each needs exactly one
   `[[party]]` MP-ID.
 - `[[party]]` — `mp_id`, `roles`, `primary`, and `[party.as4]` with the signing,
   encryption **and** TLS key pairs (`tls_cert_pem_file`, `tls_key_pem_file`;

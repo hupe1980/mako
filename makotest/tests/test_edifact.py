@@ -184,3 +184,24 @@ class TestBareBlobs:
         message = _message(55001)
         with pytest.raises(ValueError, match="without a UNB envelope"):
             validate_edifact(message + message, ON)
+
+    def test_an_interchange_opening_with_una_is_an_interchange(self):
+        """`UNA` may precede `UNB`; read as a bare blob it loses its envelope.
+
+        Every message after the first would then go unvalidated, or the whole
+        interchange would be refused as an envelope-less pair.
+        """
+        wire = build_interchange(
+            sender=LF_ID,
+            receiver=NB_ID,
+            dar="UNA1",
+            messages=[
+                _message(55001, message_ref="1"),
+                _message(55001, message_ref="2"),
+            ],
+            on=ON,
+        )
+        report = validate_edifact(b"UNA:+.? '" + wire, ON)
+        assert report.envelope is not None
+        assert report.envelope.control_ref == "UNA1"
+        assert len(report.messages) == 2

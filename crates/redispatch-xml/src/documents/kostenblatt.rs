@@ -18,6 +18,16 @@ pub enum KostenblattDocType {
     Kostenblatt,
 }
 
+impl KostenblattDocType {
+    /// The code as it stands on the wire.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Kostenblatt => "Z05",
+        }
+    }
+}
+
 /// `ProcessType` for `Kostenblatt` (always `A14`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KostenblattProcessType {

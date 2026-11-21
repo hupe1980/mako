@@ -277,11 +277,16 @@ smoke-roles:
     for row in "nb-strom:NB:9900001000001" "lf-strom:LF:9900001000001" \
                "msb-strom:MSB:9900001000001" "esa-strom:ESA:9900001000001" \
                "nb-gas:GNB:9800001000001" "lf-gas:LFG:9800001000001" \
-               "msb-gas:GMSB:9800001000001" "bkv-strom:BKV:9900001000001"; do
+               "msb-gas:GMSB:9800001000001" "bkv-strom:BKV:9900001000001" \
+               "eiv-strom:EIV:9900001000001"; do
         IFS=: read -r rolle role mp_id <<< "$row"
         echo "==> rollen = [\"$rolle\"] (party role $role)"
         printf '[deployment]\nrollen = ["%s"]\n\n[[party]]\nmp_id = "%s"\nroles = ["%s"]\nprimary = true\n' \
             "$rolle" "$mp_id" "$role" > "$tmp/makod.toml"
+        # The EIV's answer window has no published value and no default.
+        if [ "$rolle" = "eiv-strom" ]; then
+            printf '\n[redispatch_eiv]\nabruf_antwortfenster_minuten = 10\n' >> "$tmp/makod.toml"
+        fi
         "$out" --config "$tmp/makod.toml" --allow-volatile \
             --http-addr 127.0.0.1:18080 --auth-key smoke=0123456789abcdef \
             --cedar-policy-dir "$tmp/cedar" \

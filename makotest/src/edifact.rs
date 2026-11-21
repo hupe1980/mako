@@ -616,7 +616,7 @@ fn count_messages(raw: &[u8]) -> usize {
 /// a default of "today" would make the same test mean different things in
 /// different months.
 ///
-/// Accepts either a full interchange (`UNB`…`UNZ`) or a bare message
+/// Accepts either a full interchange (`UNB`…`UNZ`, `UNA` optional) or a bare message
 /// (`UNH`…`UNT`) — the builders return the latter, and being able to validate
 /// one without wrapping it keeps the build/validate round-trip short.
 ///
@@ -627,7 +627,11 @@ pub fn validate_edifact(raw: &[u8], on: &str) -> PyResult<ValidationReport> {
     let date = parse_date(on)?;
     let p = platform();
 
-    if raw.trim_ascii_start().starts_with(b"UNB") {
+    // An interchange may open with the `UNA` service string advice before its
+    // `UNB`; read as a bare message it would lose its envelope and all but its
+    // first message.
+    let head = raw.trim_ascii_start();
+    if head.starts_with(b"UNB") || head.starts_with(b"UNA") {
         let parsed = p
             .parse_interchange_full(raw)
             .map_err(|e| PyValueError::new_err(format!("EDIFACT parse failed: {e}")))?;
@@ -1698,6 +1702,13 @@ pub fn build_remadv(
             ueberweisungsbetrag: ueberweisungsbetrag.to_owned(),
             rechnungsdatum: rechnungsdatum.to_owned(),
         });
+    // REMADV AHB 1.0a Kap. 3.1.1 fixes BGM DE 1001 per PID: `481` Zahlungsavis
+    // on the Bestätigung 33001, `239` Nicht-Zahlungsavis on every Abweisung —
+    // the builder's default. A 33001 under `239` is refused by the receiver's
+    // own AHB check.
+    if pruefidentifikator == 33001 {
+        b = b.document_code("481");
+    }
     if let Some(id) = document_id {
         b = b.document_id(id);
     }

@@ -27,6 +27,18 @@ pub enum ActivationDocType {
     RedispatchActivation,
 }
 
+impl ActivationDocType {
+    /// The code as it stands on the wire.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::ActivationResponse => "A41",
+            Self::TenderReduction => "A42",
+            Self::RedispatchActivation => "A96",
+        }
+    }
+}
+
 /// `ProcessType` codes for `ActivationDocument`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ActivationProcessType {

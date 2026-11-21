@@ -49,6 +49,19 @@ pub enum StammdatenDocType {
     Bilanzkreis,
 }
 
+impl StammdatenDocType {
+    /// The code as it stands on the wire.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Reduced => "Z02",
+            Self::Enriched => "Z03",
+            Self::NbAggregate => "Z04",
+            Self::Bilanzkreis => "Z14",
+        }
+    }
+}
+
 /// Sender market role (`Senderrolle`) in `Stammdaten`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StammdatenSenderRole {
@@ -66,6 +79,19 @@ pub enum StammdatenSenderRole {
     Supplier,
 }
 
+impl StammdatenSenderRole {
+    /// The role code as it stands on the wire (`A27`, `A39`, …).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::GridOperator => "A18",
+            Self::ResourceProvider => "A27",
+            Self::DataProvider => "A39",
+            Self::Supplier => "Z01",
+        }
+    }
+}
+
 /// Receiver market role (`Empfaengerrolle`) in `Stammdaten`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StammdatenReceiverRole {
@@ -81,6 +107,19 @@ pub enum StammdatenReceiverRole {
     /// Supplier (Lieferant, Z01).
     #[serde(rename = "Z01")]
     Supplier,
+}
+
+impl StammdatenReceiverRole {
+    /// The role code as it stands on the wire (`A27`, `A39`, …).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::BalanceResponsibleParty => "A08",
+            Self::GridOperator => "A18",
+            Self::DataProvider => "A39",
+            Self::Supplier => "Z01",
+        }
+    }
 }
 
 /// Message status: indicates whether this is a creation, update, or deactivation.

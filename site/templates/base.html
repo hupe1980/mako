@@ -337,6 +337,11 @@
         {{ trans(key="footer_or", lang=lang) }} <a href="{{ config.extra.repo }}/blob/main/LICENSE-APACHE">Apache&nbsp;2.0</a>
         · {{ trans(key="footer_conforms", lang=lang) }} <a href="{{ config.extra.edi_energy_url }}">BDEW EDI@Energy</a> {{ config.extra.format_versions }}
       </p>
+      <p class="footer-note">{{ trans(key="footer_siblings", lang=lang) }}:
+        {%- for s in config.extra.siblings %}
+        {% if not loop.first %}· {% endif %}<a href="{{ s.url }}" rel="noopener">{{ s.key }}</a> — {{ trans(key="footer_sibling_" ~ s.key, lang=lang) }}
+        {%- endfor %}
+      </p>
       <p class="footer-note">{{ trans(key="status", lang=lang) }} — {{ trans(key="footer_not_affiliated", lang=lang) }}</p>
     </div>
   </footer>

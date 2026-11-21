@@ -696,6 +696,11 @@
               "description": "Bilanzkreisverantwortlicher Strom — the BKV side of MaBiS (BK6-24-174\nAnlage 3).",
               "type": "string",
               "const": "bkv-strom"
+            },
+            {
+              "description": "Einsatzverantwortlicher — the plant side of Redispatch 2.0 (BK6-23-241,\nAnlage `BilAReM` Kap. 6), Strom only.",
+              "type": "string",
+              "const": "eiv-strom"
             }
           ]
         },
@@ -1202,6 +1207,11 @@
               "description": "Bilanzkreisverantwortlicher Strom — the BKV side of MaBiS (BK6-24-174\nAnlage 3).",
               "type": "string",
               "const": "bkv-strom"
+            },
+            {
+              "description": "Einsatzverantwortlicher — the plant side of Redispatch 2.0 (BK6-23-241,\nAnlage `BilAReM` Kap. 6), Strom only.",
+              "type": "string",
+              "const": "eiv-strom"
             }
           ]
         },

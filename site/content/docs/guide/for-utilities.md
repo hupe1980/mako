@@ -43,6 +43,7 @@ declares, and nothing else:
 | Messstellenbetreiber (MSB) | `msb-strom` · `msb-gas` |
 | Energieserviceanbieter (ESA) | `esa-strom` |
 | Bilanzkreisverantwortlicher (BKV) | `bkv-strom` |
+| Einsatzverantwortlicher (EIV, Redispatch 2.0) | `eiv-strom` |
 
 Each role is played under exactly one MP-ID per Sparte — „Für jede Sparte (Gas
 bzw. Strom) und jede Rolle hat ein Markteilnehmer genau eine MP-ID"

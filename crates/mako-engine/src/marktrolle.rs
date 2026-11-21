@@ -182,6 +182,27 @@ pub enum Marktrolle {
     /// balancing (THE in Germany). Declares its communication data via
     /// PARTIN 37011 ("Kommunikationsdaten des MGV Gas").
     Mgv,
+
+    /// Einsatzverantwortlicher (EIV) — responsible for the dispatch of
+    /// steuerbare Ressourcen in Redispatch 2.0 (BDEW-AWH Rollenmodell V2.2
+    /// Kap. 3.1, S. 12; `BilAReM` Kap. 6.1.6: by default the LF of the
+    /// Marktlokation the technical resources belong to).
+    ///
+    /// **Strom only.** Sends the `PlannedResourceScheduleDocument`, the
+    /// `Unavailability_MarketDocument`, the `Stammdaten` it is responsible for
+    /// and the `Kostenblatt` to the Data Provider, and answers an activation in
+    /// the Aufforderungsfall with the Rückmeldung zur Umsetzbarkeit
+    /// (`ActivationDocument` `A41`). Its wire role code is `A27`.
+    Eiv,
+
+    /// Betreiber der technischen Ressource (BTR) — responsible for installing,
+    /// operating and maintaining technical resources (BDEW-AWH Rollenmodell
+    /// V2.2 Kap. 3.1, S. 11).
+    ///
+    /// **Strom only.** In Redispatch 2.0 it receives the activation the EIV
+    /// forwards in the Duldungsfall (`ActivationDocument` AWT 1.1f, Abruf im
+    /// Duldungsfall, Prozessschritt 4, `ReceiverRole` `A21`).
+    Btr,
 }
 
 impl Marktrolle {
@@ -204,6 +225,8 @@ impl Marktrolle {
             Self::Lfa => "LFA",
             Self::Lpb => "LPB",
             Self::Mgv => "MGV",
+            Self::Eiv => "EIV",
+            Self::Btr => "BTR",
         }
     }
 
@@ -232,6 +255,8 @@ impl Marktrolle {
             "LFA" => Self::Lfa,
             "LPB" => Self::Lpb,
             "MGV" => Self::Mgv,
+            "EIV" => Self::Eiv,
+            "BTR" => Self::Btr,
             _ => return None,
         })
     }
@@ -410,6 +435,12 @@ impl DeploymentRoles {
         Self::from_roles([Marktrolle::Nb])
     }
 
+    /// EIV-only deployment (the Einsatzverantwortliche of Redispatch 2.0).
+    #[must_use]
+    pub fn eiv() -> Self {
+        Self::from_roles([Marktrolle::Eiv])
+    }
+
     /// ESA-only deployment (energy service provider side).
     #[must_use]
     pub fn esa() -> Self {
@@ -556,7 +587,10 @@ mod licensing_tests {
             Marktrolle::Lfg,
             Marktrolle::Lfn,
             Marktrolle::Lfa,
+            Marktrolle::Lpb,
             Marktrolle::Mgv,
+            Marktrolle::Eiv,
+            Marktrolle::Btr,
         ] {
             assert_eq!(Marktrolle::from_code(role.as_code()), Some(role));
         }

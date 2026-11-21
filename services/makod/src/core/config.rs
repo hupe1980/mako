@@ -146,6 +146,34 @@ pub struct ConfigFile {
     /// `GET /api/v1/format-candidates/{fv}/impact`. Absent: the route answers
     /// `format_impact_not_configured`.
     pub format_impact: Option<crate::format_impact::FormatImpactConfig>,
+    /// `[redispatch_eiv]` — the settings an Einsatzverantwortlicher
+    /// (`eiv-strom`) runs under.
+    pub redispatch_eiv: Option<RedispatchEivConfig>,
+}
+
+/// `[redispatch_eiv]` — the Einsatzverantwortliche's own windows.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedispatchEivConfig {
+    /// Minutes within which the EIV answers an activation in the
+    /// Aufforderungsfall with the Rückmeldung zur Umsetzbarkeit.
+    ///
+    /// No published document fixes this window: BK6-23-241 Tenorziffer 7
+    /// leaves the bundesweit einheitliche Prozessbeschreibungen to the ÜNB, and
+    /// they are not published. So it is the operator's value, agreed with its
+    /// anweisende Netzbetreiber, and an `eiv-strom` deployment without it does
+    /// not start — a default would answer to a window nobody agreed.
+    pub abruf_antwortfenster_minuten: Option<u32>,
+}
+
+impl RedispatchEivConfig {
+    /// The configured answer window, when it is set and positive.
+    #[must_use]
+    pub fn abruf_antwortfenster(&self) -> Option<time::Duration> {
+        self.abruf_antwortfenster_minuten
+            .filter(|m| *m > 0)
+            .map(|m| time::Duration::minutes(i64::from(m)))
+    }
 }
 
 /// `[einrichtung]` — the daemons of this deployment the readiness checklist

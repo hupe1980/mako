@@ -116,6 +116,7 @@ fn nachricht(msg: &AnyMessage, empfangen: Option<OffsetDateTime>, wire: &Wire) -
     let segments = msg.segments();
 
     let report = msg.validate();
+    let gueltig = report.as_ref().is_ok_and(|r| r.is_valid());
     let befunde: Vec<Value> = match &report {
         Ok(r) => r
             .iter_issues()
@@ -153,10 +154,14 @@ fn nachricht(msg: &AnyMessage, empfangen: Option<OffsetDateTime>, wire: &Wire) -
         "absender": msg.nad_sender(),
         "empfaenger": msg.nad_receiver(),
         "nachrichtenreferenz": msg.message_ref(),
-        "gueltig": report.as_ref().is_ok_and(|r| r.is_valid()),
+        "gueltig": gueltig,
+        "sparte": ist_gas(release.map(|r| r.track()), msg.nad_sender()).map(|g| if g { "Gas" } else { "Strom" }),
+        "aperak": aperak(typ, ist_gas(release.map(|r| r.track()), msg.nad_sender()), gueltig),
         "segmente": segmente(segments, profile, af, wire),
         "befunde": befunde,
         "antworten": antworten,
+        "route": pid.and_then(route),
+        "antwort": pid.and_then(|p| antwort(p, empfangen)),
         "fristen": empfangen.map(|t| fristen(typ, release.map(|r| r.track()), pid, msg.nad_sender(), t)),
     })
 }
@@ -326,20 +331,11 @@ fn bedingung_nummern(text: &str) -> BTreeSet<String> {
     out
 }
 
-/// When the receiver's CONTRL and APERAK are due for a message received at
-/// `t`, from `mako-fristen`, each with the chapter it rests on.
-fn fristen(
-    typ: Option<MessageType>,
-    track: Option<ReleaseTrack>,
-    pid: Option<u32>,
-    absender: Option<&str>,
-    t: OffsetDateTime,
-) -> Vec<Value> {
-    let Some(typ) = typ else { return Vec::new() };
-    // The Sparte: the release track where it names one, else the sender's
-    // code number — a DVGW-Codenummer (`98…`) is Gas, a BDEW-Codenummer
-    // (`99…`) Strom (Identifikatoren AWH V1.2 Kap. 2.1).
-    let gas = match track {
+/// Whether the message is Gas: the release track where it names one, else the
+/// sender's code number — a DVGW-Codenummer (`98…`) is Gas, a BDEW-Codenummer
+/// (`99…`) Strom (Identifikatoren AWH V1.2 Kap. 2.1).
+fn ist_gas(track: Option<ReleaseTrack>, absender: Option<&str>) -> Option<bool> {
+    match track {
         Some(ReleaseTrack::Gas) => Some(true),
         Some(ReleaseTrack::Strom) => Some(false),
         _ => absender.and_then(|a| {
@@ -351,7 +347,39 @@ fn fristen(
                 None
             }
         }),
+    }
+}
+
+/// The APERAK the receiver owes, by APERAK AHB 1.1: a Geschäftsvorfall short
+/// of its Prüfschablone is refused with a Verarbeitbarkeitsfehlermeldung in
+/// both Sparten (Kap. 2.1.2); a processable Strom message gets its
+/// Anerkennungsmeldung (Kap. 2.4), a processable Gas message none — Gas
+/// reports errors only (Kap. 2.3). An APERAK or CONTRL is answered by no
+/// APERAK. `None` where the Sparte is unknown.
+fn aperak(typ: Option<MessageType>, gas: Option<bool>, gueltig: bool) -> Option<Value> {
+    if matches!(typ?, MessageType::Aperak | MessageType::Contrl) {
+        return None;
+    }
+    let gas = gas?;
+    let (art, quelle) = match (gueltig, gas) {
+        (false, _) => ("verarbeitbarkeitsfehler", "APERAK AHB 1.1 Kap. 2.1.2"),
+        (true, false) => ("anerkennung", "APERAK AHB 1.1 Kap. 2.4"),
+        (true, true) => ("keine", "APERAK AHB 1.1 Kap. 2.3"),
     };
+    Some(json!({ "art": art, "quelle": quelle }))
+}
+
+/// When the receiver's CONTRL and APERAK are due for a message received at
+/// `t`, from `mako-fristen`, each with the chapter it rests on.
+fn fristen(
+    typ: Option<MessageType>,
+    track: Option<ReleaseTrack>,
+    pid: Option<u32>,
+    absender: Option<&str>,
+    t: OffsetDateTime,
+) -> Vec<Value> {
+    let Some(typ) = typ else { return Vec::new() };
+    let gas = ist_gas(track, absender);
     let utilmd_orders = matches!(typ, MessageType::Utilmd | MessageType::Orders);
     // Whole seconds in UTC: the page renders Berlin time itself, and a
     // deadline at the end of a day („Ablauf des 3. WT") reads 23:59:59.
@@ -408,4 +436,45 @@ fn fristen(
         }
     }
     out
+}
+
+/// The PID reference's routing column — the crate and workflow makod hands a
+/// PID to. Embedded rather than restated: `cargo xtask` holds that column to
+/// makod's `PidRouter`, so this is the router's own answer.
+const PID_REFERENCE: &str = include_str!("../../../site/content/docs/regulatory/pid-reference.md");
+
+/// The crate and workflow `pid` is routed to; `None` for a PID no workflow
+/// registers.
+fn route(pid: u32) -> Option<Value> {
+    let key = format!("| {pid} |");
+    let row = PID_REFERENCE.lines().find(|l| l.starts_with(&key))?;
+    let last = row.trim_end_matches('|').rsplit('|').next()?;
+    let mut ticks = last.split('`').skip(1).step_by(2);
+    let (krate, workflow) = (ticks.next()?, ticks.next()?);
+    Some(json!({ "crate": krate, "workflow": workflow }))
+}
+
+/// The answer obligation `pid` starts, from `mako-fristen`: what the process
+/// is, who owes the answer, the Entscheidungsbaum that decides it, and — given
+/// an arrival time — by when, with its source.
+fn antwort(pid: u32, empfangen: Option<OffsetDateTime>) -> Option<Value> {
+    let o = mako_fristen::antwort::antwort_obligation(pid)?;
+    let faellig = empfangen
+        .and_then(|t| mako_fristen::antwort::antwortfrist(pid, t))
+        .and_then(|f| {
+            f.due_at
+                .to_offset(time::UtcOffset::UTC)
+                .replace_nanosecond(0)
+                .ok()?
+                .format(&Rfc3339)
+                .ok()
+        });
+    Some(json!({
+        "name": o.name,
+        "durch": o.answered_by,
+        "pids": [o.antwort_pids.0, o.antwort_pids.1],
+        "entscheidungsbaum": o.ebd,
+        "faellig": faellig,
+        "quelle": o.source,
+    }))
 }

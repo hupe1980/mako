@@ -29,6 +29,20 @@ pub enum PrsDocType {
     CorrectedPlan,
 }
 
+impl PrsDocType {
+    /// The code as it stands on the wire.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::DayAheadPlan => "A14",
+            Self::IntradayPlan => "Z08",
+            Self::StammdatenPlan => "Z09",
+            Self::AggregatePlan => "Z11",
+            Self::CorrectedPlan => "Z12",
+        }
+    }
+}
+
 /// `ProcessType` for `PlannedResourceScheduleDocument` (always forecast).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrsProcessType {

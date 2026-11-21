@@ -952,6 +952,47 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         workflow: Some("wim-device-change"),
         dispatch: cmd_wim_geraetewechsel_aperak,
     },
+    // ── Redispatch 2.0 — the Einsatzverantwortliche ──────────────────────
+    //
+    // The EIV sends to the Data Provider; each door validates the document
+    // through redispatch-xml and records the sending with the DP's
+    // acknowledgement window. The release answers an activation and refuses
+    // an actor that is not a person.
+    CommandDescriptor {
+        name: "redispatch.eiv.planungsdaten.senden",
+        permitted_roles: &[Marktrolle::Eiv],
+        primary_pid: None,
+        workflow: Some(mako_redispatch::eiv::planungsdaten::WORKFLOW_NAME),
+        dispatch: cmd_redispatch_eiv_planungsdaten_senden,
+    },
+    CommandDescriptor {
+        name: "redispatch.eiv.nichtbeanspruchbarkeit.senden",
+        permitted_roles: &[Marktrolle::Eiv],
+        primary_pid: None,
+        workflow: Some(mako_redispatch::eiv::nichtbeanspruchbarkeit::WORKFLOW_NAME),
+        dispatch: cmd_redispatch_eiv_nichtbeanspruchbarkeit_senden,
+    },
+    CommandDescriptor {
+        name: "redispatch.eiv.stammdaten.senden",
+        permitted_roles: &[Marktrolle::Eiv],
+        primary_pid: None,
+        workflow: Some(mako_redispatch::eiv::stammdaten::WORKFLOW_NAME),
+        dispatch: cmd_redispatch_eiv_stammdaten_senden,
+    },
+    CommandDescriptor {
+        name: "redispatch.eiv.kostenblatt.senden",
+        permitted_roles: &[Marktrolle::Eiv],
+        primary_pid: None,
+        workflow: Some(mako_redispatch::eiv::kostenblatt::WORKFLOW_NAME),
+        dispatch: cmd_redispatch_eiv_kostenblatt_senden,
+    },
+    CommandDescriptor {
+        name: "redispatch.eiv.abruf.freigeben",
+        permitted_roles: &[Marktrolle::Eiv],
+        primary_pid: None,
+        workflow: Some(mako_redispatch::eiv::abruf::WORKFLOW_NAME),
+        dispatch: cmd_redispatch_eiv_abruf_freigeben,
+    },
     // ── WiM Mitteilung über Gesamtvorgang (IFTSTA 21009–21013) ───────────
     //
     // The Anmeldebestätigung 55043 is vorläufig; these two commands are what

@@ -5,7 +5,7 @@ template = "validator.html"
 
 [extra]
 translated_from = "content/validator.md"
-source_sha256 = "3e0325b17a2fd9309ead25a1805659361c2118f0f749538c99321fdff850a2e2"
+source_sha256 = "7575e801cddbccd725e6c40175945d0313eb3b81e76ee91774c5c1e0f2dfecf8"
 
 [extra.ui]
 title = "Warum wurde meine Nachricht abgelehnt?"
@@ -56,6 +56,13 @@ share_title = "Diese Nachricht teilen?"
 share_warning = "Der Link trägt die ganze Nachricht in seiner Adresse. Eine echte Nachricht nennt Personen, Adressen und Marktlokationen, teile also nur eine Testnachricht. Diese Seite schickt den Link an keinen Server."
 share_cancel = "Abbrechen"
 share_confirm = "Link erstellen"
+
+routed_to = "makod gibt sie an"
+
+[extra.ui.aperak]
+anerkennung = "APERAK: Anerkennungsmeldung"
+verarbeitbarkeitsfehler = "APERAK: Verarbeitbarkeitsfehlermeldung, wenn die Prüfung des Empfängers die Befunde bestätigt"
+keine = "Keine APERAK: Gas meldet nur Fehler"
 
 [extra.ui.severity]
 fehler = "Fehler"

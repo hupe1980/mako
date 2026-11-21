@@ -840,6 +840,10 @@ struct Cli {
     #[arg(skip)]
     format_impact: Option<format_impact::FormatImpactConfig>,
 
+    /// `[redispatch_eiv]` loaded from `makod.toml`.
+    #[arg(skip)]
+    redispatch_eiv: config::RedispatchEivConfig,
+
     /// Subcommand to run instead of the daemon.
     #[command(subcommand)]
     command: Option<CliCommand>,
@@ -1077,6 +1081,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         posture: &posture,
         jetzt: time::OffsetDateTime::now_utc(),
         einrichtung: &cli.einrichtung,
+        redispatch_eiv: &cli.redispatch_eiv,
     });
 
     if cli.check_config {
@@ -1358,7 +1363,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         .with_unbekannter_vorgang(cli.policy.ingest.unbekannter_vorgang.get())
         // AHB-Fehler classes answered at the door: none until each class's
         // inbound count is explained.
-        .with_abgewiesene_klassen(ingest_dispatcher::ABGEWIESENE_KLASSEN),
+        .with_abgewiesene_klassen(ingest_dispatcher::ABGEWIESENE_KLASSEN)
+        // Set only for an EIV deployment: a document addressed to the EIV is
+        // answered by the EIV workflows, never by the Netzbetreiber ones.
+        .with_eiv_antwortfenster(
+            rollen
+                .contains(&deployment::Rolle::EivStrom)
+                .then(|| cli.redispatch_eiv.abruf_antwortfenster())
+                .flatten(),
+        ),
     );
 
     // ── Shared health state ───────────────────────────────────────────────────
@@ -1763,6 +1776,8 @@ fn parse_deployment_roles(roles: &[String]) -> DeploymentRoles {
             // Nr. 9 MsbG). A deployment that *is* an ESA; an MSB serving one
             // registers the inbound side under MSB.
             "ESA" => Some(Marktrolle::Esa),
+            // Einsatzverantwortlicher — the plant side of Redispatch 2.0.
+            "EIV" => Some(Marktrolle::Eiv),
             // Gas roles that have no distinct engine deployment role — their
             // PIDs are registered unconditionally by the Gas domain modules.
             // ANB/VNB are Strom NB sub-types, normalised by deployment_role_strings.
@@ -2056,6 +2071,9 @@ fn apply_config_file(
 
     // ── [format_impact] ───────────────────────────────────────────────────────
     cli.format_impact = cfg.format_impact;
+
+    // ── [redispatch_eiv] ──────────────────────────────────────────────────────
+    cli.redispatch_eiv = cfg.redispatch_eiv.unwrap_or_default();
 
     // ── ERP ───────────────────────────────────────────────────────────────────
     if let Some(erp) = cfg.erp {
@@ -2581,6 +2599,9 @@ mod config_surface_tests {
             // checklist route.
             "dienst",
             "name",
+            // `[redispatch_eiv]` (`cli.redispatch_eiv`), read by
+            // `core/einrichtung.rs` and the ingest dispatcher.
+            "abruf_antwortfenster_minuten",
         ];
 
         let merge_body = MAIN_SOURCE

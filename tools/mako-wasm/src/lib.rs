@@ -14,12 +14,14 @@
 //!
 //! Requests (`op`): `samples` — the bundled sample messages; `sample` — one
 //! sample's text; `check` — every message of an interchange, named and
-//! checked. Every answer is `{"ok": …}` or `{"refused": {code, message}}`.
+//! checked; `codes` — an Antwortcode in its Entscheidungsbaum; `frist` — a
+//! process's Antwortfrist; `id` — an identifier's check digit. Every answer is `{"ok": …}` or `{"refused": {code, message}}`.
 //! The module explains what the crates compute and decides nothing they do
 //! not.
 
 mod check;
 mod samples;
+mod werkzeuge;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -39,6 +41,21 @@ enum Request {
         /// When the message arrived, RFC 3339; the deadlines count from it.
         #[serde(default)]
         empfangen: Option<String>,
+    },
+    Codes {
+        #[serde(default)]
+        ebd: Option<String>,
+        #[serde(default)]
+        code: Option<String>,
+    },
+    Frist {
+        #[serde(default)]
+        suche: String,
+        #[serde(default)]
+        empfangen: Option<String>,
+    },
+    Id {
+        wert: String,
     },
 }
 
@@ -68,6 +85,18 @@ pub fn call(request: &str) -> String {
             None => refused("beispiel_unbekannt", format!("Kein Beispiel {name:?}.")),
         },
         Ok(Request::Check { text, empfangen }) => check::check(&text, empfangen.as_deref()),
+        Ok(Request::Codes { ebd, code }) => werkzeuge::codes(ebd.as_deref(), code.as_deref()),
+        Ok(Request::Frist { suche, empfangen }) => match empfangen
+            .as_deref()
+            .map(|e| time::OffsetDateTime::parse(e, &time::format_description::well_known::Rfc3339))
+        {
+            Some(Err(_)) => refused(
+                "empfangen_ungueltig",
+                "Der Eingangszeitpunkt ist kein RFC-3339-Zeitpunkt.",
+            ),
+            t => werkzeuge::frist(&suche, t.and_then(Result::ok)),
+        },
+        Ok(Request::Id { wert }) => werkzeuge::id(&wert),
     };
     answer.to_string()
 }

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{#- The validator's small tools — an Antwortcode, a Frist, an ID — one page
+    each, picked by `page.extra.tool`. Every word lives in the page's front
+    matter (`page.extra.ui`) or comes from the module. -#}
+
+{% block head %}
+  {% include "partials/validator-head.html" %}
+{% endblock head %}
+
+{% block content %}
+{%- set ui = page.extra.ui -%}
+{%- set tool = page.extra.tool -%}
+<div class="ps vt" data-wasm="{{ get_url(path='validator/mako.wasm') | safe }}" data-lang="{{ lang }}" data-tool="{{ tool }}">
+  <header class="ps-head wrap" data-pagefind-body>
+    {% include "partials/validator-tabs.html" %}
+    <p class="ps-eyebrow"><span class="ps-lock" aria-hidden="true">🔒</span> {{ ui.privacy }}</p>
+    <h1>{{ ui.title }}</h1>
+    <p class="ps-lede">{{ ui.lede | markdown(inline=true) | safe }}</p>
+  </header>
+
+  <noscript><p class="ps-alert wrap">{{ ui.no_js }}</p></noscript>
+
+  <section class="wrap vt-form" aria-label="{{ ui.title }}">
+    {%- if tool == "codes" %}
+    <label class="vt-field">{{ ui.ebd_label }}
+      <input id="vt-ebd" list="vt-ebd-list" placeholder="E_0622" autocomplete="off" spellcheck="false">
+      <datalist id="vt-ebd-list"></datalist>
+    </label>
+    <label class="vt-field">{{ ui.code_label }}
+      <input id="vt-code" placeholder="A02" autocomplete="off" spellcheck="false">
+    </label>
+    {%- elif tool == "fristen" %}
+    <label class="vt-field vt-wide">{{ ui.suche_label }}
+      <input id="vt-suche" placeholder="{{ ui.suche_placeholder }}" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="vt-field">{{ ui.received }}
+      <input id="vt-empfangen" type="datetime-local">
+    </label>
+    {%- else %}
+    <label class="vt-field vt-wide">{{ ui.id_label }}
+      <input id="vt-id" placeholder="51238696012" autocomplete="off" spellcheck="false" inputmode="text">
+    </label>
+    {%- endif %}
+    <output id="vt-status" class="ps-note" aria-live="polite">{{ ui.loading }}</output>
+  </section>
+
+  <section id="vt-result" class="wrap vt-result" aria-live="polite"></section>
+</div>
+
+<script type="application/json" id="ps-ui">{{ ui | json_encode | safe }}</script>
+{% endblock content %}
+
+{% block scripts %}
+<script type="module" src="{{ get_url(path='validator/tools.js', cachebust=true) | safe }}"></script>
+{% endblock scripts %}

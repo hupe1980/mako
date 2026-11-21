@@ -57,6 +57,8 @@ pub struct Eingabe<'a> {
     pub jetzt: time::OffsetDateTime,
     /// `[einrichtung]`.
     pub einrichtung: &'a crate::config::EinrichtungConfig,
+    /// `[redispatch_eiv]`.
+    pub redispatch_eiv: &'a crate::config::RedispatchEivConfig,
 }
 
 /// What the checks found, and what boot consumes when nothing blocks.
@@ -104,6 +106,7 @@ pub fn pruefe(e: &Eingabe<'_>) -> Pruefung {
     befunde.extend(as4_regel_befunde(e.as4));
     let (dienste, b) = dienste(e.einrichtung);
     befunde.extend(b);
+    befunde.extend(redispatch_eiv_befunde(&rollen, e.redispatch_eiv));
 
     Pruefung {
         einrichtung: Einrichtung::neu(
@@ -116,6 +119,35 @@ pub fn pruefe(e: &Eingabe<'_>) -> Pruefung {
         rollen,
         dienste,
     }
+}
+
+/// Where the answer window of an activation is left open.
+const ANTWORTFENSTER_OFFEN: &str = "BK6-23-241, Tenorziffer 7: die bundesweit einheitlichen \
+     Prozessbeschreibungen erarbeiten die ÜNB; sie sind nicht veröffentlicht";
+
+/// An Einsatzverantwortlicher answers an activation within a window no
+/// published document fixes, so the deployment states it. Unset, an
+/// activation would be held against a window nobody agreed — refused, never
+/// defaulted.
+#[must_use]
+pub fn redispatch_eiv_befunde(
+    rollen: &BTreeSet<Rolle>,
+    cfg: &crate::config::RedispatchEivConfig,
+) -> Vec<Befund> {
+    if !rollen.contains(&Rolle::EivStrom) || cfg.abruf_antwortfenster().is_some() {
+        return Vec::new();
+    }
+    vec![
+        Befund::blockiert(
+            "redispatch_eiv.abruf_antwortfenster_minuten",
+            "eiv-strom beantwortet einen Abruf im Aufforderungsfall mit der Rückmeldung zur \
+             Umsetzbarkeit, und das Fenster dafür ist veröffentlicht nirgends festgelegt. Trag \
+             den mit deinem anweisenden Netzbetreiber vereinbarten Wert in Minuten ein:\n\n\
+             [redispatch_eiv]\nabruf_antwortfenster_minuten = …",
+        )
+        .bereich(Bereich::Konfiguration)
+        .quelle(ANTWORTFENSTER_OFFEN),
+    ]
 }
 
 /// `[[einrichtung.dienst]]` with each credential read, and a finding per entry
@@ -599,6 +631,10 @@ mod tests {
         }
     }
 
+    static KEIN_EIV: crate::config::RedispatchEivConfig = crate::config::RedispatchEivConfig {
+        abruf_antwortfenster_minuten: None,
+    };
+
     static EINRICHTUNG: crate::config::EinrichtungConfig =
         crate::config::EinrichtungConfig { dienst: Vec::new() };
 
@@ -622,7 +658,44 @@ mod tests {
             posture: &[("cedar_permit_all", true)],
             jetzt: time::OffsetDateTime::now_utc(),
             einrichtung: &EINRICHTUNG,
+            redispatch_eiv: &KEIN_EIV,
         }
+    }
+
+    /// An EIV deployment without its answer window is refused at boot, at the
+    /// setting's path and naming why no default exists; with it, or for a
+    /// deployment that is no EIV, nothing is found.
+    #[test]
+    fn an_eiv_without_its_answer_window_is_refused() {
+        let eiv: BTreeSet<Rolle> = [Rolle::EivStrom].into_iter().collect();
+        let befunde = redispatch_eiv_befunde(&eiv, &KEIN_EIV);
+        assert_eq!(befunde.len(), 1);
+        assert_eq!(
+            befunde[0].pfad,
+            "redispatch_eiv.abruf_antwortfenster_minuten"
+        );
+        assert!(
+            befunde[0]
+                .quelle
+                .as_deref()
+                .unwrap()
+                .contains("Tenorziffer 7")
+        );
+        assert!(!befunde[0].text.is_empty());
+        let null = crate::config::RedispatchEivConfig {
+            abruf_antwortfenster_minuten: Some(0),
+        };
+        assert_eq!(
+            redispatch_eiv_befunde(&eiv, &null).len(),
+            1,
+            "0 is no window"
+        );
+        let gesetzt = crate::config::RedispatchEivConfig {
+            abruf_antwortfenster_minuten: Some(10),
+        };
+        assert!(redispatch_eiv_befunde(&eiv, &gesetzt).is_empty());
+        let nb: BTreeSet<Rolle> = [Rolle::NbStrom].into_iter().collect();
+        assert!(redispatch_eiv_befunde(&nb, &KEIN_EIV).is_empty());
     }
 
     /// Two independent defects — a Gas role under a BDEW-Codenummer and a

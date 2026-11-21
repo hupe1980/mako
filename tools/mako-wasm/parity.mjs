@@ -11,13 +11,20 @@ import { gzipSync } from "node:zlib";
 const [wasmPath] = process.argv.slice(2);
 const BUDGET = 1.5 * 1024 * 1024;
 const page = (f) => readFileSync(new URL(`../../site/${f}`, import.meta.url), "utf8");
-const script = page("static/validator/validator.js");
-const markup = /\b(innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\s*\(|new Function)\b/.exec(script);
-if (markup) {
-  console.error(`✗ validator.js uses ${markup[1]}: message content must reach the page as text only`);
-  process.exit(1);
+for (const file of ["validator.js", "module.js", "trace.js", "tools.js"]) {
+  const markup = /\b(innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\s*\(|new Function)\b/.exec(page(`static/validator/${file}`));
+  if (markup) {
+    console.error(`✗ ${file} uses ${markup[1]}: message content must reach the page as text only`);
+    process.exit(1);
+  }
 }
-const csp = /http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(page("templates/validator.html"))?.[1] ?? "";
+const csp = /http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(page("templates/partials/validator-head.html"))?.[1] ?? "";
+for (const t of ["validator.html", "validator-tool.html"]) {
+  if (!page(`templates/${t}`).includes('{% include "partials/validator-head.html" %}')) {
+    console.error(`✗ templates/${t} does not include the validator head with its Content-Security-Policy`);
+    process.exit(1);
+  }
+}
 if (!/(^|;)\s*connect-src 'self'\s*(;|$)/.test(csp) || !/(^|;)\s*default-src 'self'\s*(;|$)/.test(csp)) {
   console.error("✗ the validator's Content-Security-Policy must keep default-src and connect-src to 'self'");
   process.exit(1);

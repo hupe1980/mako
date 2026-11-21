@@ -9,6 +9,25 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.44.0] — 2026-11-21
+
+### Added
+
+- **A message travels the landing page.** „What happens to a message" is no longer a diagram: send a sample or your own file through it, and each stage shows what mako computes for it — the validation, the workflow makod routes the PID to, the process's own Antwortfrist with its source and Entscheidungsbaum, and the APERAK the rule demands. The German landing page carries the section too. The validator module loads on the first click only.
+- **The validator shows where a message goes and by when**: the workflow makod routes it to (read from the PID reference, which a guard holds to the router), the process's Antwortfrist from `mako-fristen`, and the APERAK that APERAK AHB 1.1 demands — Anerkennung, Verarbeitbarkeitsfehler, or none for Gas.
+- **Three tools beside the validator**, each its own page: an [Antwortcode lookup](https://hupe1980.github.io/mako/validator/codes/) that reads a code in the Entscheidungsbaum publishing it (`mako-pruefung`), a [Fristenrechner](https://hupe1980.github.io/mako/validator/fristen/) for every answer obligation `mako-fristen` knows, and an [ID check](https://hupe1980.github.io/mako/validator/ids/) for MaLo-IDs, Marktpartner-IDs (BDEW, DVGW, GLN), EICs and MeLo-IDs that shows the right check digit for a wrong one.
+- **mako can be the Einsatzverantwortliche of Redispatch 2.0.** Declaring `eiv-strom` sends the plan, the Nichtbeanspruchbarkeit, the Stammdaten and the Kostenblatt to the Data Provider, each validated through `redispatch-xml` and tracked to its acknowledgement; a negative or missing one opens a Klärfall. An activation waits until a person releases the Rückmeldung zur Umsetzbarkeit (`redispatch.eiv.abruf.freigeben`), and an `eiv-strom` deployment without `[redispatch_eiv] abruf_antwortfenster_minuten` does not start.
+- **An answering Marktgebietsverantwortlicher in makotest.** `MgvSim` (fixture `mgv_sim`) receives the aggregierte MMM-Rechnung INVOIC 31007/31008 and answers it the way the Gas AHBs do: a CONTRL every time, an APERAK only on a Verarbeitbarkeitsfehler, and a REMADV 33001 Zahlungsavis or 33002 Abweisung with its `G_0080` code; `reject_next` triggers the refusal.
+- **Sister projects:** the README, every page's footer and the two pages where they meet mako link [emob](https://hupe1980.github.io/emob/) (charging operations) and [hems](https://hupe1980.github.io/hems/) (home energy management).
+
+### Changed
+
+- **Breaking: the Redispatch XML ingest routes by the receiver's role.** A document addressed to the EIV (`A27`) no longer reaches the Netzbetreiber workflows; a deployment without `eiv-strom` dead-letters it. `[[party]] roles = ["EIV"]` needs `eiv-strom`.
+
+### Fixed
+
+- **makotest:** `build_remadv` writes `BGM+481` on a 33001 Zahlungsavis, and `validate_edifact` reads an interchange that opens with `UNA` as an interchange.
+
 ## [0.43.0] — 2026-11-21
 
 ### Added

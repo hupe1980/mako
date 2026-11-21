@@ -646,7 +646,7 @@ prints it.
 
 ---
 
-### BIKO and iMSys
+### BIKO, MGV and iMSys
 
 `BikoSim` receives MaBiS Summenzeitreihen and answers with an APERAK — an
 acceptance, or a Klärfall **queued rather than sticky**, so the re-submission
@@ -656,6 +656,15 @@ one UNH, so one APERAK could only ever speak for one of them. It refuses anythin
 Bilanzkoordinator: a UTILMD, or an MSCONS outside 13003 / 13010–13012, is a
 Messwesen message for a Netzbetreiber, and a simulator that accepted one would
 make every assertion downstream of that acceptance meaningless.
+
+`MgvSim` is the Marktgebietsverantwortlicher a Gas-Netzbetreiber bills its
+aggregierte Mehr-/Mindermengen to (INVOIC 31007 / 31008). It answers the way the
+Gas AHBs do: a CONTRL on every interchange, negative on a MIG finding or a
+foreign recipient; an APERAK only on a Verarbeitbarkeitsfehler, since Gas sends
+no Anerkennungsmeldung (APERAK AHB 1.1 Kap. 2.3); and a REMADV — 33001
+Zahlungsavis for the whole amount, or 33002 Abweisung with its `G_0080` code from
+`E_0802`. `reject_next` queues one refusal. ALOCAT is not received: makotest's
+core does not read DVGW formats.
 
 `ImsysSim` models the SMGW compliance surface a platform has to react to: TAF
 profile, CLS channel state, certificate expiry and revocation, and
@@ -723,7 +732,7 @@ anchored to `--makotest-on`, so one test is never about two days.
 
 | | |
 |---|---|
-| **Fixtures** | `epex`, `lastgang`, `nb_sim`, `biko_sim`, `imsys_sim`, `frozen_clock`, `makotest_seed`, `makotest_on`, `mako_endpoint` |
+| **Fixtures** | `epex`, `lastgang`, `nb_sim`, `biko_sim`, `mgv_sim`, `imsys_sim`, `frozen_clock`, `makotest_seed`, `makotest_on`, `mako_endpoint` |
 | **Markers** | `@pytest.mark.regulatory("GPKE Teil 2")`, `@pytest.mark.requires_docker` |
 | **Options** | `--makotest-on ISO_DATE`, `--makotest-seed N`, `--mako-endpoint URL` |
 

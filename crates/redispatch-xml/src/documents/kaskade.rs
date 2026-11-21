@@ -47,6 +47,16 @@ pub enum KaskadeRoleType {
     GridOperator,
 }
 
+impl KaskadeRoleType {
+    /// The role code as it stands on the wire (`A27`, `A39`, …).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::GridOperator => "A18",
+        }
+    }
+}
+
 /// Business type for `Kaskade` time series.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KaskadeBusinessType {

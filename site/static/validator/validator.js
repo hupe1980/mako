@@ -2,30 +2,18 @@
 // compiled to WebAssembly (tools/mako-wasm). Nothing leaves the tab — the page
 // declares `connect-src 'self'` and every value reaches the DOM as text.
 
+import { MAX, el, load, readFile, showCurrentTab } from "./module.js";
+
+showCurrentTab();
+
 const root = document.querySelector(".ps");
 const UI = JSON.parse(document.getElementById("ps-ui").textContent);
 const LANG = root.dataset.lang === "de" ? "de-DE" : "en-GB";
-const MAX = 2 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
 const text = $("ps-text");
 const status = $("ps-status");
 const result = $("ps-result");
-
-/** `el("div", {class: "x"}, "text", child)` — every string becomes a text node. */
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === false || v == null) continue;
-    if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else node.setAttribute(k, v === true ? "" : v);
-  }
-  for (const c of children.flat()) {
-    if (c == null || c === false) continue;
-    node.append(c instanceof Node ? c : document.createTextNode(String(c)));
-  }
-  return node;
-}
 
 const fill = (s, vars) => s.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "");
 
@@ -33,61 +21,9 @@ const fill = (s, vars) => s.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "");
 
 let call = null;
 
-async function load() {
-  if (typeof WebAssembly !== "object") {
-    $("ps-unsupported").hidden = false;
-    return;
-  }
-  const url = root.dataset.wasm;
-  const module = await WebAssembly.compileStreaming(fetch(url)).catch(async () =>
-    WebAssembly.compile(await (await fetch(url)).arrayBuffer()),
-  );
-  // `time-tz` links wasm-bindgen intrinsics for a system time zone the module
-  // never asks for; each import fails loudly if it is ever called.
-  const imports = {};
-  for (const { module: m, name } of WebAssembly.Module.imports(module)) {
-    (imports[m] ??= {})[name] = () => {
-      throw new Error(`mako.wasm called ${m}.${name}`);
-    };
-  }
-  const { exports: x } = await WebAssembly.instantiate(module, imports);
-  const enc = new TextEncoder();
-  const dec = new TextDecoder();
-  call = (request) => {
-    const input = enc.encode(JSON.stringify(request));
-    const ptr = x.mw_alloc(input.length);
-    new Uint8Array(x.memory.buffer, ptr, input.length).set(input);
-    const packed = x.mw_call(ptr, input.length);
-    x.mw_free(ptr, input.length);
-    const outPtr = Number(packed >> 32n);
-    const outLen = Number(packed & 0xffffffffn);
-    const out = dec.decode(new Uint8Array(x.memory.buffer, outPtr, outLen));
-    x.mw_free(outPtr, outLen);
-    return JSON.parse(out);
-  };
-}
-
 // ── Input ────────────────────────────────────────────────────────────────────
 
 let sample = null; // the bundled sample on screen, if unchanged
-
-/** A file's text: gunzipped when it is gzip, UTF-8 when valid, else ISO 8859-1 (UNOC). */
-async function readFile(file) {
-  if (file.size > MAX * 4) throw new Error(UI.too_big);
-  let bytes = new Uint8Array(await file.arrayBuffer());
-  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-    bytes = new Uint8Array(await new Response(stream).arrayBuffer());
-  }
-  if (bytes.length > MAX) throw new Error(UI.too_big);
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    let s = "";
-    for (const b of bytes) s += String.fromCharCode(b);
-    return s;
-  }
-}
 
 /** Grow the editor with its message, up to the CSS max-height. */
 function fit() {
@@ -106,7 +42,7 @@ $("ps-file").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   try {
-    setText(await readFile(file));
+    setText(await readFile(file, UI.too_big));
   } catch (err) {
     status.textContent = err.message;
   }
@@ -125,7 +61,7 @@ drop.addEventListener("drop", async (e) => {
   const file = e.dataTransfer.files[0];
   if (!file) return;
   try {
-    setText(await readFile(file));
+    setText(await readFile(file, UI.too_big));
   } catch (err) {
     status.textContent = err.message;
   }
@@ -397,6 +333,13 @@ function aside(m) {
       el("label", { class: "ps-received" }, UI.received, input,
         empfangen && el("button", { class: "ps-link", type: "button", onclick: () => { empfangen = null; run(); } }, UI.now)),
       el("ul", { class: "ps-fristen" },
+        m.antwort && m.antwort.faellig && el("li", {},
+          el("span", { class: "ps-chip is-strong" }, m.antwort.durch),
+          el("span", { class: "ps-due" }, berlin.format(new Date(m.antwort.faellig)),
+            el("span", { class: "ps-note" }, ` · ${inTime(m.antwort.faellig)}`)),
+          el("span", { class: "ps-source" }, m.antwort.quelle.split(" — ")[0],
+            m.antwort.entscheidungsbaum && ` · ${m.antwort.entscheidungsbaum}`),
+        ),
         m.fristen.map((f) => el("li", {},
           el("span", { class: "ps-chip is-strong" }, f.was),
           el("span", { class: "ps-due" }, berlin.format(new Date(f.faellig)),
@@ -408,10 +351,14 @@ function aside(m) {
     ));
   }
 
-  if (m.antworten) {
+  if (m.antworten || m.route || m.aperak) {
     blocks.push(el("section", { class: "ps-card" },
       el("h3", {}, UI.answers),
-      el("ul", { class: "ps-answers" },
+      m.route && el("p", { class: "ps-route-line" }, `${UI.routed_to} `,
+        el("code", {}, `${m.route.crate} · ${m.route.workflow}`)),
+      m.aperak && el("p", { class: "ps-route-line" }, el("strong", {}, UI.aperak[m.aperak.art]),
+        el("span", { class: "ps-note" }, ` · ${m.aperak.quelle}`)),
+      m.antworten && el("ul", { class: "ps-answers" },
         m.antworten.map((a) => el("li", {}, el("span", { class: "ps-chip is-strong" }, a.pid), a.name ?? "")),
       ),
     ));
@@ -495,9 +442,13 @@ async function fromHash() {
 
 // ── Start ────────────────────────────────────────────────────────────────────
 
-load()
-  .then(async () => {
-    if (!call) return;
+load(root.dataset.wasm)
+  .then(async (loaded) => {
+    call = loaded;
+    if (!call) {
+      $("ps-unsupported").hidden = false;
+      return;
+    }
     status.textContent = UI.ready;
     const list = $("ps-sample-list");
     for (const s of call({ op: "samples" }).ok) {

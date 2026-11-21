@@ -579,6 +579,10 @@ pub struct EdifactIngestDispatcher {
     /// The AHB-Fehler classes answered at the door instead of reaching their
     /// workflow — [`ABGEWIESENE_KLASSEN`] unless a test says otherwise.
     abgewiesene_klassen: Vec<Fehlerklasse>,
+    /// `[redispatch_eiv] abruf_antwortfenster_minuten` — set exactly when the
+    /// deployment plays the Einsatzverantwortlichen. `None`: a document
+    /// addressed to the EIV has no workflow here.
+    eiv_antwortfenster: Option<time::Duration>,
 }
 
 /// Per-business-key mutexes guarding the lookup→spawn critical section.
@@ -737,6 +741,19 @@ impl EdifactIngestDispatcher {
     pub fn with_abgewiesene_klassen(mut self, klassen: &[Fehlerklasse]) -> Self {
         self.abgewiesene_klassen = klassen.to_vec();
         self
+    }
+
+    /// Play the Einsatzverantwortlichen: answer activations addressed to the
+    /// EIV within `antwortfenster`, the operator's configured window.
+    #[must_use]
+    pub fn with_eiv_antwortfenster(mut self, antwortfenster: Option<time::Duration>) -> Self {
+        self.eiv_antwortfenster = antwortfenster;
+        self
+    }
+
+    /// The EIV's answer window, when the deployment is one.
+    pub(crate) fn eiv_antwortfenster(&self) -> Option<time::Duration> {
+        self.eiv_antwortfenster
     }
 
     fn weist_ab(&self, klasse: Fehlerklasse) -> bool {
@@ -1052,6 +1069,7 @@ impl EdifactIngestDispatcher {
             mp_id_registry: None,
             unbekannter_vorgang: crate::core::config::UnbekannterVorgang::Z33,
             abgewiesene_klassen: ABGEWIESENE_KLASSEN.to_vec(),
+            eiv_antwortfenster: None,
         }
     }
 

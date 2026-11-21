@@ -17,3 +17,13 @@
 {"op": "check", "text": "Hallo, das ist keine Nachricht."}
 {"op": "check", "text": "UNB+UNOC:3+9907317000007:500+4012345000023:14+261001:0700+00001'\nUNH+00001+UTILMD:D:11A:UN:S2.2'\nBGM+E01+00055001'\nDTM+137:202610010000?+00:303'\nNAD+MS+9907317000007::293'\nNAD+MR+4012345000023::9'\nIDE+24+VORGANG0001'\nDTM+92:202609302200?+00:303'\nSTS+7++E01+ZW4'\nLOC+Z16+51238696781'\nRFF+Z13:55001'\nSEQ+Z79+1'\nPIA+5+9991000002082:Z11'\nCCI+Z66'\nSEQ+ZH0+1'\nCCI+Z65+++Z01'\nSEQ+Z01'\nCCI+++Z15'\nSEQ+Z75'\nCCI+Z61++ZF9'\nCAV+ZU5'\nNAD+Z09+++Mustermann:::::Z01'\nNAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\nUNT+23+00001'\nUNZ+1+00001'\n", "empfangen": "kein Datum"}
 {"op": "lies"}
+{"op": "codes", "ebd": "E_0622", "code": "A02"}
+{"op": "codes", "code": "A02"}
+{"op": "codes", "ebd": "E_9999"}
+{"op": "frist", "suche": "55001", "empfangen": "2026-11-20T15:30:00Z"}
+{"op": "frist", "suche": "anmeldung"}
+{"op": "id", "wert": "51238696012"}
+{"op": "id", "wert": "51238696782"}
+{"op": "id", "wert": "9907317000007"}
+{"op": "id", "wert": "10YDE-EON------1"}
+{"op": "id", "wert": "hallo"}

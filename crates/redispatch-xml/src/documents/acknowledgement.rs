@@ -115,6 +115,24 @@ pub enum AckReasonCode {
     ReportPeriodInvalid,
 }
 
+impl AckReasonCode {
+    /// The code as it stands on the wire.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::FullyAccepted => "A01",
+            Self::FullyRejected => "A02",
+            Self::SyntaxError => "Z12",
+            Self::AssignmentError => "Z13",
+            Self::DocumentIdNotUnique => "Z14",
+            Self::SenderUnauthorised => "Z15",
+            Self::NotPermitted => "Z16",
+            Self::FormatVersionInvalid => "Z17",
+            Self::ReportPeriodInvalid => "Z18",
+        }
+    }
+}
+
 /// Reason element at the `AcknowledgementDocument` root or `TimeSeriesRejection` level.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AckReason {

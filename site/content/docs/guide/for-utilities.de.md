@@ -5,7 +5,7 @@ weight = 1
 
 [extra]
 translated_from = "content/docs/guide/for-utilities.md"
-source_sha256 = "61f33a35606aa8b4b4ba9d51e22ae76b85bae924a4c25bb2a69c4cd7602519cf"
+source_sha256 = "869270ce70ce9cbcad22a82f6e1e0631b1915736929e8ba28edc74b859f0ef86"
 
 +++
 Ein Stadtwerk spielt mehrere Marktrollen zugleich — Netzbetreiber, Lieferant,
@@ -50,6 +50,7 @@ und keine anderen:
 | Messstellenbetreiber (MSB) | `msb-strom` · `msb-gas` |
 | Energieserviceanbieter (ESA) | `esa-strom` |
 | Bilanzkreisverantwortlicher (BKV) | `bkv-strom` |
+| Einsatzverantwortlicher (EIV, Redispatch 2.0) | `eiv-strom` |
 
 Jede Rolle wird unter genau einer MP-ID je Sparte gespielt — „Für jede Sparte
 (Gas bzw. Strom) und jede Rolle hat ein Markteilnehmer genau eine MP-ID"

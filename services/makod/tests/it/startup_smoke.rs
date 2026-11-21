@@ -62,6 +62,7 @@ fn each_role_registers_its_module_set() {
         (Rolle::MsbGas, &["wim", "geli-gas"]),
         (Rolle::EsaStrom, &["wim"]),
         (Rolle::BkvStrom, &["mabis"]),
+        (Rolle::EivStrom, &["redispatch-eiv"]),
     ];
     assert_eq!(
         expected.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
@@ -125,6 +126,29 @@ fn a_bkv_strom_deployment_loads_mabis_alone() {
             .map(|m| m.name())
             .collect();
     assert_eq!(names, ["mabis"]);
+}
+
+/// The two sides of Redispatch 2.0 never share a deployment role: a
+/// Netzbetreiber deployment does not load the EIV workflows, and an EIV
+/// deployment loads nothing a Netzbetreiber answers with.
+#[test]
+fn no_netzbetreiber_deployment_answers_as_eiv() {
+    use makod::deployment::Rolle;
+    let names = |rolle: Rolle| -> Vec<&'static str> {
+        makod::startup::modules_for(&std::iter::once(rolle).collect())
+            .iter()
+            .map(|m| m.name())
+            .collect()
+    };
+    for rolle in Rolle::ALLE {
+        if rolle != Rolle::EivStrom {
+            assert!(
+                !names(rolle).contains(&"redispatch-eiv"),
+                "{rolle} loads the EIV workflows"
+            );
+        }
+    }
+    assert_eq!(names(Rolle::EivStrom), ["redispatch-eiv"]);
 }
 
 /// Assert that every active FV transition is registered in the migration

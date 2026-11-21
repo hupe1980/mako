@@ -44,9 +44,19 @@ from .marktpartner import (
     answer_pids,
     bestaetigung_pid,
 )
+from .mgv import (
+    G_0080,
+    MGV_INVOIC_PIDS,
+    MgvReply,
+    MgvSim,
+    MmmAblehnung,
+    Rechnungseingang,
+)
 
 __all__ = [
+    "G_0080",
     "MABIS_SUMMENZEITREIHE_PIDS",
+    "MGV_INVOIC_PIDS",
     "READING_QUALITIES",
     "STEUERUNG_TAF",
     "TAF_PROFILES",
@@ -59,6 +69,10 @@ __all__ = [
     "ImsysSim",
     "Klaerfall",
     "MarktpartnerSim",
+    "MgvReply",
+    "MgvSim",
+    "MmmAblehnung",
+    "Rechnungseingang",
     "Reply",
     "Rulebook",
     "Submission",

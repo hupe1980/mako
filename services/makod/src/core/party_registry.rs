@@ -155,8 +155,13 @@ static ROLE_TABLE: &[RoleEntry] = &[
     RoleEntry {
         abbrev: "EIV",
         sparte: RoleSparte::Strom,
+        engine_canonical: Some("EIV"),
+    }, // Einsatzverantwortlicher — Redispatch 2.0 (`eiv-strom`)
+    RoleEntry {
+        abbrev: "BTR",
+        sparte: RoleSparte::Strom,
         engine_canonical: None,
-    }, // Einsatzverantwortlicher — Redispatch 2.0 placeholder
+    }, // Betreiber der technischen Ressource — Redispatch 2.0, no workflow yet
     RoleEntry {
         abbrev: "ESA",
         sparte: RoleSparte::Strom,
@@ -224,6 +229,7 @@ pub fn ahb_rolle(role: &str) -> Option<&'static str> {
         "KN" => "KN",
         "DP" => "DP",
         "EIV" => "EIV",
+        "BTR" => "BTR",
         "RB" => "RB",
         _ => return None,
     })
@@ -1259,12 +1265,22 @@ mod tests {
     fn deployment_role_strings_excludes_placeholder_roles() {
         let parties = vec![
             party("9900001000001", &["DP"], false),
-            party("9900001000002", &["EIV"], false),
+            party("9900001000002", &["BTR"], false),
             party("9800001000001", &["KN"], false),
             party("4012345000023", &["RB"], false),
         ];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
         assert!(reg.deployment_role_strings().is_empty());
+    }
+
+    /// The EIV registers the Redispatch 2.0 EIV workflows, so it canonicalises
+    /// to an engine role rather than being dropped as a placeholder.
+    #[test]
+    fn eiv_is_an_engine_role() {
+        let parties = vec![party("9900001000003", &["EIV"], true)];
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
+        assert_eq!(reg.mp_id_for_role("EIV"), Some("9900001000003"));
+        assert!(reg.deployment_role_strings().contains(&"EIV".to_owned()));
     }
 
     /// ESA gates real PID routing (WiM Teil 2 Kap. 4), so it canonicalises to an
@@ -1293,10 +1309,10 @@ mod tests {
     }
 
     #[test]
-    fn dp_eiv_kn_rb_are_known_but_excluded_from_engine() {
+    fn dp_btr_kn_rb_are_known_but_excluded_from_engine() {
         let parties = vec![
             party("9900001000001", &["DP"], true),
-            party("9900001000002", &["EIV"], false),
+            party("9900001000002", &["BTR"], false),
             party("9800001000001", &["KN"], false),
             party("4012345000023", &["RB"], false),
         ];

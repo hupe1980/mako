@@ -345,6 +345,7 @@ mod msb_antworten;
 mod netzbilanz;
 mod netzzugang;
 pub mod probe;
+mod redispatch_eiv;
 mod registry;
 mod stornierung;
 mod types;
@@ -390,6 +391,7 @@ use mabis::*;
 use msb_antworten::*;
 use netzbilanz::*;
 use netzzugang::*;
+use redispatch_eiv::*;
 use stornierung::*;
 use wim::*;
 

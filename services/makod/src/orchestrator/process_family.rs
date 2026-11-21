@@ -85,7 +85,8 @@ pub const FAMILIES: &[Family] = &[
     Family {
         label: "redispatch",
         workflow_prefix: Some("redispatch-"),
-        command_prefixes: &[],
+        // The Einsatzverantwortliche's doors (`redispatch.eiv.*`).
+        command_prefixes: &["redispatch"],
     },
     Family {
         // No workflow: `commands_api::netzzugang` enqueues an outbox message

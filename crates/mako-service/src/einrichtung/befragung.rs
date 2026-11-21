@@ -136,11 +136,14 @@ pub enum Rolle {
     /// Bilanzkreisverantwortlicher Strom — the BKV side of MaBiS (BK6-24-174
     /// Anlage 3).
     BkvStrom,
+    /// Einsatzverantwortlicher — the plant side of Redispatch 2.0 (BK6-23-241,
+    /// Anlage `BilAReM` Kap. 6), Strom only.
+    EivStrom,
 }
 
 impl Rolle {
     /// Every Rolle, in the order a proposal lists them.
-    pub const ALLE: [Self; 8] = [
+    pub const ALLE: [Self; 9] = [
         Self::LfStrom,
         Self::LfGas,
         Self::NbStrom,
@@ -149,6 +152,7 @@ impl Rolle {
         Self::MsbGas,
         Self::EsaStrom,
         Self::BkvStrom,
+        Self::EivStrom,
     ];
 
     /// The `[deployment] rollen` token.
@@ -163,6 +167,7 @@ impl Rolle {
             Self::MsbGas => "msb-gas",
             Self::EsaStrom => "esa-strom",
             Self::BkvStrom => "bkv-strom",
+            Self::EivStrom => "eiv-strom",
         }
     }
 
@@ -182,6 +187,7 @@ impl Rolle {
             Self::MsbGas => &["GMSB"],
             Self::EsaStrom => &["ESA"],
             Self::BkvStrom => &["BKV"],
+            Self::EivStrom => &["EIV"],
         }
     }
 
@@ -193,7 +199,7 @@ impl Rolle {
 
     /// The Rolle a `[[party]] roles` abbreviation names, case-insensitive,
     /// the AHB sub-qualifiers included. `None` for a Marktrolle no deployment
-    /// plays (`UNB`, `BIKO`, `FNB`, `MGV`, `KN`, `DP`, `EIV`, `RB`).
+    /// plays (`UNB`, `BIKO`, `FNB`, `MGV`, `KN`, `DP`, `BTR`, `RB`).
     #[must_use]
     pub fn von_kuerzel(kuerzel: &str) -> Option<Self> {
         let upper = kuerzel.to_uppercase();
@@ -213,9 +219,12 @@ impl Rolle {
     pub const fn sparte(self) -> Sparte {
         match self {
             Self::LfGas | Self::NbGas | Self::MsbGas => Sparte::Gas,
-            Self::LfStrom | Self::NbStrom | Self::MsbStrom | Self::EsaStrom | Self::BkvStrom => {
-                Sparte::Strom
-            }
+            Self::LfStrom
+            | Self::NbStrom
+            | Self::MsbStrom
+            | Self::EsaStrom
+            | Self::BkvStrom
+            | Self::EivStrom => Sparte::Strom,
         }
     }
 

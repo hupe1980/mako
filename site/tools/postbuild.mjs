@@ -110,7 +110,10 @@ const pages = [];
 for (const file of walk(CONTENT)) {
   const rel = relative(CONTENT, file);
   const { fm, body } = frontMatter(readFileSync(file, "utf8"), rel);
-  const { path, lang } = sitePath(rel);
+  // A page that sets `path` is served there, as Zola serves it.
+  const derived = sitePath(rel);
+  const path = fm.path ? `/${fm.path.replace(/^\/|\/$/g, "")}/` : derived.path;
+  const { lang } = derived;
   if (path === "/" || path === `/${lang}/`) continue; // the landing page is a template, not prose
   if (!existsSync(join(PUBLIC, path, "index.html"))) {
     throw new Error(`${rel}: expected the built page at public${path}index.html — does Zola place it elsewhere?`);

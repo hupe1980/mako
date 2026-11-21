@@ -201,6 +201,7 @@ mod tests {
             posture: &[],
             jetzt: time::OffsetDateTime::now_utc(),
             einrichtung: &einrichtung,
+            redispatch_eiv: &crate::config::RedispatchEivConfig::default(),
         });
         let printed = serde_json::to_value(&pruefung.einrichtung).unwrap();
         let cedar = CedarAuthorizer::new(
@@ -271,6 +272,7 @@ mod tests {
             posture: &[],
             jetzt: time::macros::datetime!(2026-11-09 09:00 UTC),
             einrichtung: &einrichtung,
+            redispatch_eiv: &crate::config::RedispatchEivConfig::default(),
         });
         let andere = vec![
             DienstBericht {
@@ -380,6 +382,7 @@ mod tests {
                 posture: &[],
                 jetzt: time::macros::datetime!(2026-11-09 09:00 UTC),
                 einrichtung: &EinrichtungConfig::default(),
+                redispatch_eiv: &crate::config::RedispatchEivConfig::default(),
             })
         };
         let vorher = pruefe(&geplant, &[crate::deployment::Rolle::NbGas]);
@@ -464,6 +467,7 @@ mod tests {
                 posture: &[],
                 jetzt: time::macros::datetime!(2026-11-09 09:00 UTC),
                 einrichtung: &EinrichtungConfig::default(),
+                redispatch_eiv: &crate::config::RedispatchEivConfig::default(),
             })
         };
         let geladen = [PartyConfig {

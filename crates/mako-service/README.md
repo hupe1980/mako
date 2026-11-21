@@ -71,7 +71,7 @@ What an implementer needs beyond the snippet:
 |---|---|---|
 | `service` | `run`, `Daemon`, `ServiceConfig`, `ServiceContext`, `Listener` | the daemon lifecycle |
 | `befund` | `Befund`, `Schwere` | config findings with TOML path and source |
-| `einrichtung` | `router`, `checkliste`, `befragung::vorschlag` | readiness report, deployment checklist, setup interview (`befragung::Rolle`, `lf-strom` … `bkv-strom`) |
+| `einrichtung` | `router`, `checkliste`, `befragung::vorschlag` | readiness report, deployment checklist, setup interview (`befragung::Rolle`, `lf-strom` … `eiv-strom`) |
 | `policy` | `policy_choice!`, `Policy`, `PolicyReport`, `router` | operator settings under `[policy]`, logged, exported, served at `GET /api/v1/policy` |
 | `error` | `ApiError`, `ApiResult` | problem body; a 500 or upstream failure carries an `error_id`, never the error text |
 | `json` | `Json`, `Lenient`, `nur_json` | request bodies; an undeclared key is a 422 naming its JSON path; a state-changing route without a body still requires `application/json` (`415 json_required`) |

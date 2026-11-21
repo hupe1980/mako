@@ -282,6 +282,7 @@ export const en: Katalog = {
           "msb-gas": "Messstellenbetreiber Gas",
           "esa-strom": "Energieserviceanbieter",
           "bkv-strom": "Bilanzkreisverantwortlicher (Strom)",
+          "eiv-strom": "Einsatzverantwortlicher (Redispatch 2.0)",
         },
       },
       primaer: {

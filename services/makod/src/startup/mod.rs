@@ -295,6 +295,16 @@ pub const MODULE_TABLE: &[ModuleRow] = &[
         rollen: &[Rolle::NbStrom],
         build: || Box::new(mako_redispatch::RedispatchModule),
     },
+    // EivModule — the Einsatzverantwortliche of Redispatch 2.0: sends the
+    //   Planungsdaten, Nichtbeanspruchbarkeiten, Stammdaten and Kostenblatt to
+    //   the Data Provider and answers an activation after a person's release.
+    //   Its own role only: a Netzbetreiber deployment never answers as EIV,
+    //   and the XML ingest separates the two sides by `ReceiverRole`.
+    ModuleRow {
+        name: "redispatch-eiv",
+        rollen: &[Rolle::EivStrom],
+        build: || Box::new(mako_redispatch::EivModule),
+    },
 ];
 
 /// Every domain module makod can register — the union over all roles, in

@@ -40,6 +40,23 @@ assert!(ctx.registered_workflows().contains(&"redispatch-aktivierung"));
 | `redispatch-statusanfrage` | `StatusRequest_MarketDocument` | bidirectional |
 | `redispatch-kostenblatt` | `Kostenblatt` | VNB → ÜNB |
 
+`EivModule` is the other side of the same documents — the
+Einsatzverantwortliche (`eiv`), registered for a deployment that plays it:
+
+| Workflow | Document | Direction |
+|---|---|---|
+| `redispatch-eiv-planungsdaten` | `PlannedResourceScheduleDocument` `A14` / `Z11` | EIV → DP |
+| `redispatch-eiv-nichtbeanspruchbarkeit` | `Unavailability_MarketDocument` `A76` / `A80` | EIV → DP |
+| `redispatch-eiv-stammdaten` | `Stammdaten` `Z02` | EIV → DP |
+| `redispatch-eiv-kostenblatt` | `Kostenblatt` `Z05` | EIV → DP |
+| `redispatch-eiv-abruf` | `ActivationDocument` `A96` in, `A41` out after a person's release | DP → EIV → DP |
+
+Each sending ends `Bestaetigt` on an `A01` acknowledgement and in a Klärfall on
+an `A02` or on none (`AcknowledgementDocument` FB 1.0g S. 11). An activation is
+never answered without a person's release. Which side an inbound document
+reaches is decided by its `ReceiverRole` (`eiv::an_eiv_adressiert`), and the
+two modules register disjoint workflows.
+
 XML documents route by document type through `RedispatchRouter`; an
 `AcknowledgementDocument` is correlated by `ReceivingDocumentIdentification`.
 Five EDIFACT PIDs route to `redispatch-aktivierung`: MSCONS **13021**

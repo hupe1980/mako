@@ -131,7 +131,7 @@
       "titel": "Einrichtung vorbelegen",
       "zweck": "Liest aus einem Satz über das Deployment die Antworten der Einrichtung vor — Rollen, MP-IDs, Bilanzkreise —, jede zur Bestätigung durch eine Person.",
       "version": "1.0.0",
-      "digest": "34699dded684ee4eeb69b6cfa379b1e239a4284f3983603e4133c227f951cb0e",
+      "digest": "828f3dc93f520a31aa51348cbacc1f7866f909a79a684bd304814c669bc748c6",
       "ausloeser": [],
       "modell": "anthropic/claude-haiku-4-5",
       "liest": [],

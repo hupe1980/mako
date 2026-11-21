@@ -33,6 +33,17 @@ pub enum StatusRequestSenderRole {
     DataProvider,
 }
 
+impl StatusRequestSenderRole {
+    /// The role code as it stands on the wire (`A27`, `A39`, …).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::GridOperator => "A18",
+            Self::DataProvider => "A39",
+        }
+    }
+}
+
 /// Receiver role for `StatusRequest_MarketDocument`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StatusRequestReceiverRole {
@@ -45,6 +56,18 @@ pub enum StatusRequestReceiverRole {
     /// Other / central.
     #[serde(rename = "Z01")]
     Other,
+}
+
+impl StatusRequestReceiverRole {
+    /// The role code as it stands on the wire (`A27`, `A39`, …).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::GridOperator => "A18",
+            Self::ResourceProvider => "A27",
+            Self::Other => "Z01",
+        }
+    }
 }
 
 /// Market participant status used in `MktActivityRecord`.

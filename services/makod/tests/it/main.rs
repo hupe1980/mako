@@ -61,6 +61,7 @@ mod e2e_occupancy_verdicts;
 mod e2e_outbox_render_contract;
 mod e2e_outbox_type_coverage_guard;
 mod e2e_preisanfrage_quotes_routing;
+mod e2e_redispatch_eiv;
 mod e2e_sperrung;
 mod e2e_sperrung_storno_ordchg_routing;
 mod e2e_sperrung_storno_routing;

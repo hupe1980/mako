@@ -146,3 +146,23 @@ class TestZahlungsavis:
         assert "MOA+12:1234.56" in text
         assert "AJT+" not in text, "a confirmation refuses nothing"
         assert validate_edifact(wire, ON).messages[0].message_type == "REMADV"
+
+    def test_a_confirmation_is_a_zahlungsavis(self):
+        """33001 carries `BGM+481`; `239` is the Nicht-Zahlungsavis of an Abweisung.
+
+        REMADV AHB 1.0a Kap. 3.1.1 admits only `481` on 33001, so a confirmation
+        under the Abweisung's code is refused by the issuer's own AHB check.
+        """
+        message = build_remadv(
+            33001,
+            LF_ID,
+            NB_ID,
+            ueberweisungsbetrag="1234.56",
+            on=ON,
+            **RECHNUNG,
+        )
+        wire = build_interchange(
+            sender=LF_ID, receiver=NB_ID, dar="Z2", messages=[message], on=ON
+        )
+        assert "BGM+481+" in wire.decode()
+        assert_edifact_valid(wire, on=ON)

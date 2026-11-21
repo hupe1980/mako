@@ -9,6 +9,9 @@ the supplier the customer chose (BK6-20-160 Anlage 6, BK6-24-267). This crate
 is the allocation engine and the three Modellwechsel workflows as a
 `mako-engine` module — pure domain: no I/O, no wire rendering, no persistence.
 
+The charging operations themselves — the charge points, OCPP, OCPI and
+Eichrecht — are the sister project [emob](https://hupe1980.github.io/emob/).
+
 ## Example
 
 ```rust

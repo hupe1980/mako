@@ -52,13 +52,17 @@
 //!
 //! # Market roles
 //!
-//! | Role | Abbrev. | Description |
-//! |------|---------|-------------|
-//! | Übertragungsnetzbetreiber | ÜNB | Transmission system operator |
-//! | Verteilnetzbetreiber | VNB | Distribution system operator |
-//! | Anlagenbetreiber | ANB | Generation asset operator |
-//! | Direktvermarkter | DV | Direct marketer of renewable energy |
-//! | Bilanzkreisverantwortlicher | BKV | Balance responsible party |
+//! | Role | Abbrev. | Role code | Description |
+//! |------|---------|-----------|-------------|
+//! | Netzbetreiber (ÜNB, VNB, Anschlussnetzbetreiber ANB) | NB | `A18` | Grid operator |
+//! | Einsatzverantwortlicher | EIV | `A27` | Plans and dispatches a steuerbare Ressource |
+//! | Data Provider | DP | `A39` | Receives and forwards; the ANB unless it hands the role to a third party |
+//! | Betreiber der technischen Ressource | BTR | `A21` | Installs, operates and maintains a technical resource |
+//! | Bilanzkreisverantwortlicher | BKV | `A08` | Balance responsible party |
+//! | Lieferant | LF | `Z01` | Supplier |
+//!
+//! Role names and the DP default from BK6-23-241, Anlage `BilAReM` Kap. 1
+//! (Begriffe); the codes from the Anwendungstabellen.
 //!
 //! # Quick start
 //!

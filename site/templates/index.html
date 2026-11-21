@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {#- ⚠ Guarded numbers. `services/makod/tests/it/published_counts.rs` reads this file
-    and requires the phrases "499 Prüfidentifikatoren" and "77 workflows" to
+    and requires the phrases "499 Prüfidentifikatoren" and "82 workflows" to
     survive tag-stripping, so a number must stay immediately before its unit with
     only markup between them. `e2e_ahb_rule_coverage_guard.rs` reads the AHB-rule
     count out of the last <strong> element preceding the words it greps for in
@@ -46,10 +46,10 @@
   <div class="stats-inner">
     <div><strong>483 / 483</strong><span>published Prüfidentifikatoren imported</span></div>
     <div><strong>499</strong><span>Prüfidentifikatoren routed</span></div>
-    <div><strong>77</strong><span>MaKo workflows</span></div>
+    <div><strong>82</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>14</strong><span>services</span></div>
-    <div><strong>5</strong><span>deployable roles</span></div>
+    <div><strong>6</strong><span>deployable roles</span></div>
   </div>
   <p class="stats-note wrap">Every one of the 483 Prüfidentifikatoren the BDEW
     Anwendungsübersicht publishes is imported, and 461 of them are routed to a workflow. In all,
@@ -65,10 +65,10 @@
   <div class="wrap">
     <h2 id="who">Who runs this</h2>
     <p class="section-lead">Every MaKo message names a Marktrolle on each end. The BDEW
-      Rollenmodell V2.2 defines twelve of them; these five carry the mass-market processes and their balancing.
+      Rollenmodell V2.2 defines twelve of them; these six carry the mass-market processes, their balancing and Redispatch 2.0.
       A deployment declares the roles it plays and registers only their processes; which
       principal may read which role's processes is a Cedar policy.</p>
-    <div class="card-grid card-grid-4">
+    <div class="card-grid card-grid-3">
       <div class="card">
         <h3><span class="role-abbr">NB</span> Netzbetreiber</h3>
         <p class="role-gloss">Distribution grid operator</p>
@@ -109,42 +109,19 @@
           and Clearingliste BAS under MaBiS.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/makod.md') | safe }}">makod — MaBiS messages →</a>
       </div>
+      <div class="card">
+        <h3><span class="role-abbr">EIV</span> Einsatzverantwortlicher</h3>
+        <p class="role-gloss">Dispatch planner, Redispatch 2.0</p>
+        <p>Sends its plants' plans, unavailabilities, master data and Kostenblatt to the
+          Data Provider and tracks each acknowledgement; a grid operator's activation waits
+          for a person to release the answer.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/reference/redispatch.md') | safe }}">makod — Redispatch messages →</a>
+      </div>
     </div>
   </div>
 </section>
 
-<section class="features section-pad alt">
-  <div class="wrap">
-    <h2>What happens to a message</h2>
-    <p class="section-lead">A market partner sends an interchange over AS4. Everything after
-      that is the same path for every process — parse, validate against the AHB in force on
-      that date, route to a workflow, and answer inside the Frist.</p>
-
-    <pre class="mermaid">
-graph LR
-    MP["Marktpartner"]
-    AS4["AS4 / ebMS3<br/>sign · encrypt · receipt"]
-    VAL["Parse + validate<br/>MIG · AHB · semantic"]
-    WF["Workflow<br/>event-sourced, replayable"]
-    FRIST["Frist<br/>BDEW Werktag calendar"]
-    OUT["Outbox<br/>persist before dispatch"]
-    ERP["ERP · CloudEvents"]
-
-    MP -->|"UTILMD · MSCONS · ORDERS · INVOIC"| AS4
-    AS4 --> VAL
-    VAL -->|"Prüfidentifikator"| WF
-    WF --> FRIST
-    WF --> OUT
-    OUT -->|"answer interchange"| AS4
-    OUT --> ERP
-    AS4 -->|"CONTRL / APERAK"| MP
-    </pre>
-
-    <p>The format layer reads the BDEW profiles as data, so an annual release is an import run
-      rather than a rewrite. The domain layer never sees EDIFACT: it receives typed commands
-      and emits typed events.</p>
-  </div>
-</section>
+{% include "partials/trace.html" %}
 
 <section class="features section-pad">
   <div class="wrap">
@@ -297,7 +274,7 @@ graph TB
       <ul class="check">
         <li><strong>AI-first, code decides</strong> — agents and people work one typed tool surface; no model sits in a calculation path, and no agent sends a market message.</li>
         <li><strong>Auditable by construction</strong> — event-sourced processes, replayable state, hash-chained ledger with § 147 AO period seals.</li>
-        <li><strong>Five market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, the BKV takes its MaBiS share, and a deployment registers only the processes of the roles it declares.</li>
+        <li><strong>Six market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, the BKV takes its MaBiS share, the EIV its Redispatch 2.0 share, and a deployment registers only the processes of the roles it declares.</li>
         <li><strong>Validation that fails loudly</strong> — an unregistered Prüfidentifikator is reported, never quietly accepted.</li>
         <li><strong>Fristen that agree with each other</strong> — one BDEW Werktag calendar, from the APERAK clock to an agent's approval window.</li>
       </ul>

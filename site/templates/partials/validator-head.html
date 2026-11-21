@@ -1,0 +1,21 @@
+{#- The head every validator page carries: a Content-Security-Policy that
+    keeps whatever the visitor enters inside the tab, and the page described
+    as a web application. -#}
+  {#- Nothing the visitor pastes may leave the tab: connections, images and
+      scripts are this origin's only. `wasm-unsafe-eval` compiles the module
+      (and Pagefind's); `unsafe-inline` is the base template's theme script. -#}
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": {{ page.title | json_encode | safe }},
+    "description": {{ page.description | json_encode | safe }},
+    "url": {{ page.permalink | json_encode | safe }},
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Web browser",
+    "inLanguage": {{ lang | json_encode | safe }},
+    "isAccessibleForFree": true,
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+  }
+  </script>

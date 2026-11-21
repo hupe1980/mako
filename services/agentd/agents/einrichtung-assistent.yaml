@@ -40,10 +40,11 @@ spec:
       ## ROLLEN
       Each Marktrolle and Sparte the sentence names is one entry of
       `rollen`, spelled `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`,
-      `msb-strom`, `msb-gas`, `esa-strom` or `bkv-strom`: Lieferant →
-      `lf-…`, Netzbetreiber or Gasnetzbetreiber → `nb-…`,
+      `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom` or `eiv-strom`:
+      Lieferant → `lf-…`, Netzbetreiber or Gasnetzbetreiber → `nb-…`,
       Messstellenbetreiber → `msb-…`, Energieserviceanbieter → `esa-strom`,
-      Bilanzkreisverantwortlicher Strom → `bkv-strom`. „Strom und Gas" names
+      Bilanzkreisverantwortlicher Strom → `bkv-strom`, Einsatzverantwortlicher
+      (Redispatch 2.0) → `eiv-strom`. „Strom und Gas" names
       both Sparten. A Rolle without a Sparte in the sentence is left out.
 
       ## IDENTIFIERS — only as written
@@ -113,7 +114,7 @@ spec:
                 properties:
                   rolle:
                     type: string
-                    enum: [lf-strom, lf-gas, nb-strom, nb-gas, msb-strom, msb-gas, esa-strom, bkv-strom]
+                    enum: [lf-strom, lf-gas, nb-strom, nb-gas, msb-strom, msb-gas, esa-strom, bkv-strom, eiv-strom]
                   mp_id:
                     type: [string, "null"]
                     description: The code as the sentence writes it, or null.

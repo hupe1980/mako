@@ -463,10 +463,12 @@ pub enum MarketRoleType {
     /// Grid operator — TSO (ÜNB) or DSO (VNB).
     #[serde(rename = "A18")]
     GridOperator,
-    /// Producer / generation asset owner.
+    /// Producer — in Redispatch 2.0 the Betreiber der technischen Ressource
+    /// (BTR), who receives the activation the EIV forwards in the Duldungsfall
+    /// (`ActivationDocument` AWT 1.1f).
     #[serde(rename = "A21")]
     Producer,
-    /// Resource provider / Einspeiseverantwortlicher (EIV).
+    /// Resource provider — the Einsatzverantwortliche (EIV).
     #[serde(rename = "A27")]
     ResourceProvider,
     /// Data provider (e.g. metering point operator forwarding data).
@@ -475,6 +477,21 @@ pub enum MarketRoleType {
     /// Supplier (Lieferant).
     #[serde(rename = "Z01")]
     Supplier,
+}
+
+impl MarketRoleType {
+    /// The role code as it stands on the wire (`A27`, `A39`, …).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::BalanceResponsibleParty => "A08",
+            Self::GridOperator => "A18",
+            Self::Producer => "A21",
+            Self::ResourceProvider => "A27",
+            Self::DataProvider => "A39",
+            Self::Supplier => "Z01",
+        }
+    }
 }
 
 // ── ControlZone ───────────────────────────────────────────────────────────────

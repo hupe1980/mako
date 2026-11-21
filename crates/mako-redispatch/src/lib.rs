@@ -68,11 +68,15 @@
 //! > carries `A03` Deactivated / `A04` Reactivated / `A13` Withdrawn. There is
 //! > no 24-hour answer window and no answer document.
 //!
-//! # Deployment role gate
+//! # Two sides, two modules
 //!
-//! `RedispatchModule` should only be registered when `DeploymentRoles` contains
-//! at least one of `Marktrolle::Nb`, `Marktrolle::Unb`, or `Marktrolle::Anb`.
-//! Lieferant (LF) and MSB deployments are out of scope for Redispatch 2.0.
+//! [`RedispatchModule`] is the grid operators' side (ÜNB, VNB, ANB) and is
+//! registered for a Netzbetreiber deployment. [`EivModule`] is the
+//! Einsatzverantwortliche ([`eiv`]) and is registered for an EIV deployment.
+//! Their workflow names are disjoint, and which one an inbound document
+//! reaches is decided by its `ReceiverRole` ([`eiv::an_eiv_adressiert`]): a
+//! document addressed to the EIV (`A27`) never reaches a Netzbetreiber
+//! workflow.
 //!
 //! # IFTSTA PIDs (confirmed from IFTSTA AHB 2.1 + PID 4.0)
 //!
@@ -96,6 +100,10 @@
 //! | [`ack_forward::planungsdaten`] | `redispatch-planungsdaten` | `PlannedResourceScheduleDocument` |
 //! | [`ack_forward::statusanfrage`] | `redispatch-statusanfrage` | `StatusRequest_MarketDocument` |
 //! | [`ack_forward::kostenblatt`] | `redispatch-kostenblatt` | `Kostenblatt` |
+//!
+//! [`eiv`] holds the Einsatzverantwortliche's five workflows, registered by
+//! [`EivModule`]: `redispatch-eiv-planungsdaten`, `-nichtbeanspruchbarkeit`,
+//! `-stammdaten`, `-kostenblatt` and `-abruf`.
 
 #![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -104,6 +112,7 @@ pub mod ack_forward;
 pub mod aktivierung;
 pub mod ausfallarbeit;
 pub mod bilarem;
+pub mod eiv;
 pub mod fristen;
 pub mod router;
 pub mod stammdaten;
@@ -111,6 +120,54 @@ pub mod stammdaten;
 pub use router::{RedispatchDocumentKind, RedispatchRouter};
 
 use mako_engine::{builder::EngineModule, pid_router::PidRouter, profile::ProfileRequirement};
+
+// ── EivModule ─────────────────────────────────────────────────────────────────
+
+/// Engine module for the Einsatzverantwortliche of Redispatch 2.0 ([`eiv`]).
+///
+/// Registers the five EIV workflows. It registers no Prüfidentifikator: every
+/// document it exchanges is XML, routed by document type and `ReceiverRole`
+/// at the transport boundary.
+pub struct EivModule;
+
+impl EivModule {
+    /// The inbound document kinds the EIV receives by type: the activation.
+    ///
+    /// Acknowledgements reach the EIV workflows by correlation, like the
+    /// Netzbetreiber side's.
+    #[must_use]
+    pub fn build_router() -> RedispatchRouter {
+        let mut router = RedispatchRouter::new();
+        router.register(
+            RedispatchDocumentKind::Activation,
+            eiv::abruf::WORKFLOW_NAME,
+        );
+        router
+    }
+}
+
+impl EngineModule for EivModule {
+    fn name(&self) -> &'static str {
+        "redispatch-eiv"
+    }
+
+    fn drivers(&self) -> Vec<mako_engine::driver::WorkflowDriver> {
+        use mako_engine::driver::WorkflowDriver;
+        vec![
+            WorkflowDriver::of::<eiv::PlanungsdatenSendungWorkflow>(
+                eiv::planungsdaten::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<eiv::NichtbeanspruchbarkeitSendungWorkflow>(
+                eiv::nichtbeanspruchbarkeit::WORKFLOW_NAME,
+            ),
+            WorkflowDriver::of::<eiv::StammdatenSendungWorkflow>(eiv::stammdaten::WORKFLOW_NAME),
+            WorkflowDriver::of::<eiv::KostenblattSendungWorkflow>(eiv::kostenblatt::WORKFLOW_NAME),
+            WorkflowDriver::of::<eiv::AbrufWorkflow>(eiv::abruf::WORKFLOW_NAME),
+        ]
+    }
+
+    fn register_pids(&self, _router: &mut PidRouter) {}
+}
 
 // ── RedispatchModule ──────────────────────────────────────────────────────────
 
@@ -366,6 +423,52 @@ mod tests {
     fn the_ack_frist_is_three_minutes_everywhere() {
         // The 6-hour figure this crate carried had no published source.
         assert_eq!(fristen::ACK_FRIST, time::Duration::minutes(3));
+    }
+
+    /// No Netzbetreiber workflow answers as EIV, and no EIV workflow as
+    /// Netzbetreiber: the two modules' workflows are disjoint, each router
+    /// reaches only its own side's workflows, and the EIV side is exactly
+    /// [`eiv::WORKFLOW_NAMES`].
+    #[test]
+    fn no_netzbetreiber_workflow_answers_as_eiv() {
+        let nb: Vec<&str> = RedispatchModule
+            .drivers()
+            .iter()
+            .map(mako_engine::driver::WorkflowDriver::name)
+            .collect();
+        let eiv: Vec<&str> = EivModule
+            .drivers()
+            .iter()
+            .map(mako_engine::driver::WorkflowDriver::name)
+            .collect();
+        assert_eq!(eiv, eiv::WORKFLOW_NAMES);
+        for name in &nb {
+            assert!(!eiv.contains(name), "{name} is registered by both sides");
+            assert!(!name.starts_with("redispatch-eiv-"), "{name}");
+        }
+        for name in &eiv {
+            assert!(name.starts_with("redispatch-eiv-"), "{name}");
+        }
+        let nb_router = RedispatchModule::build_router();
+        let eiv_router = EivModule::build_router();
+        for kind in [
+            RedispatchDocumentKind::Activation,
+            RedispatchDocumentKind::PlannedResourceSchedule,
+            RedispatchDocumentKind::Acknowledgement,
+            RedispatchDocumentKind::Stammdaten,
+            RedispatchDocumentKind::StatusRequest,
+            RedispatchDocumentKind::Unavailability,
+            RedispatchDocumentKind::Kaskade,
+            RedispatchDocumentKind::NetworkConstraint,
+            RedispatchDocumentKind::Kostenblatt,
+        ] {
+            if let Ok(name) = nb_router.route(kind) {
+                assert!(nb.contains(&name), "{kind:?} → {name}");
+            }
+            if let Ok(name) = eiv_router.route(kind) {
+                assert!(eiv.contains(&name), "{kind:?} → {name}");
+            }
+        }
     }
 
     #[test]

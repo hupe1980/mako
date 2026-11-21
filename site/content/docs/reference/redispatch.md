@@ -108,18 +108,21 @@ exchange: the Tenor states relative deadlines and names no calendar date
 
 ## Market roles in scope
 
-| Abbrev. | Role |
-|---|---|
-| **ÜNB** | Übertragungsnetzbetreiber — Transmission System Operator (TSO) |
-| **VNB** | Verteilnetzbetreiber — Distribution System Operator (DSO) |
-| **ANB** | Anlagenbetreiber — generation / storage asset operator |
-| **DV** | Direktvermarkter — direct marketer |
-| **BKV** | Bilanzkreisverantwortlicher — balance responsible party |
+| Abbrev. | Role | Role code |
+|---|---|---|
+| **ÜNB** | Übertragungsnetzbetreiber — Transmission System Operator (TSO) | `A18` |
+| **VNB** | Verteilnetzbetreiber — Distribution System Operator (DSO) | `A18` |
+| **ANB** | Anschlussnetzbetreiber — the Netzbetreiber the technical resource is connected to | `A18` |
+| **DP** | Data Provider — receives and forwards; the ANB unless it hands the role to a third party | `A39` |
+| **EIV** | Einsatzverantwortlicher — responsible for the dispatch of a steuerbare Ressource; by default the LF of its Marktlokation (BilAReM Kap. 6.1.6) | `A27` |
+| **BTR** | Betreiber der technischen Ressource — installs, operates and maintains it | `A21` |
+| **BKV** | Bilanzkreisverantwortlicher — balance responsible party | `A08` |
 
-Suppliers (LF) and metering-point operators (MSB) are **not** in scope for
-Redispatch 2.0. These are market-role abbreviations, not `Marktrolle` variants:
-VNB, ANB and ÜNB all deploy under the **NB Strom** role, and the enum has
-`Marktrolle::Nb` and `Marktrolle::Uenb` but no `Anb`
+Role names from BilAReM Kap. 1 (Begriffe) and the BDEW-AWH Rollenmodell V2.2
+Kap. 3.1; codes from the Anwendungstabellen. VNB, ANB and ÜNB all deploy under
+the **NB Strom** role, and the enum has `Marktrolle::Nb` and `Marktrolle::Uenb`
+but no `Anb`. The EIV deploys as `eiv-strom` (`Marktrolle::Eiv`); the BTR is
+`Marktrolle::Btr` without a deployment role yet
 (`crates/mako-engine/src/marktrolle.rs`).
 
 ---
@@ -498,6 +501,53 @@ Both transport legs are wired end-to-end:
 
 ---
 
+## The Einsatzverantwortliche
+
+`EivModule` is the other side of the same documents: it lets a deployment
+*be* the EIV. `makod` registers it for `eiv-strom` alone, and its five
+workflows are disjoint from `RedispatchModule`'s:
+
+| Workflow | Document the EIV sends | Ends in |
+|---|---|---|
+| `redispatch-eiv-planungsdaten` | `PlannedResourceScheduleDocument` `A14` / `Z11` → DP | `Bestaetigt` or `Klaerfall` |
+| `redispatch-eiv-nichtbeanspruchbarkeit` | `Unavailability_MarketDocument` `A76` / `A80` → DP | `Bestaetigt` or `Klaerfall` |
+| `redispatch-eiv-stammdaten` | `Stammdaten` `Z02` → DP | `Bestaetigt` or `Klaerfall` |
+| `redispatch-eiv-kostenblatt` | `Kostenblatt` `Z05` → DP | `Bestaetigt` or `Klaerfall` |
+| `redispatch-eiv-abruf` | receives `ActivationDocument` `A96`; sends the Rückmeldung zur Umsetzbarkeit `A41` → DP after a person's release | `Bestaetigt` or `Klaerfall` |
+
+The Anwendungstabellen fix the direction of each: the EIV sends with
+`SenderRole` `A27` to the Data Provider `A39` (PlannedResourceScheduleDocument
+AWT 1.0f S. 3, Unavailability_MarketDocument AWT 1.1b S. 3, Stammdaten AWT
+1.4b S. 3, Kostenblatt AWT 1.0d S. 3, ActivationDocument AWT 1.1f S. 35).
+
+**A sending counts only when it is acknowledged.** For the sender the
+Formatbeschreibung fixes what silence means — „Eine nicht empfangene
+AcknowledgementDocument-Nachricht bedeutet, dass die Ursprungsnachricht beim
+Empfänger nicht bearbeitet wird" (AcknowledgementDocument FB 1.0g S. 11) — so a
+missing acknowledgement and a negative one (`A02`) both end in a sourced
+Klärfall, announced with the document and the reason, rather than in
+`FristAbgelaufen`. A late positive one still closes the sending (S. 14).
+
+**An activation is a person's decision.** In the Aufforderungsfall the anweisende
+Netzbetreiber asks the EIV to change and steer the SR (BilAReM Kap. 1). That
+changes how a plant runs, so `redispatch-eiv-abruf` holds the activation until a
+person releases the Rückmeldung; no deadline sends one. The answer window is
+the operator's `[redispatch_eiv] abruf_antwortfenster_minuten` — BK6-23-241
+Tenorziffer 7 leaves the Prozessbeschreibungen to the ÜNB, and they are not
+published — and an `eiv-strom` deployment without it does not start.
+
+**The `ReceiverRole` decides the side.** `eiv::an_eiv_adressiert` is the one
+test: a document addressed to `A27` reaches the EIV workflows and never a
+Netzbetreiber workflow; a deployment that is no EIV skips it.
+
+Two documents the AWTs address to the EIV take no workflow: in the
+Duldungsfall the activation is not forwarded to the BTR (ActivationDocument AWT
+1.1f S. 7, Prozessschritt 4), and the Ergebnisse der Prognosegüteprüfung the
+ANB sends back (`Z12`, PlannedResourceScheduleDocument AWT 1.0f S. 3,
+Prozessschritt 3) are skipped.
+
+---
+
 ## Key invariants
 
 - `Workflow::handle` and `Workflow::apply` are **pure functions**: no I/O, no
@@ -510,6 +560,9 @@ Both transport legs are wired end-to-end:
   time.
 - **A late `AcknowledgementDocument` never fails the Geschäftsvorfall it
   carried** (AcknowledgementDocument FB 1.0g). 
+- **No Netzbetreiber workflow answers as EIV.** The `ReceiverRole` of an
+  inbound document picks the side, and `RedispatchModule` and `EivModule`
+  register disjoint workflows (`no_netzbetreiber_workflow_answers_as_eiv`).
 
 ---
 

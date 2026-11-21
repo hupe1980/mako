@@ -866,3 +866,54 @@ fn activation_awt_1_1g_bahnstrom_area_is_accepted() {
     assert_eq!(back.schedule_time_series[0].in_area.v, bahnstrom);
     assert_eq!(back.schedule_time_series[0].out_area.v, bahnstrom);
 }
+
+// ── Role and type codes ───────────────────────────────────────────────────────
+
+/// `MarketRoleType::code` is the code serde writes, and `Document::receiver_role`
+/// reads it back: the role code is what decides which side of a deployment a
+/// document is addressed to, so the two spellings must not drift.
+#[test]
+fn role_codes_are_the_wire_codes() {
+    for role in [
+        MarketRoleType::BalanceResponsibleParty,
+        MarketRoleType::GridOperator,
+        MarketRoleType::Producer,
+        MarketRoleType::ResourceProvider,
+        MarketRoleType::DataProvider,
+        MarketRoleType::Supplier,
+    ] {
+        let doc = ActivationDocument {
+            schedule_time_series: vec![],
+            document_identification: sample_doc_id(),
+            document_version: sample_doc_version(),
+            document_type: AttrV {
+                v: ActivationDocType::RedispatchActivation,
+            },
+            process_type: AttrV {
+                v: ActivationProcessType::Redispatch,
+            },
+            sender_identification: sample_sender(),
+            sender_role: AttrV {
+                v: MarketRoleType::GridOperator,
+            },
+            receiver_identification: sample_receiver(),
+            receiver_role: AttrV { v: role },
+            creation_date_time: AttrV { v: sample_ts() },
+            activation_time_interval: sample_interval(),
+            order_identification: None,
+            order_identification_version: None,
+            time_series: vec![sample_activation_ts()],
+            reason: None,
+        };
+        let xml = redispatch_xml::serialize(&doc.into()).unwrap();
+        let text = std::str::from_utf8(&xml).unwrap();
+        assert!(
+            text.contains(&format!("<ReceiverRole v=\"{}\"/>", role.code())),
+            "{role:?}: {text}"
+        );
+        let back = redispatch_xml::parse(&xml).unwrap();
+        assert_eq!(back.receiver_role(), role.code());
+        assert_eq!(back.sender_role(), "A18");
+        assert_eq!(back.type_code(), Some("A96"));
+    }
+}

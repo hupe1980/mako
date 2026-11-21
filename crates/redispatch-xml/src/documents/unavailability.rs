@@ -26,6 +26,18 @@ pub enum UnavailabilityDocType {
     ProductionUnavailability,
 }
 
+impl UnavailabilityDocType {
+    /// The code as it stands on the wire.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::PlannedUnavailability => "A67",
+            Self::ForcedUnavailability => "A76",
+            Self::ProductionUnavailability => "A80",
+        }
+    }
+}
+
 /// Process type for `Unavailability_MarketDocument`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum UnavailabilityProcessType {
@@ -87,6 +99,18 @@ pub enum UnavailabilityMarketRoleType {
     /// Data provider.
     #[serde(rename = "A39")]
     DataProvider,
+}
+
+impl UnavailabilityMarketRoleType {
+    /// The role code as it stands on the wire (`A27`, `A39`, …).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::GridOperator => "A18",
+            Self::ResourceProvider => "A27",
+            Self::DataProvider => "A39",
+        }
+    }
 }
 
 // The sender and receiver are **flat, dotted** elements on the wire —

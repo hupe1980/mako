@@ -5,7 +5,7 @@ template = "home.html"
 
 [extra]
 translated_from = "templates/index.html"
-source_sha256 = "9b0b3331572c50cbe727cc86847d247709d3e133d2b0f0d323fd3f7517fc8043"
+source_sha256 = "456c266821c316fae2caf484d1db5ea3920fe46dae3f0f3118068fb1cb072090"
 
 eyebrow = "Rust · MIT oder Apache-2.0 · BDEW EDI@Energy"
 hero_title = "Marktkommunikation für Strom und Gas,<br>von rohem EDIFACT bis zur Produktion — KI-first, in Rust."
@@ -27,7 +27,7 @@ und eine Version, die eine davon verkleinern würde, baut nicht."""
 
 roles_title = "Wer das betreibt"
 roles_lead = """Jede MaKo-Nachricht nennt an beiden Enden eine Marktrolle. Diese Rollen tragen die \
-Massenprozesse und ihre Bilanzierung. Eine Installation erklärt, welche Rollen sie spielt, und \
+Massenprozesse, ihre Bilanzierung und Redispatch 2.0. Eine Installation erklärt, welche Rollen sie spielt, und \
 registriert nur deren Prozesse; welcher Nutzer die Prozesse welcher Rolle lesen darf, regelt \
 eine Cedar-Policy."""
 
@@ -112,6 +112,16 @@ Bilanzkreiszuordnungsliste und die Clearingliste BAS an."""
 path = "@/docs/services/makod.md"
 lang = "en"
 link = "makod — MaBiS-Nachrichten →"
+
+[[extra.roles]]
+abbr = "EIV"
+name = "Einsatzverantwortlicher"
+text = """Schickt Planungsdaten, Nichtbeanspruchbarkeiten, Stammdaten und Kostenblatt seiner \
+Anlagen an den Data Provider und verfolgt jede Quittung; ein Abruf des Netzbetreibers wartet, \
+bis eine Person die Rückmeldung freigibt."""
+path = "@/docs/reference/redispatch.md"
+lang = "en"
+link = "makod — Redispatch-Nachrichten →"
 
 [[extra.cards]]
 title = "Protokoll und Prozess"

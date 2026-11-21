@@ -92,6 +92,56 @@ impl Document {
         }
     }
 
+    /// The `DocumentType` / `type` code of the document kinds a sender
+    /// chooses one for (`A96`/`A41`, `A14`/`Z11`, `A76`/`A80`, `Z02`, `Z05`);
+    /// `None` for the others.
+    pub fn type_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Activation(d) => Some(d.document_type.v.code()),
+            Self::PlannedResourceSchedule(d) => Some(d.document_type.v.code()),
+            Self::Stammdaten(d) => Some(d.document_type.code()),
+            Self::Unavailability(d) => Some(d.doc_type.code()),
+            Self::Kostenblatt(d) => Some(d.document_type.v.code()),
+            Self::Acknowledgement(_)
+            | Self::StatusRequest(_)
+            | Self::Kaskade(_)
+            | Self::NetworkConstraint(_) => None,
+        }
+    }
+
+    /// The sender's market role code (`SenderRole` / `Senderrolle` /
+    /// `sender_MarketParticipant.marketRole.type`).
+    pub fn sender_role(&self) -> &'static str {
+        match self {
+            Self::Activation(d) => d.sender_role.v.code(),
+            Self::PlannedResourceSchedule(d) => d.sender_role.v.code(),
+            Self::Acknowledgement(d) => d.sender_role.v.code(),
+            Self::Stammdaten(d) => d.senderrolle.code(),
+            Self::StatusRequest(d) => d.sender_market_role.code(),
+            Self::Unavailability(d) => d.sender_market_role.code(),
+            Self::Kaskade(d) => d.sender_market_role.code(),
+            Self::NetworkConstraint(d) => d.sender_role.v.code(),
+            Self::Kostenblatt(d) => d.sender_role.v.code(),
+        }
+    }
+
+    /// The receiver's market role code — what decides which side of a
+    /// deployment a document is addressed to (`A27` is the EIV, `A18` a
+    /// Netzbetreiber, `A39` a Data Provider).
+    pub fn receiver_role(&self) -> &'static str {
+        match self {
+            Self::Activation(d) => d.receiver_role.v.code(),
+            Self::PlannedResourceSchedule(d) => d.receiver_role.v.code(),
+            Self::Acknowledgement(d) => d.receiver_role.v.code(),
+            Self::Stammdaten(d) => d.empfaengerrolle.code(),
+            Self::StatusRequest(d) => d.receiver_market_role.code(),
+            Self::Unavailability(d) => d.receiver_market_role.code(),
+            Self::Kaskade(d) => d.receiver_market_role.code(),
+            Self::NetworkConstraint(d) => d.receiver_role.v.code(),
+            Self::Kostenblatt(d) => d.receiver_role.v.code(),
+        }
+    }
+
     /// Return the 13-digit GLN / EIC of the document receiver.
     pub fn receiver_id(&self) -> &str {
         match self {

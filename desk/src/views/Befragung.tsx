@@ -61,6 +61,7 @@ const GEFRAGT: Record<RolleToken, true> = {
   "msb-gas": true,
   "esa-strom": true,
   "bkv-strom": true,
+  "eiv-strom": true,
 };
 const ROLLEN = Object.keys(GEFRAGT) as RolleToken[];
 const LIEFERANT: Partial<Record<RolleToken, SparteToken>> = {

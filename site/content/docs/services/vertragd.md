@@ -703,6 +703,10 @@ still owed (it would drop the notice and the Sonderkündigungsrecht).
 
 ### The § 14a EnWG module state lives here too
 
+Steering the devices in the household is the home energy manager's job — see
+the sister project [hems](https://hupe1980.github.io/hems/); vertragd records
+which module the contract carries.
+
 Which BK8-22/010-A Netzentgelt modules the Anschlussnutzer holds — `MODUL_1`
 (pauschal) or `MODUL_2` (prozentual) as the base, `MODUL_3` (zeitvariabel)
 beside Modul 1 — is stored per component as valid-time slices

@@ -53,7 +53,7 @@ formats and check digits, and
 [Dates and days](@/docs/architecture/domain-model.md#dates-and-days) for what
 "today" means in a market date.
 
-### The five market roles a deployment plays
+### The six market roles a deployment plays
 
 A deployment plays one or more of these; its counterparties include the
 others of the Rollenmodell — the ÜNB and the BIKO among them
@@ -66,6 +66,7 @@ others of the Rollenmodell — the ÜNB and the BIKO among them
 | **MSB** | Messstellenbetreiber | The meter — installing it, reading it, and delivering the values |
 | **ESA** | Energieserviceanbieter | Services on metered values — ordering them from the MSB under the § 34 MsbG Wertebestellung |
 | **BKV** | Bilanzkreisverantwortlicher | A Bilanzkreis's balance against the ÜNB |
+| **EIV** | Einsatzverantwortlicher | A plant's dispatch under Redispatch 2.0 — its plans, unavailabilities and the answer to an activation |
 
 A deployment is scoped to the roles it plays: makod registers the modules of
 the roles its `[deployment] rollen` declares. Which principal may read which
