@@ -34,14 +34,15 @@ const MALO: &str = "51238696012";
 const KEY: &str = "0123456789abcdef";
 
 fn tenant() -> TenantId {
-    TenantId::from_party_id(LF)
+    TenantId::from_tenant(LF)
 }
 
 /// The command doors of an LF Strom deployment over `cache`.
 fn tueren(store: &SlateDbStore, cache: &SlateDbMaloCache) -> Router {
     axum::Router::from(makod::commands_api::routes(Arc::new(CommandsApiState {
         tenant_id: tenant(),
-        sender_party_id: LF.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(LF),
         configured_marktrollen: vec!["LF".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,

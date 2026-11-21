@@ -159,7 +159,7 @@ async fn dispatch_wim_ersteinbau_vorabinformation(
                 )
             })?;
     let command = ErsteinbauCommand::SendVorabinformation {
-        gmsb: MarktpartnerCode::new(state.sender_party_id.clone()),
+        gmsb: MarktpartnerCode::new(state.own_mp_id(&["MSB"], "")?),
         wmsb: MarktpartnerCode::new(wmsb),
         melo_id: melo_id.clone(),
         umstellungszeitpunkt: format!(

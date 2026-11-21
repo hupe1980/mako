@@ -51,7 +51,8 @@ const PRUFLAUF_BATCH: i64 = 500;
 /// Configuration for the Neuanlage module.
 #[derive(Debug, Clone)]
 pub struct NeuanlageModuleConfig {
-    pub own_mp_id: String,
+    /// `[identity]` — a Neuanlage is answered by the NB it names.
+    pub identitaet: crate::config::Identitaet,
     pub tenant: String,
     /// When `false`, a decidable case is recorded and left for an operator
     /// rather than answered. Mirrors `[nb] auto_accept`.
@@ -78,7 +79,7 @@ pub async fn handle_process_initiated(
         return Ok(false);
     };
     // Another operator's message on a shared bus.
-    if !payload.grid_operator_gln.is_empty() && payload.grid_operator_gln != cfg.own_mp_id {
+    if !cfg.identitaet.nb_adressiert(&payload.grid_operator_gln) {
         return Ok(false);
     }
 

@@ -10,6 +10,12 @@
           "text": "[deployment]"
         },
         {
+          "art": "gleich",
+          "text": "tenant = \"stadtwerke-musterstadt\"",
+          "quelle": "[deployment] tenant / [identity] tenant: der Datenschlüssel jeder Zeile, in allen Diensten derselbe — eine beliebige feste Zeichenkette, keine MP-ID",
+          "frage": "tenant"
+        },
+        {
           "art": "weg",
           "text": "rollen = [\"nb-gas\"]",
           "quelle": "makod [deployment] rollen: jede erklärte Rolle braucht genau eine [[party]]-MP-ID",
@@ -40,7 +46,7 @@
         {
           "art": "neu",
           "text": "primary = true",
-          "quelle": "makod [[party]] primary: genau eine MP-ID ist der Speicherschlüssel aller Ereignisströme",
+          "quelle": "makod [[party]] primary: die MP-ID, unter der eine CONTRL auf eine Übertragungsdatei an keine eigene MP-ID antwortet",
           "frage": "primaer"
         },
         {
@@ -104,8 +110,8 @@
           "frage": "dienste"
         }
       ],
-      "toml": "# makod.toml — vorgeschlagen von der Einrichtung. Jede Zeile nennt ihre Quelle;\n# eine Lücke steht als # FEHLT: und muss gefüllt werden.\n\n[deployment]\n# ENTFÄLLT: rollen = [\"nb-gas\"]\n# Quelle: makod [deployment] rollen: jede erklärte Rolle braucht genau eine [[party]]-MP-ID\nrollen = [\"lf-strom\", \"lf-gas\"]\n\n[[party]]\n# Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“\nmp_id = \"9900357000004\"\n# Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4)\nroles = [\"LF\"]\n# Quelle: makod [[party]] primary: genau eine MP-ID ist der Speicherschlüssel aller Ereignisströme\nprimary = true\n# FEHLT: [party.as4] für 9900357000004 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID\n\n[[party]]\n# Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“\nmp_id = \"9800357000005\"\n# Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4)\nroles = [\"LFG\"]\n# FEHLT: [party.as4] für 9800357000005 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID\n# ENTFÄLLT: [[party]]\n# ENTFÄLLT: mp_id = \"9900001000001\"\n# ENTFÄLLT: roles = [\"GNB\"]\n\n[[einrichtung.dienst]]\n# Quelle: makod [[einrichtung.dienst]]: die Checkliste fragt jeden Dienst nach GET /admin/einrichtung\nname = \"processd\"\n# Quelle: makod [[einrichtung.dienst]]: die Checkliste fragt jeden Dienst nach GET /admin/einrichtung\nurl  = \"http://127.0.0.1:8580\"\n",
-      "diff": "--- makod.toml (geladen)\n+++ makod.toml (Vorschlag)\n [deployment]\n-rollen = [\"nb-gas\"]\n+rollen = [\"lf-strom\", \"lf-gas\"]\n [[party]]\n+mp_id = \"9900357000004\"\n+roles = [\"LF\"]\n+primary = true\n?# FEHLT: [party.as4] für 9900357000004 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID\n [[party]]\n+mp_id = \"9800357000005\"\n+roles = [\"LFG\"]\n?# FEHLT: [party.as4] für 9800357000005 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID\n-[[party]]\n-mp_id = \"9900001000001\"\n-roles = [\"GNB\"]\n [[einrichtung.dienst]]\n name = \"processd\"\n url  = \"http://127.0.0.1:8580\"\n",
+      "toml": "# makod.toml — vorgeschlagen von der Einrichtung. Jede Zeile nennt ihre Quelle;\n# eine Lücke steht als # FEHLT: und muss gefüllt werden.\n\n[deployment]\n# Quelle: [deployment] tenant / [identity] tenant: der Datenschlüssel jeder Zeile, in allen Diensten derselbe — eine beliebige feste Zeichenkette, keine MP-ID\ntenant = \"stadtwerke-musterstadt\"\n# ENTFÄLLT: rollen = [\"nb-gas\"]\n# Quelle: makod [deployment] rollen: jede erklärte Rolle braucht genau eine [[party]]-MP-ID\nrollen = [\"lf-strom\", \"lf-gas\"]\n\n[[party]]\n# Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“\nmp_id = \"9900357000004\"\n# Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4)\nroles = [\"LF\"]\n# Quelle: makod [[party]] primary: die MP-ID, unter der eine CONTRL auf eine Übertragungsdatei an keine eigene MP-ID antwortet\nprimary = true\n# FEHLT: [party.as4] für 9900357000004 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID\n\n[[party]]\n# Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“\nmp_id = \"9800357000005\"\n# Quelle: BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4)\nroles = [\"LFG\"]\n# FEHLT: [party.as4] für 9800357000005 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID\n# ENTFÄLLT: [[party]]\n# ENTFÄLLT: mp_id = \"9900001000001\"\n# ENTFÄLLT: roles = [\"GNB\"]\n\n[[einrichtung.dienst]]\n# Quelle: makod [[einrichtung.dienst]]: die Checkliste fragt jeden Dienst nach GET /admin/einrichtung\nname = \"processd\"\n# Quelle: makod [[einrichtung.dienst]]: die Checkliste fragt jeden Dienst nach GET /admin/einrichtung\nurl  = \"http://127.0.0.1:8580\"\n",
+      "diff": "--- makod.toml (geladen)\n+++ makod.toml (Vorschlag)\n [deployment]\n tenant = \"stadtwerke-musterstadt\"\n-rollen = [\"nb-gas\"]\n+rollen = [\"lf-strom\", \"lf-gas\"]\n [[party]]\n+mp_id = \"9900357000004\"\n+roles = [\"LF\"]\n+primary = true\n?# FEHLT: [party.as4] für 9900357000004 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID\n [[party]]\n+mp_id = \"9800357000005\"\n+roles = [\"LFG\"]\n?# FEHLT: [party.as4] für 9800357000005 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID\n-[[party]]\n-mp_id = \"9900001000001\"\n-roles = [\"GNB\"]\n [[einrichtung.dienst]]\n name = \"processd\"\n url  = \"http://127.0.0.1:8580\"\n",
       "aenderungen": 10,
       "luecken": 2
     },
@@ -120,9 +126,15 @@
         },
         {
           "art": "neu",
-          "text": "own_mp_id = \"9900357000004\"",
-          "quelle": "processd [identity] own_mp_id: die MP-ID, die in makod primary = true trägt",
-          "frage": "primaer"
+          "text": "tenant = \"stadtwerke-musterstadt\"",
+          "quelle": "[deployment] tenant / [identity] tenant: der Datenschlüssel jeder Zeile, in allen Diensten derselbe — eine beliebige feste Zeichenkette, keine MP-ID",
+          "frage": "tenant"
+        },
+        {
+          "art": "neu",
+          "text": "lf_mp_ids = [\"9900357000004\", \"9800357000005\"]",
+          "quelle": "processd [identity] nb_mp_ids / lf_mp_ids / msb_mp_ids: die MP-IDs, unter denen processd je Rolle antwortet — dieselben wie makods [[party]]",
+          "frage": "rollen"
         },
         {
           "art": "neu",
@@ -153,9 +165,9 @@
           "frage": "bilanzkreise.gas"
         }
       ],
-      "toml": "# processd.toml — vorgeschlagen von der Einrichtung. Jede Zeile nennt ihre Quelle;\n# eine Lücke steht als # FEHLT: und muss gefüllt werden.\n\n[identity]\n# Quelle: processd [identity] own_mp_id: die MP-ID, die in makod primary = true trägt\nown_mp_id = \"9900357000004\"\n# Quelle: processd [identity] verbundene_lieferanten: Pflichtangabe, [] eingeschlossen; jede Rolle hat ihre eigene MP-ID (BDEW-AWH Identifikatoren V1.2, Kap. 2.1)\nverbundene_lieferanten = []\n\n[[lf.bilanzkreise]]\n# Quelle: BK6-24-174 Anlage 3 (MaBiS), Kap. 10.2.1\nsparte   = \"strom\"\n# Quelle: BK6-24-174 Anlage 3 (MaBiS), Kap. 10.2.1\nstandard = [\"11XBK-STD------Y\"]\n# FEHLT: [[lf.bilanzkreise]] sparte = \"gas\" — der Bilanzkreis, dem der Lieferant gas zuordnet (standard = [...])\n",
-      "diff": "--- processd.toml (geladen)\n+++ processd.toml (Vorschlag)\n [identity]\n+own_mp_id = \"9900357000004\"\n+verbundene_lieferanten = []\n [[lf.bilanzkreise]]\n+sparte   = \"strom\"\n+standard = [\"11XBK-STD------Y\"]\n?# FEHLT: [[lf.bilanzkreise]] sparte = \"gas\" — der Bilanzkreis, dem der Lieferant gas zuordnet (standard = [...])\n",
-      "aenderungen": 4,
+      "toml": "# processd.toml — vorgeschlagen von der Einrichtung. Jede Zeile nennt ihre Quelle;\n# eine Lücke steht als # FEHLT: und muss gefüllt werden.\n\n[identity]\n# Quelle: [deployment] tenant / [identity] tenant: der Datenschlüssel jeder Zeile, in allen Diensten derselbe — eine beliebige feste Zeichenkette, keine MP-ID\ntenant = \"stadtwerke-musterstadt\"\n# Quelle: processd [identity] nb_mp_ids / lf_mp_ids / msb_mp_ids: die MP-IDs, unter denen processd je Rolle antwortet — dieselben wie makods [[party]]\nlf_mp_ids = [\"9900357000004\", \"9800357000005\"]\n# Quelle: processd [identity] verbundene_lieferanten: Pflichtangabe, [] eingeschlossen; jede Rolle hat ihre eigene MP-ID (BDEW-AWH Identifikatoren V1.2, Kap. 2.1)\nverbundene_lieferanten = []\n\n[[lf.bilanzkreise]]\n# Quelle: BK6-24-174 Anlage 3 (MaBiS), Kap. 10.2.1\nsparte   = \"strom\"\n# Quelle: BK6-24-174 Anlage 3 (MaBiS), Kap. 10.2.1\nstandard = [\"11XBK-STD------Y\"]\n# FEHLT: [[lf.bilanzkreise]] sparte = \"gas\" — der Bilanzkreis, dem der Lieferant gas zuordnet (standard = [...])\n",
+      "diff": "--- processd.toml (geladen)\n+++ processd.toml (Vorschlag)\n [identity]\n+tenant = \"stadtwerke-musterstadt\"\n+lf_mp_ids = [\"9900357000004\", \"9800357000005\"]\n+verbundene_lieferanten = []\n [[lf.bilanzkreise]]\n+sparte   = \"strom\"\n+standard = [\"11XBK-STD------Y\"]\n?# FEHLT: [[lf.bilanzkreise]] sparte = \"gas\" — der Bilanzkreis, dem der Lieferant gas zuordnet (standard = [...])\n",
+      "aenderungen": 5,
       "luecken": 1
     }
   ],
@@ -163,6 +175,7 @@
   "luecken": 3,
   "vollstaendig": false,
   "vorbelegt": {
+    "tenant": "stadtwerke-musterstadt",
     "rollen": [
       {
         "rolle": "nb-gas",

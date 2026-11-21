@@ -317,6 +317,8 @@ pub struct UtiltsVorgang {
     formula_status_code: Option<String>,
     formula_status_period: Option<u32>,
     ref_transaction_id: Option<String>,
+    antworten: Vec<(String, u32)>,
+    antwort_freitext: Option<String>,
     usage_periods: Vec<UtiltsUsagePeriod>,
     energy_amount_refs: Vec<UtiltsEnergyAmountRef>,
     calc_steps: Vec<UtiltsCalcStep>,
@@ -338,6 +340,8 @@ impl UtiltsVorgang {
             formula_status_code: None,
             formula_status_period: None,
             ref_transaction_id: None,
+            antworten: Vec::new(),
+            antwort_freitext: None,
             usage_periods: Vec::new(),
             energy_amount_refs: Vec::new(),
             calc_steps: Vec::new(),
@@ -373,6 +377,24 @@ impl UtiltsVorgang {
     /// Set a reference to a previous Berechnungsformel Vorgang (`SG6 RFF+TN:{id}`).
     pub fn ref_transaction(mut self, id: impl Into<String>) -> Self {
         self.ref_transaction_id = Some(id.into());
+        self
+    }
+
+    /// The Antwort auf eine Berechnungsformel (PID 25010) for one Zeitraum of
+    /// it: `STS+E01++<code>:E_0218::<zeitraum_id>`, once per Zeitraum the
+    /// formula carried (UTILTS AHB condition `[533]`). Pair it with
+    /// [`ref_transaction`](Self::ref_transaction), the 25001's Vorgangsnummer.
+    #[must_use]
+    pub fn antwort(mut self, code: impl Into<String>, zeitraum_id: u32) -> Self {
+        self.antworten.push((code.into(), zeitraum_id));
+        self
+    }
+
+    /// The `FTX+ACB` the AHB demands beside an answer code `A99` („Sonstiges",
+    /// condition `[2005]`).
+    #[must_use]
+    pub fn antwort_freitext(mut self, text: impl Into<String>) -> Self {
+        self.antwort_freitext = Some(text.into());
         self
     }
 
@@ -631,6 +653,22 @@ impl<S, R> UtiltsBuilder<S, R> {
                 (&vorgang.formula_status_code, &vorgang.formula_status_period)
             {
                 emit_seg!(w, "STS", "Z23", code, &pid.to_string());
+            }
+            for (code, zeitraum) in &vorgang.antworten {
+                emit_comp!(
+                    w,
+                    "STS",
+                    ["E01"],
+                    [""],
+                    [code, "E_0218", "", &zeitraum.to_string()]
+                );
+                if code == "A99"
+                    && let Some(text) = &vorgang.antwort_freitext
+                {
+                    // `FTX+ACB++<Zeitraum-ID>+text` — C107 carries the Zeitraum
+                    // the remark is about (UTILTS MIG 1.1e, Nr 00018).
+                    emit_comp!(w, "FTX", ["ACB"], [""], [&zeitraum.to_string()], [text]);
+                }
             }
             emit_comp!(w, "RFF", ["Z13", &vorgang.pruefidentifikator.to_string()]);
             if let Some(ref_id) = &vorgang.ref_transaction_id {

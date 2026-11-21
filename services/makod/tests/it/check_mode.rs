@@ -45,6 +45,7 @@ fn check_exits_zero_on_valid_config() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -77,6 +78,7 @@ fn check_exits_nonzero_on_mixed_sparte_party() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom", "nb-gas"]
 
 [[party]]
@@ -109,6 +111,7 @@ fn refuses_volatile_storage_without_explicit_flag() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -153,6 +156,7 @@ fn check_rejects_an_authenticated_port_without_credentials() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -198,6 +202,7 @@ fn check_accepts_an_authenticated_port_with_credentials() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -243,6 +248,7 @@ fn check_rejects_an_invalid_cedar_policy() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -282,6 +288,7 @@ fn check_rejects_a_config_with_no_ingest_transport() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -313,6 +320,7 @@ fn check_rejects_a_config_with_no_outbound_delivery_path() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -354,6 +362,7 @@ fn an_unknown_config_key_is_rejected() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -395,6 +404,7 @@ fn check_does_not_run_the_process_registry_reconciliation() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -476,6 +486,7 @@ fn check_refuses_an_mp_id_for_an_undeclared_role() {
     let (ok, stderr) = check(
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["lf-strom"]
 
 [[party]]
@@ -502,6 +513,7 @@ fn check_refuses_a_declared_role_without_an_mp_id() {
     let (ok, stderr) = check(
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom", "msb-strom"]
 
 [[party]]
@@ -521,6 +533,7 @@ fn check_refuses_an_unknown_role_token() {
     let (ok, stderr) = check(
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["lf"]
 
 [[party]]
@@ -541,6 +554,7 @@ primary = true
 fn allow_multi_instance_is_refused_in_both_forms() {
     let body = r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -598,6 +612,7 @@ fn as4_config(dir: &std::path::Path, as4_extra: &str, partner: &str) -> String {
     format!(
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -770,6 +785,7 @@ fn check_config_reports_both_defects_and_exits_nonzero() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-gas"]
 
 [[party]]
@@ -818,6 +834,7 @@ fn check_config_exits_zero_on_a_startable_config() {
         dir.path(),
         r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]
@@ -848,6 +865,7 @@ primary = true
 fn check_refuses_a_netzzugang_endpoint() {
     let body = r#"
 [deployment]
+tenant = "stadtwerke-test"
 rollen = ["nb-strom"]
 
 [[party]]

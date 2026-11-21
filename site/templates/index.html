@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {#- ⚠ Guarded numbers. `services/makod/tests/it/published_counts.rs` reads this file
-    and requires the phrases "499 Prüfidentifikatoren" and "82 workflows" to
+    and requires the phrases "499 Prüfidentifikatoren" and "83 workflows" to
     survive tag-stripping, so a number must stay immediately before its unit with
     only markup between them. `e2e_ahb_rule_coverage_guard.rs` reads the AHB-rule
     count out of the last <strong> element preceding the words it greps for in
@@ -16,7 +16,7 @@
       <span class="tag tag-status">{{ trans(key="status", lang=lang) }}</span>
       <span>Rust · MIT or Apache-2.0 · BDEW EDI@Energy {{ config.extra.format_versions }}</span>
     </p>
-    <a class="hero-pill" href="{{ get_url(path='@/validator.md') | safe }}"><strong>Validator</strong> — check an EDIFACT message in your browser <span aria-hidden="true">→</span></a>
+    <a class="hero-pill" href="{{ get_url(path='@/tools.md') | safe }}"><strong>Tools</strong> — the EDIFACT validator and four energy calculators, in your browser <span aria-hidden="true">→</span></a>
     <h1 class="hero-title">AI-first German energy-market operations,<br>from raw EDIFACT to production — in Rust.</h1>
     <p class="hero-sub">Every German electricity and gas market participant is required to
       exchange regulated messages with its counterparties — <em>Marktkommunikation</em>, MaKo.
@@ -46,7 +46,7 @@
   <div class="stats-inner">
     <div><strong>483 / 483</strong><span>published Prüfidentifikatoren imported</span></div>
     <div><strong>499</strong><span>Prüfidentifikatoren routed</span></div>
-    <div><strong>82</strong><span>MaKo workflows</span></div>
+    <div><strong>83</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>14</strong><span>services</span></div>
     <div><strong>6</strong><span>deployable roles</span></div>

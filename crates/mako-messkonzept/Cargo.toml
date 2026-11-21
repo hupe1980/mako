@@ -1,0 +1,27 @@
+[package]
+name         = "mako-messkonzept"
+version.workspace      = true
+description  = "The Messkonzept of a German Netzanschluss: the Lokationen its devices require, the decisions that shape its metering with their euros and sources, and the match against a Netzbetreiber's catalogue"
+authors.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+rust-version.workspace = true
+keywords     = ["mako", "bdew", "messkonzept", "lokationsbuendel", "netzanschluss"]
+categories   = ["science"]
+
+[dependencies]
+eeg-billing  = { workspace = true }
+grid-billing = { workspace = true }
+rubo4e       = { workspace = true }
+rust_decimal = { workspace = true }
+serde        = { workspace = true, features = ["derive"] }
+time         = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+time       = { workspace = true, features = ["macros"] }
+
+[lints]
+workspace = true

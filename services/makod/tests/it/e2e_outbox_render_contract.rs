@@ -244,6 +244,7 @@ fn wim_stoerungsmeldung_renders_to_ahb_valid_insrpt() {
         serde_json::json!({
             "pid":           23001,
             "melo":          "DE00056266802AO6G56M11SN51G21M24S",
+            "sender":        LFN,
             "receiver":      LFN,
             "document_date": "20261101",
             "message_ref":   "MSG-INSRPT-1",

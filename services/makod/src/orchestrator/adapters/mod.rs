@@ -1100,6 +1100,7 @@ coverage_table! {
     gpke_stammdaten_registry(time::OffsetDateTime::UNIX_EPOCH),
     gpke_stornierung_registry,
     gpke_utilts_registry,
+    gpke_berechnungsformel_registry,
     mabis_anforderung_ablehnung_registry,
     mabis_anforderung_registry,
     mabis_clearingliste_registry,

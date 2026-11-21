@@ -70,7 +70,7 @@ const FV_NEXT: &str = "FV2026-10-01";
 fn gnb_process() -> Process<GeliGasSupplierChangeWorkflow, InMemoryEventStore> {
     Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(GNB_ID),
+        TenantId::from_tenant(GNB_ID),
         WorkflowId::new("geli-gas-supplier-change", FV_START),
     )
 }

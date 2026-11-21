@@ -37,7 +37,7 @@ pub struct EinrichtungState {
     pub http: reqwest::Client,
     /// Cedar authorizer.
     pub cedar: Arc<CedarAuthorizer>,
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: String,
     /// The AS4 certificates' expiry as it stands now; `None` without AS4.
     pub zertifikate: Option<Arc<crate::zertifikat_monitor::ZertifikatMonitor>>,
@@ -188,6 +188,7 @@ mod tests {
         let policy = MakodPolicy::default();
         let einrichtung = EinrichtungConfig::default();
         let pruefung = crate::einrichtung::pruefe(&crate::einrichtung::Eingabe {
+            tenant: "stadtwerke-musterstadt",
             parties: &parties,
             rollen: &[Rolle::NbGas],
             preflight: None,
@@ -259,6 +260,7 @@ mod tests {
         let policy = MakodPolicy::default();
         let einrichtung = EinrichtungConfig::default();
         let pruefung = crate::einrichtung::pruefe(&crate::einrichtung::Eingabe {
+            tenant: "stadtwerke-musterstadt",
             parties: &parties,
             rollen: &[Rolle::NbGas],
             preflight: None,
@@ -336,6 +338,7 @@ mod tests {
         use crate::config::{As4Config, ConfigFile, EinrichtungConfig, MakodPolicy, PartyConfig};
 
         let antworten = Antworten {
+            tenant: Some("stadtwerke-musterstadt".into()),
             rollen: vec![
                 RolleAntwort {
                     rolle: Rolle::LfStrom,
@@ -369,6 +372,7 @@ mod tests {
         }];
         let pruefe = |parties: &[PartyConfig], rollen: &[crate::deployment::Rolle]| {
             crate::einrichtung::pruefe(&crate::einrichtung::Eingabe {
+                tenant: "stadtwerke-musterstadt",
                 parties,
                 rollen,
                 preflight: None,
@@ -454,6 +458,7 @@ mod tests {
 
         let pruefe = |parties: &[PartyConfig], rollen: &[crate::deployment::Rolle]| {
             crate::einrichtung::pruefe(&crate::einrichtung::Eingabe {
+                tenant: "stadtwerke-musterstadt",
                 parties,
                 rollen,
                 preflight: None,
@@ -477,12 +482,13 @@ mod tests {
             agency: None,
             as4: None,
         }];
-        let rollen: Vec<crate::deployment::Rolle> =
-            toml::from_str::<ConfigFile>("[deployment]\nrollen = [\"bkv-strom\"]\n")
-                .expect("bkv-strom is a deployment role")
-                .deployment
-                .expect("[deployment]")
-                .rollen;
+        let rollen: Vec<crate::deployment::Rolle> = toml::from_str::<ConfigFile>(
+            "[deployment]\ntenant = \"t\"\nrollen = [\"bkv-strom\"]\n",
+        )
+        .expect("bkv-strom is a deployment role")
+        .deployment
+        .expect("[deployment]")
+        .rollen;
         let bericht = pruefe(&geladen, &rollen);
         let berichte = berichte(&bericht.einrichtung, Vec::new());
 

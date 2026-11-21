@@ -284,7 +284,7 @@ async fn mount_inbox(
 async fn mount_inbox_with(clients: As4Clients, loopback: &Loopback, dispatch: bool) -> Inbox {
     let store = SlateDbStore::open_in_memory().await.unwrap();
     let registry = registry();
-    let tenant = mako_engine::ids::TenantId::from_party_id(OWN);
+    let tenant = mako_engine::ids::TenantId::from_tenant(OWN);
     let log = Log::default();
     let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let sink = Arc::new(RecordingSink {
@@ -659,10 +659,7 @@ async fn an_interchange_from_a_configured_partner_is_routed() {
     let found = inbox
         .store
         .as_process_registry()
-        .lookup_correlated(
-            mako_engine::ids::TenantId::from_party_id(OWN),
-            "51238696781",
-        )
+        .lookup_correlated(mako_engine::ids::TenantId::from_tenant(OWN), "51238696781")
         .await
         .unwrap();
     assert!(
@@ -860,7 +857,7 @@ async fn a_tampered_request_is_refused_ebms_0101() {
             cedar: Arc::new(makod::cedar_authz::CedarAuthorizer::unauthenticated().unwrap()),
             max_body_bytes: 64 << 20,
             partner_store: None,
-            tenant_id: mako_engine::ids::TenantId::from_party_id(OWN),
+            tenant_id: mako_engine::ids::TenantId::from_tenant(OWN),
             dl_sink: Arc::clone(&inbox.sink) as Arc<dyn DeadLetterSink>,
             dispatcher: None,
             contrl_ack: None,
@@ -1061,7 +1058,7 @@ async fn a_rotated_identity_serves_without_a_restart() {
         cedar: Arc::new(makod::cedar_authz::CedarAuthorizer::unauthenticated().unwrap()),
         max_body_bytes: 64 << 20,
         partner_store: None,
-        tenant_id: mako_engine::ids::TenantId::from_party_id(OWN),
+        tenant_id: mako_engine::ids::TenantId::from_tenant(OWN),
         dl_sink: Arc::new(RecordingSink {
             log: Log::default(),
             fail: Arc::new(std::sync::atomic::AtomicBool::new(false)),

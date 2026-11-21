@@ -565,6 +565,10 @@ pub enum StammdatenCommand {
         location_id: MaLo,
         /// Änderungsdatum (`YYYYMMDD`).
         aenderungsdatum: String,
+        /// The Stammdaten the Änderung carries whole — for a change of the
+        /// Lokationsbündelstruktur its `SG5 LOC`, `SG6` Verwendungszeitraum and
+        /// the `SG8 SEQ+Z78`/`Z58` blocks.
+        stammdaten: mako_engine::payload::Stammdaten,
     },
     /// Verantwortlicher: the Berechtigter's Rückmeldung arrived.
     ReceiveRueckmeldung {
@@ -872,6 +876,7 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                 receiver,
                 location_id,
                 aenderungsdatum,
+                stammdaten,
             } => {
                 if !matches!(state, StammdatenState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -881,6 +886,15 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                         "PID {pid} is not a Stammdatenänderung Änderung PID",
                     )));
                 };
+                // A change of the Lokationsbündelstruktur is the structure: one
+                // without its `SEQ+Z78` would tell the Berechtigter nothing.
+                if objekt == StammdatenObjekt::Lokationsbuendel
+                    && !stammdaten.bloecke.iter().any(|b| b.seq == "Z78")
+                {
+                    return Err(WorkflowError::rejected(format!(
+                        "PID {pid} carries the Lokationsbündelstruktur (SG8 SEQ+Z78), and none is given",
+                    )));
+                }
                 let utilmd = PendingOutbox::typed(
                     receiver.as_str(),
                     &mako_engine::payload::UtilmdPayload {
@@ -889,6 +903,9 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                         receiver: Some(receiver.as_str().to_owned()),
                         malo: Some(location_id.as_str().to_owned()),
                         process_date: Some(aenderungsdatum.clone()),
+                        transaktionsgrund: (objekt == StammdatenObjekt::Lokationsbuendel)
+                            .then(|| "ZY2".to_owned()),
+                        stammdaten,
                         ..Default::default()
                     },
                 );
@@ -1276,6 +1293,7 @@ mod tests {
                 receiver: mcod("9900357000004"),
                 location_id: malo("51238696781"),
                 aenderungsdatum: "20260801".to_owned(),
+                stammdaten: mako_engine::payload::Stammdaten::default(),
             },
         )
         .unwrap();
@@ -1294,6 +1312,44 @@ mod tests {
         .unwrap();
         let state = apply_all(state, &out.events);
         assert!(matches!(state, StammdatenState::Abgeschlossen { .. }));
+    }
+
+    /// A 55173 is the Lokationsbündelstruktur; without its `SEQ+Z78` it is
+    /// refused, and with it the UTILMD carries the structure and `ZY2`.
+    #[test]
+    fn a_bundle_change_without_its_structure_is_refused() {
+        use mako_engine::payload::{Stammdaten, StammdatenBlock, StammdatenSegment};
+        let send = |stammdaten| StammdatenCommand::SendAenderung {
+            pid: pid(55173),
+            sender: mcod("9900357000004"),
+            receiver: mcod("9900357000011"),
+            location_id: malo("51238696781"),
+            aenderungsdatum: "20261015".to_owned(),
+            stammdaten,
+        };
+        let hohl = GpkeStammdatenaenderungWorkflow::handle(
+            &StammdatenState::New,
+            send(Stammdaten::default()),
+        );
+        assert!(hohl.is_err(), "a hollow 55173 is refused");
+        let struktur = Stammdaten {
+            bloecke: vec![StammdatenBlock {
+                zeitraum_id: Some(1),
+                seq: "Z78".to_owned(),
+                segmente: vec![StammdatenSegment {
+                    tag: "RFF".to_owned(),
+                    elemente: vec![vec!["Z31".to_owned(), "9992000000026".to_owned()]],
+                }],
+            }],
+            ..Stammdaten::default()
+        };
+        let out =
+            GpkeStammdatenaenderungWorkflow::handle(&StammdatenState::New, send(struktur)).unwrap();
+        assert_eq!(out.outbox[0].payload["transaktionsgrund"], "ZY2");
+        assert_eq!(
+            out.outbox[0].payload["stammdaten"]["bloecke"][0]["seq"],
+            "Z78"
+        );
     }
 
     #[test]

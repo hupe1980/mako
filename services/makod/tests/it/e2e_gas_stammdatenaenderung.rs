@@ -31,8 +31,9 @@ async fn gnb(
             .expect("in-memory store"),
     );
     CommandsApiState {
-        tenant_id: TenantId::from_party_id(GNB_MP),
-        sender_party_id: GNB_MP.to_owned(),
+        tenant_id: TenantId::from_tenant(GNB_MP),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(GNB_MP),
         configured_marktrollen: vec!["GNB".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -42,7 +43,7 @@ async fn gnb(
         snapshot_store: store.as_snapshot_store(),
         malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
             (*store).clone(),
-            TenantId::from_party_id(GNB_MP),
+            TenantId::from_tenant(GNB_MP),
         )),
         maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((*store).clone()),
         store,
@@ -183,8 +184,8 @@ async fn the_gnb_sends_a_44175_with_every_messlokation() {
 async fn the_lf_sends_a_44120_with_its_bilanzkreis() {
     let lf = {
         let mut s = gnb(None).await;
-        s.sender_party_id = LF_MP.to_owned();
-        s.tenant_id = TenantId::from_party_id(LF_MP);
+        s.parties = crate::support::single_party(LF_MP);
+        s.tenant_id = TenantId::from_tenant(LF_MP);
         s.configured_marktrollen = vec!["LFG".to_owned()];
         s
     };
@@ -321,14 +322,15 @@ async fn an_msb_deployment_answers_a_44113() {
 
     let store = Arc::new(SlateDbStore::open_in_memory().await.expect("store"));
     let msb = CommandsApiState {
-        tenant_id: TenantId::from_party_id(MSB_MP),
-        sender_party_id: MSB_MP.to_owned(),
+        tenant_id: TenantId::from_tenant(MSB_MP),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(MSB_MP),
         configured_marktrollen: vec!["GMSB".to_owned()],
         store: Arc::clone(&store),
         snapshot_store: store.as_snapshot_store(),
         malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
             (*store).clone(),
-            TenantId::from_party_id(MSB_MP),
+            TenantId::from_tenant(MSB_MP),
         )),
         maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((*store).clone()),
         marktd_client: None,

@@ -577,6 +577,15 @@ async fn extract(
         .map(ToString::to_string)
         .or_else(|| data["malo_id"].as_str().map(str::to_owned));
 
+    // An inbound INVOIC always names its receiver (NAD+MR). A payload without
+    // it is malformed, and the tenant is an isolation key, not an MP-ID: the
+    // receiver decides the Sparte the invoice is checked under.
+    let receiver_gln = data["receiver_gln"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or("receiver_gln missing from process.initiated payload — the INVOIC names no receiver (NAD+MR)")?
+        .to_owned();
+
     Ok(Incoming {
         invoice_ref,
         bestellung_ref: data["bestellung_ref"]
@@ -588,10 +597,7 @@ async fn extract(
             .filter(|s| !s.is_empty())
             .map(str::to_owned),
         sender_mp_id: data["sender_mp_id"].as_str().unwrap_or_default().to_owned(),
-        receiver_gln: data["receiver_gln"]
-            .as_str()
-            .unwrap_or(&state.tenant)
-            .to_owned(),
+        receiver_gln,
         malo_id,
         rechnung,
         rechnung_json,
@@ -1119,7 +1125,8 @@ async fn esa_preise(
 ) -> Result<Vec<(String, invoic_checker::amount::EuroAmount)>, ReferenceDataUnavailable> {
     let preise = state
         .marktd
-        .esa_preise(&inc.sender_mp_id, &state.tenant, billing_date)
+        // The ESA is the invoice's own receiver (NAD+MR), not the tenant key.
+        .esa_preise(&inc.sender_mp_id, &inc.receiver_gln, billing_date)
         .await
         .map_err(|e| ReferenceDataUnavailable {
             upstream: "marktd",
@@ -2127,6 +2134,7 @@ mod tests {
                 "pid": 31002,
                 "invoice_ref": "MSG-0001",
                 "sender_mp_id": "9900077000006",
+                "receiver_gln": "9900357000028",
                 "rechnung": serde_json::to_value(Rechnung::default()).expect("a BO4E Rechnung"),
             },
         });
@@ -2143,6 +2151,26 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE,
             "an unchecked invoice is not a finished one — a 204 here drops it"
         );
+        server.abort();
+    }
+
+    /// An inbound INVOIC always names its receiver (NAD+MR); a payload without
+    /// it is refused — dead-lettered by the caller — and the tenant is never
+    /// taken as the receiver's MP-ID.
+    #[tokio::test]
+    async fn a_payload_without_its_receiver_is_refused() {
+        let (state, server) = marktd_broken_under("/api/v1").await;
+        let route = route_for(31002).expect("routed");
+        let data = serde_json::json!({
+            "pid": 31002,
+            "invoice_ref": "MSG-0001",
+            "sender_mp_id": "9900077000006",
+            "rechnung": serde_json::to_value(Rechnung::default()).expect("a BO4E Rechnung"),
+        });
+        let Err(reason) = extract(&state, route, Uuid::new_v4(), &data).await else {
+            panic!("an INVOIC without NAD+MR must not be checked");
+        };
+        assert!(reason.contains("receiver_gln"), "{reason}");
         server.abort();
     }
 

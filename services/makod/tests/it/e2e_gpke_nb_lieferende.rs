@@ -51,7 +51,7 @@ async fn combined() -> Combined {
             .await
             .expect("in-memory store"),
     );
-    let tenant_id = TenantId::from_party_id(NB_MP);
+    let tenant_id = TenantId::from_tenant(NB_MP);
     let dispatcher = EdifactIngestDispatcher::new(
         Arc::clone(&store),
         store.as_snapshot_store(),
@@ -60,7 +60,8 @@ async fn combined() -> Combined {
     );
     let state = CommandsApiState {
         tenant_id,
-        sender_party_id: NB_MP.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(NB_MP),
         configured_marktrollen: vec!["NB".to_owned(), "LF".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -448,7 +449,7 @@ async fn an_lf_only_deployment_ends_its_abmeldung_on_the_nbs_beendigung() {
             .await
             .expect("in-memory store"),
     );
-    let tenant_id = TenantId::from_party_id(LF_MP);
+    let tenant_id = TenantId::from_tenant(LF_MP);
     let lf = EdifactIngestDispatcher::new(
         Arc::clone(&store),
         store.as_snapshot_store(),

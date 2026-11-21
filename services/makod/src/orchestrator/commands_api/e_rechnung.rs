@@ -297,8 +297,9 @@ mod tests {
             .await
             .expect("open in-memory SlateDB");
         CommandsApiState {
-            tenant_id: mako_engine::ids::TenantId::from_party_id("9900357000004"),
-            sender_party_id: "9900357000004".to_owned(),
+            tenant_id: mako_engine::ids::TenantId::from_tenant("9900357000004"),
+            tenant: "stadtwerke-test".to_owned(),
+            parties: crate::party_registry::MpIdRegistry::single("9900357000004"),
             configured_marktrollen: vec!["NB".into(), "LF".into(), "MSB".into()],
             max_body_bytes: 1_048_576,
             snapshot_interval: 100,
@@ -306,7 +307,7 @@ mod tests {
             snapshot_store: store.as_snapshot_store(),
             malo_cache: Arc::new(SlateDbMaloCache::new(
                 store.clone(),
-                mako_engine::ids::TenantId::from_party_id("9900357000004"),
+                mako_engine::ids::TenantId::from_tenant("9900357000004"),
             )),
             maloid_result_cache: MaloIdentResultCache::new(store.clone()),
             store: Arc::new(store),

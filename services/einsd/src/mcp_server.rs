@@ -1556,8 +1556,9 @@ impl ServerHandler for EinsdMcpHandler {
         .with_server_info(Implementation::new("einsd", env!("CARGO_PKG_VERSION")))
         .with_instructions(
             "einsd MCP — Einspeiser Registry + EEG/KWKG Settlement daemon (Netzbetreiber side).\n\n\
-             ## Settlement models (12, one token each — no aliases)\n\
+             ## Settlement models (13, one token each — no aliases)\n\
              VERGUETUNG (§21 Abs. 1) | AUSFALLVERGUETUNG (§21 Abs. 1 Satz 1 Nr. 3, AW −20 %) |\n\
+             UNENTGELTLICHE_ABNAHME (§21 Abs. 1 Satz 1 Nr. 2, claim zero) |\n\
              MIETERSTROM (§21 Abs. 3) | GGV (§42b EnWG) | DIREKTVERMARKTUNG (§20 gleitende\n\
              Marktprämie) | AUSSCHREIBUNG (§22) | SONSTIGE_DIREKTVERMARKTUNG (§21a) |\n\
              POST_EEG_SPOT | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG) |\n\

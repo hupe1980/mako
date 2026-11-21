@@ -145,8 +145,8 @@ pub struct ProcessdState {
     /// Approve/reject approval-queue entries require dispatching to makod.
     pub makod: MakodClient,
     pub tenant: String,
-    /// Operator's own Marktpartner-ID (used for LFA command routing).
-    pub own_mp_id: String,
+    /// This deployment's own MP-IDs, by Marktrolle (`[identity]`).
+    pub identitaet: crate::config::Identitaet,
     /// `marktd` client — used by the §14a Steuerungsauftrag auto-ORDRSP module.
     pub marktd: Arc<mako_markt::marktd_client::MarktdClient>,
     /// When `true`, an `Accept` MSB-Wechsel verdict dispatches the Bestätigung
@@ -197,7 +197,8 @@ pub struct RunConfig {
     pub makod_api_key: SecretString,
     pub marktd_url: String,
     pub marktd_api_key: SecretString,
-    pub own_mp_id: String,
+    /// `[identity]` — this deployment's own MP-IDs, by Marktrolle.
+    pub identitaet: crate::config::Identitaet,
     pub tenant: String,
     pub nb_auto_accept: bool,
     pub nb_gas_bearbeitungsfrist_wt: u32,
@@ -241,7 +242,7 @@ pub struct RunConfig {
     pub eog_notify_webhook_url: Option<String>,
     pub eog_notify_webhook_secret: Option<String>,
     /// Every operator MP-ID, for the read model's § 7a Abs. 5 EnWG evidence.
-    /// `[identity] verbundene_lieferanten`.
+    /// Every affiliated Lieferant — `[identity] verbundene_lieferanten` and `lf_mp_ids`.
     pub verbundene_lieferanten: Vec<String>,
     /// `[obs]` — the read model's `de.mako.obs.*` producers.
     pub obs_outbound_url: Option<String>,
@@ -270,41 +271,6 @@ pub struct RunConfig {
 /// domain [`Router`], self-registers with `marktd`, and spawns the approval-queue
 /// expiry + §38 EnWG Ersatzversorgung timer workers on `ctx.shutdown`.
 pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result<Router> {
-    // ── Startup validation ────────────────────────────────────────────────────
-    // Gleichbehandlung: validate own_mp_id prefix matches the expected coding authority.
-    // BDEW-Codenummern start with "99" (NAD DE3055 = 293), DVGW with "98" (332).
-    // A mismatch silently breaks `initiator_is_affiliate` comparisons for gas roles.
-    {
-        use mako_markt::domain::nad_agency_code;
-        // Parse own_mp_id as MarktpartnerId; if malformed, warn but continue.
-        match cfg.own_mp_id.parse::<mako_markt::domain::MarktpartnerId>() {
-            Ok(id) => {
-                let agency = nad_agency_code(&id);
-                tracing::info!(
-                    own_mp_id = %cfg.own_mp_id,
-                    coding_authority = agency,
-                    "processd: operator identity validated (293=BDEW, 332=DVGW, 9=GS1)"
-                );
-                if agency == "9" {
-                    tracing::warn!(
-                        own_mp_id = %cfg.own_mp_id,
-                        "processd: own_mp_id appears to be a GS1 GLN (non-99/98 prefix). \
-                         the Gleichbehandlungsbericht may be incorrect for BDEW/DVGW market participants. \
-                         Expected: BDEW-Codenummer (99…) for Strom, DVGW-Codenummer (98…) for Gas."
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    own_mp_id = %cfg.own_mp_id,
-                    error = %e,
-                    "processd: own_mp_id is not a valid 13-digit MarktpartnerId — \
-                     the Gleichbehandlungsbericht's comparisons will fail silently"
-                );
-            }
-        }
-    }
-
     let pool = ctx.pool().clone();
 
     info!("processd: running");
@@ -322,7 +288,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         let nb_config = crate::nb_module::NbModuleConfig {
             marktd_url: cfg.marktd_url.clone(),
             marktd_api_key: cfg.marktd_api_key.clone(),
-            own_mp_id: cfg.own_mp_id.clone(),
+            identitaet: cfg.identitaet.clone(),
             verbundene_lieferanten: cfg.verbundene_lieferanten.iter().cloned().collect(),
             tenant: cfg.tenant.clone(),
             auto_accept: cfg.nb_auto_accept,
@@ -354,7 +320,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             marktd_api_key: cfg.marktd_api_key.clone(),
             vertragd_url: cfg.vertragd_url.clone(),
             vertragd_api_key: cfg.vertragd_api_key.clone(),
-            own_mp_id: cfg.own_mp_id.clone(),
+            identitaet: cfg.identitaet.clone(),
             tenant: cfg.tenant.clone(),
             auto_respond: cfg.lf_auto_respond,
             bilanzkreise: cfg.lf_bilanzkreise.clone(),
@@ -519,7 +485,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         lf: lf_state,
         makod: makod.clone(),
         tenant: cfg.tenant.clone(),
-        own_mp_id: cfg.own_mp_id.clone(),
+        identitaet: cfg.identitaet.clone(),
         marktd: marktd_for_state,
         msb_auto_accept: cfg.msb_auto_accept,
         msb_auto_preisanfrage: cfg.msb_auto_preisanfrage,
@@ -538,7 +504,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         }),
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         neuanlage: Arc::new(crate::neuanlage_module::NeuanlageModuleConfig {
-            own_mp_id: cfg.own_mp_id.clone(),
+            identitaet: cfg.identitaet.clone(),
             tenant: cfg.tenant.clone(),
             auto_accept: cfg.nb_auto_accept,
         }),
@@ -563,7 +529,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         let pruflauf_pool = pool.clone();
         let pruflauf_makod = makod.clone();
         let pruflauf_cfg = crate::neuanlage_module::NeuanlageModuleConfig {
-            own_mp_id: cfg.own_mp_id.clone(),
+            identitaet: cfg.identitaet.clone(),
             tenant: cfg.tenant.clone(),
             auto_accept: cfg.nb_auto_accept,
         };

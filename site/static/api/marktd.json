@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.44.0"
+    "version": "0.45.0"
   },
   "paths": {
     "/api/v1/bilanzierungsgebiete/{eic}/mabis-zp": {
@@ -4212,6 +4212,128 @@
           },
           "422": {
             "description": "The request was refused; `code` names the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/netzbetreiber/{nb_mp_id}/grundzustaendiger-msb": {
+      "get": {
+        "tags": [
+          "malo-grid"
+        ],
+        "summary": "`GET /api/v1/netzbetreiber/{nb_mp_id}/grundzustaendiger-msb`",
+        "operationId": "get_grundzustaendiger_msb",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "13-digit MP-ID of the Netzbetreiber",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The gMSB MP-ID of the grid: `{ nb_mp_id, gmsb_mp_id }`",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No gMSB recorded for this Netzbetreiber",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "malo-grid"
+        ],
+        "summary": "`PUT /api/v1/netzbetreiber/{nb_mp_id}/grundzustaendiger-msb` — record it.",
+        "operationId": "put_grundzustaendiger_msb",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "13-digit MP-ID of the Netzbetreiber",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`PutGrundzustaendigerMsbBody`: `{ gmsb_mp_id }`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Written"
+          },
+          "401": {
+            "description": "No valid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`mp_id_ungueltig`: a value is no MP-ID",
             "content": {
               "application/json": {
                 "schema": {

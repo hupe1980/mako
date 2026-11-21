@@ -68,7 +68,7 @@ async fn dispatcher(own: &str) -> (Arc<SlateDbStore>, EdifactIngestDispatcher, T
             .await
             .expect("in-memory store"),
     );
-    let tenant = TenantId::from_party_id(own);
+    let tenant = TenantId::from_tenant(own);
     let dispatcher =
         EdifactIngestDispatcher::new(Arc::clone(&store), store.as_snapshot_store(), 100, tenant);
     (store, dispatcher, tenant)

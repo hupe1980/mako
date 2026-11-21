@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.44.0"
+    "version": "0.45.0"
   },
   "paths": {
     "/admin/malo/stats": {
@@ -978,7 +978,7 @@
           },
           "payload": {
             "type": "object",
-            "description": "Command-specific payload.\n\nEach command defines its own required fields.  For most GPKE/GeLi\ncommands the minimal payload is a `malo_id` string (the 11-digit\nMarktlokations-ID) plus the process-specific date.  The engine\nresolves all partner MP-IDs (NB, MSB) and MeLo data from the MaLo cache.\n\nExample for `gpke.lieferbeginn.anmelden`\n(`mako_markt::commands::GpkeLieferbeginnAnmelden`, every field Muss on\nthe 55001):\n```json\n{\n  \"malo_id\":            \"51238696012\",\n  \"lieferbeginn_datum\": \"2026-10-01\",\n  \"transaktionsgrund\":  \"E03\",\n  \"bilanzkreis\":        \"11XBK-LF-------9\",\n  \"haushaltskunde\":     true,\n  \"enfg_grundlage\":     \"ZG1\",\n  \"kunde\": { \"nachname\": \"Mustermann\", \"anschrift\": { \"strasse\": \"Hauptstraße\",\n             \"hausnummer\": \"1\", \"postleitzahl\": \"50667\", \"ort\": \"Köln\", \"landescode\": \"DE\" } }\n}\n```\n\nNot a BO4E document: this is a **command** envelope, and each command\nnames the scalar fields it reads out of it (see the module docs). Even\nthe invoicing commands are flat — `makod` renders the INVOIC envelope\nwith an empty detail section and never holds an invoice's positions.\n\n**Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or\n`message_ref` — these are engine-owned and will be ignored or rejected."
+            "description": "Command-specific payload.\n\nEach command defines its own required fields.  For most GPKE/GeLi\ncommands the minimal payload is a `malo_id` string (the 11-digit\nMarktlokations-ID) plus the process-specific date.  The engine\nresolves all partner MP-IDs (NB, MSB) and MeLo data from the MaLo cache.\n\nExample for `gpke.lieferbeginn.anmelden`\n(`mako_markt::commands::GpkeLieferbeginnAnmelden`, every field Muss on\nthe 55001):\n```json\n{\n  \"malo_id\":            \"51238696012\",\n  \"lieferbeginn_datum\": \"2026-10-01\",\n  \"transaktionsgrund\":  \"E03\",\n  \"bilanzkreis\":        \"11XBK-LF-------9\",\n  \"haushaltskunde\":     true,\n  \"enfg_grundlage\":     \"ZG1\",\n  \"kunde\": { \"nachname\": \"Mustermann\", \"anschrift\": { \"strasse\": \"Hauptstraße\",\n             \"hausnummer\": \"1\", \"postleitzahl\": \"50667\", \"ort\": \"Köln\", \"landescode\": \"DE\" } }\n}\n```\n\nNot a BO4E document: this is a **command** envelope, and each command\nnames the scalar fields it reads out of it (see the module docs). Even\nthe invoicing commands are flat — `makod` renders the INVOIC envelope\nwith an empty detail section and never holds an invoice's positions.\n\n**Never include** `receiver_party_id`, `pruefidentifikator`, or\n`message_ref` — these are engine-owned and will be ignored or rejected."
           }
         },
         "additionalProperties": false

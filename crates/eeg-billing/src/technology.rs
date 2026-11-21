@@ -388,7 +388,8 @@ pub enum RepoweringScope {
     /// explicitly tracks that the new plant has higher rated power than the original.
     ///
     /// Relevant for Ausschreibungspflicht threshold check (§22 EEG 2023):
-    /// the new capacity may push the plant above the 750 kW wind tender threshold.
+    /// the new capacity may push the plant above a tender threshold — 1 MW for
+    /// Wind an Land (§ 22 Abs. 2 Satz 2 Nr. 1).
     FullWithCapacityIncrease,
 }
 

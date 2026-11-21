@@ -5,7 +5,7 @@ weight = 4
 
 [extra]
 translated_from = "content/docs/guide/einrichtung.md"
-source_sha256 = "68c3550bdd1fa6949da5ebf78084b5d11d500591c1c381f5d1b18218176a8f41"
+source_sha256 = "f525dceff003dcd5274c8bf8e67235927ba3a18f0d968dfd36834d581a18be3e"
 
 +++
 Jeder Daemon prüft seine eigene Konfiguration und meldet **jeden** Befund,
@@ -56,8 +56,10 @@ doctor` gibt sie aus, nachdem er deinen Rechner für `just dev` geprüft hat.
 
 ## Der Vorschlag
 
-Die Einrichtungsbefragung fragt nur, was die Konfiguration ändert: die Rollen
-und die MP-ID, unter der jede gespielt wird, die primäre MP-ID, wo es mehrere
+Die Einrichtungsbefragung fragt nur, was die Konfiguration ändert: den
+Tenant, die Rollen und die MP-ID, unter der jede gespielt wird — eine je Rolle,
+eine zweite Rolle unter derselben MP-ID wird abgelehnt (Allgemeine
+Festlegungen 6.1d Kap. 2.13) —, die primäre MP-ID, wo es mehrere
 gibt, die Bilanzkreise eines Lieferanten je Sparte, die verbundenen
 Lieferanten, das AS4-Schlüsselmaterial als Pfade und wo die anderen Daemons
 laufen. Die angebotenen Rollen sind der Typ, in den makod `[deployment] rollen`

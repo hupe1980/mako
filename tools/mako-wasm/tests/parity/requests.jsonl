@@ -27,3 +27,13 @@
 {"op": "id", "wert": "9907317000007"}
 {"op": "id", "wert": "10YDE-EON------1"}
 {"op": "id", "wert": "hallo"}
+{"op": "pog", "verbrauch_kwh": "9000", "sect14a": false, "optional": false, "stichtag": "2026-12-31"}
+{"op": "pog", "leistung_kw": "30", "optional": false, "stichtag": "2026-12-31"}
+{"op": "pog", "optional": true, "stichtag": "2026-12-31"}
+{"op": "pog", "verbrauch_kwh": "9000", "optional": false, "stichtag": "2024-12-31"}
+{"op": "eeg", "art": "solar_aufdach", "leistung_kw": "9", "inbetriebnahme": "2024-03-01"}
+{"op": "eeg", "art": "solar_aufdach", "leistung_kw": "9", "inbetriebnahme": "2024-03-01", "voll": true}
+{"op": "eeg", "art": "solar_freiflaeche", "leistung_kw": "1500", "inbetriebnahme": "2024-03-01"}
+{"op": "eeg", "art": "sonne", "leistung_kw": "9", "inbetriebnahme": "2024-03-01"}
+{"op": "preise", "gruppe": "A", "von": 2020, "bis": 2028}
+{"op": "modul14a", "arbeitspreis_ct": "8.5", "geraet_kwh": "4000", "pauschale_eur": "150"}

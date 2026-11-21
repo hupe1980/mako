@@ -41,6 +41,9 @@ pub struct AccountingdMcpState {
     /// The doubleentry ledger — authoritative balances, statements, open items.
     pub ledger: Arc<crate::ledger::PgLedger>,
     pub tenant: String,
+    /// The configured Lieferant MP-ID — the account key a tool call that
+    /// names none reads and books under.
+    pub lf_mp_id: String,
     pub auth: mako_service::mcp_auth::McpAuth,
     /// SEPA creditor identity from config — pain.008 needs all three.
     pub creditor_iban: Option<String>,
@@ -88,8 +91,8 @@ pub struct ParkedParams {
 pub struct MaloParams {
     /// 11-digit MaLo-ID.
     pub malo_id: String,
-    /// The LF MP-ID the account is held under. Defaults to the tenant, as on
-    /// the REST route.
+    /// The LF MP-ID the account is held under. Defaults to the configured
+    /// `lf_mp_id`, as on the REST route.
     pub lf_mp_id: Option<String>,
 }
 
@@ -97,8 +100,8 @@ pub struct MaloParams {
 pub struct VorauszahlungParams {
     /// 11-digit MaLo-ID.
     pub malo_id: String,
-    /// The LF MP-ID the account is held under. Defaults to the tenant, as on
-    /// the REST route.
+    /// The LF MP-ID the account is held under. Defaults to the configured
+    /// `lf_mp_id`, as on the REST route.
     pub lf_mp_id: Option<String>,
 }
 
@@ -112,7 +115,8 @@ pub struct DunningParams {
 pub struct LedgerParams {
     /// 11-digit MaLo-ID.
     pub malo_id: String,
-    /// The LF MP-ID the account is held under. Defaults to the tenant.
+    /// The LF MP-ID the account is held under. Defaults to the configured
+    /// `lf_mp_id`.
     pub lf_mp_id: Option<String>,
     /// Maximum movements, newest first (default 100, at most 1000).
     pub limit: Option<i64>,
@@ -250,7 +254,7 @@ impl AccountingdMcpHandler {
                 &self.state.pool,
                 &self.state.tenant,
                 &p.malo_id,
-                p.lf_mp_id.as_deref(),
+                p.lf_mp_id.as_deref().unwrap_or(&self.state.lf_mp_id),
             )
             .await,
         )
@@ -264,7 +268,7 @@ impl AccountingdMcpHandler {
         &self,
         Parameters(p): Parameters<VorauszahlungParams>,
     ) -> Result<CallToolResult, McpError> {
-        let lf_mp_id = p.lf_mp_id.as_deref().unwrap_or(&self.state.tenant);
+        let lf_mp_id = p.lf_mp_id.as_deref().unwrap_or(&self.state.lf_mp_id);
         match crate::pg::fetch_vorauszahlung(
             &self.state.pool,
             &p.malo_id,
@@ -303,7 +307,7 @@ impl AccountingdMcpHandler {
                 &self.state.ledger,
                 &self.state.tenant,
                 &p.malo_id,
-                p.lf_mp_id.as_deref(),
+                p.lf_mp_id.as_deref().unwrap_or(&self.state.lf_mp_id),
                 p.limit,
             )
             .await,
@@ -445,7 +449,7 @@ Also sets the SEPA billing_day (day of month for direct debit).",
         let acct = match fetch_account(
             &self.state.pool,
             &p.malo_id,
-            &self.state.tenant,
+            &self.state.lf_mp_id,
             &self.state.tenant,
         )
         .await
@@ -520,7 +524,7 @@ Returns `booked` (written to the ledger), `unmatched` (no such account) and `fai
             let acct = match fetch_account(
                 &self.state.pool,
                 malo,
-                &self.state.tenant,
+                &self.state.lf_mp_id,
                 &self.state.tenant,
             )
             .await
@@ -610,11 +614,18 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
                         None,
                     ));
                 };
-                let creditor_name = self
+                let Some(creditor_name) = self
                     .state
                     .creditor_name
                     .as_deref()
-                    .unwrap_or(&self.state.tenant);
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                else {
+                    return Err(McpError::internal_error(
+                        crate::config::CREDITOR_NAME_FEHLT.to_owned(),
+                        None,
+                    ));
+                };
                 let collection_date = mako_fristen::heute() + time::Duration::days(2);
                 let creditor = crate::sepa::CreditorIdentity {
                     iban: creditor_iban,
@@ -669,7 +680,7 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
         let acct = match fetch_account(
             &self.state.pool,
             &p.malo_id,
-            &self.state.tenant,
+            &self.state.lf_mp_id,
             &self.state.tenant,
         )
         .await
@@ -905,7 +916,7 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
         upsert_account(
             &self.state.pool,
             &p.malo_id,
-            &self.state.tenant,
+            &self.state.lf_mp_id,
             &self.state.tenant,
         )
         .await

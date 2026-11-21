@@ -79,9 +79,14 @@
       - /placeholder: Wir sind Lieferant Strom und Gas, Strom unter 9900357000004, Gas unter 9800357000005.
     - button "Vorbelegen" [disabled]
     - text: Der Assistent schlägt Antworten vor, jede übernimmst du selbst. Ohne ihn funktioniert die Befragung genauso.
+    - group "Tenant":
+      - text: Tenant
+      - paragraph: Der Datenschlüssel, den jeder Dienst in seine Zeilen schreibt — in allen Diensten derselbe, z. B. „stadtwerke-musterstadt“. Keine MP-ID.
+      - text: Tenant
+      - textbox "Tenant": stadtwerke-musterstadt
     - group "Rollen und MP-IDs":
       - text: Rollen und MP-IDs
-      - paragraph: Welche Rollen spielt die Bereitstellung, und unter welcher MP-ID? Strom braucht eine BDEW-Codenummer (99…), Gas eine DVGW-Codenummer (98…).
+      - paragraph: Welche Rollen spielt die Bereitstellung, und unter welcher MP-ID? Jede Rolle hat ihre eigene; Strom braucht eine BDEW-Codenummer (99…), Gas eine DVGW-Codenummer (98…).
       - list:
         - listitem:
           - checkbox "Lieferant Strom"
@@ -108,6 +113,9 @@
         - listitem:
           - checkbox "Bilanzkreisverantwortlicher (Strom)"
           - text: Bilanzkreisverantwortlicher (Strom)
+        - listitem:
+          - checkbox "Einsatzverantwortlicher (Redispatch 2.0)"
+          - text: Einsatzverantwortlicher (Redispatch 2.0)
     - group "Bilanzkreise":
       - text: Bilanzkreise
       - paragraph: Denen der Lieferant zuordnet, durch Komma getrennt.
@@ -140,18 +148,19 @@
         - paragraph: Noch nicht vollständig
       - tablist "Dateien":
         - tab "makod.toml 10 Änderungen · 2 Lücken" [selected]
-        - tab "processd.toml 4 Änderungen · 1 Lücke"
+        - tab "processd.toml 5 Änderungen · 1 Lücke"
       - tabpanel "makod.toml 10 Änderungen · 2 Lücken":
         - button "makod.toml kopieren"
         - button "makod.toml herunterladen"
         - list "Zeilen von makod.toml":
           - listitem: "Abschnitt: [deployment]"
+          - listitem: "# [deployment] tenant / [identity] tenant: der Datenschlüssel jeder Zeile, in allen Diensten derselbe — eine beliebige feste Zeichenkette, keine MP-ID unverändert: tenant = \"stadtwerke-musterstadt\""
           - listitem: "# makod [deployment] rollen: jede erklärte Rolle braucht genau eine [[party]]-MP-ID entfällt: rollen = [\"nb-gas\"]"
           - listitem: "neu: rollen = [\"lf-strom\", \"lf-gas\"]"
           - listitem: "Abschnitt: [[party]]"
           - listitem: "# BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 „99 = BDEW/Strom“, „98 = DVGW/Gas“ neu: mp_id = \"9900357000004\""
           - listitem: "# BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4) neu: roles = [\"LF\"]"
-          - listitem: "# makod [[party]] primary: genau eine MP-ID ist der Speicherschlüssel aller Ereignisströme neu: primary = true"
+          - listitem: "# makod [[party]] primary: die MP-ID, unter der eine CONTRL auf eine Übertragungsdatei an keine eigene MP-ID antwortet neu: primary = true"
           - listitem:
             - text: "Lücke: # FEHLT: [party.as4] für 9900357000004 — die Pfade der Signatur-, Verschlüsselungs- und TLS-Schlüsselpaare dieser MP-ID"
             - button "Zur Frage"

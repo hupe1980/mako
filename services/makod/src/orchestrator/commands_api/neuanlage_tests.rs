@@ -54,7 +54,7 @@ fn the_gate_renders_an_answer_in_the_release_of_its_process() {
     for (fv, version) in [("FV2026-04-01", "S2.1"), ("FV2026-10-01", "S2.2")] {
         let check = crate::orchestrator::edifact_renderer::utilmd_gate_check(
             &pending,
-            TenantId::from_party_id(NB),
+            TenantId::from_tenant(NB),
             &FormatVersion::parse(fv).expect("a format version"),
         )
         .expect("the answer renders");

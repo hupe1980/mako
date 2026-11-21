@@ -740,7 +740,7 @@ opened the process.
 | 25007 | Übermittlung Übersicht Leistungskurvendefinitionen | GPKE Teil 3 | NB → LF · NB → MSB · LF → NB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-utilts` |
 | 25008 | Übermittlung einer ausgerollten Schaltzeitdefinition | GPKE Teil 3 | NB → LF · NB → MSB · LF → NB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-utilts` |
 | 25009 | Übermittlung einer ausgerollten Leistungskurvendefinition | GPKE Teil 3 | NB → LF · NB → MSB · LF → NB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-utilts` |
-| 25010 | Antwort auf Berechnungsformel | WiM Strom Teil 2 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-utilts` |
+| 25010 | Antwort auf Berechnungsformel | WiM Strom Teil 2 | MSB → NB | 25001 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-berechnungsformel` |
 
 ## COMDIS AHB
 

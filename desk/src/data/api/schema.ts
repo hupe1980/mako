@@ -7943,6 +7943,57 @@ export interface Api {
         };
       };
     };
+    "/svc/edmd/api/v1/virtual/{virtual_malo_id}/berechnungsformel": {
+      get: {
+        parameters: {
+          path: {
+            virtual_malo_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EdmdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/edmd/api/v1/virtual/{virtual_malo_id}/lastgang": {
       get: {
         parameters: {
@@ -14244,6 +14295,92 @@ export interface Api {
             };
             content: {
               "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/marktd/api/v1/netzbetreiber/{nb_mp_id}/grundzustaendiger-msb": {
+      get: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": unknown;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": MarktdApiError;
+            };
+          };
+        };
+      };
+      put: {
+        parameters: {
+          path: {
+            nb_mp_id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": unknown;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
             };
           };
           401: {
@@ -27160,7 +27297,8 @@ export interface AccountingdUnzugeordneteZahlung {
  */
 export interface AccountingdAssignRequest {
   /**
-   * The Lieferant's MP-ID the account is kept under; defaults to the tenant.
+   * The Lieferant's MP-ID the account is kept under; defaults to the
+   * configured `lf_mp_id`.
    */
   lf_mp_id?: string | null;
   /**
@@ -29755,7 +29893,7 @@ export interface MakodErpCommand {
    * the invoicing commands are flat — `makod` renders the INVOIC envelope
    * with an empty detail section and never holds an invoice's positions.
    *
-   * **Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or
+   * **Never include** `receiver_party_id`, `pruefidentifikator`, or
    * `message_ref` — these are engine-owned and will be ignored or rejected.
    */
   payload: {};

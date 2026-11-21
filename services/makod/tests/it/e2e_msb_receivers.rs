@@ -99,7 +99,7 @@ async fn store_and_dispatcher() -> (SlateDbStore, EdifactIngestDispatcher) {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN_MP),
+        TenantId::from_tenant(OWN_MP),
     );
     (store, dispatcher)
 }
@@ -112,7 +112,7 @@ async fn processes_on(
 ) -> Vec<mako_engine::ids::ProcessIdentity> {
     store
         .as_process_registry()
-        .lookup_correlated(TenantId::from_party_id(OWN_MP), key)
+        .lookup_correlated(TenantId::from_tenant(OWN_MP), key)
         .await
         .expect("lookup")
         .into_iter()
@@ -349,7 +349,7 @@ async fn every_anforderung_von_werten_opens_its_own_process() {
 #[tokio::test]
 async fn a_19007_resumes_the_anforderung_it_answers() {
     let (store, dispatcher) = store_and_dispatcher().await;
-    let tenant = TenantId::from_party_id(OWN_MP);
+    let tenant = TenantId::from_tenant(OWN_MP);
     let sent = time::macros::datetime!(2026-11-06 09:00 UTC);
     let process = Process::<GpkeDatenabrufWorkflow, _>::new(
         Arc::new(store.clone()),

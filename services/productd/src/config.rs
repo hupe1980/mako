@@ -16,17 +16,13 @@ pub struct ProductdConfig {
     /// enforced on every token.
     pub tenant: String,
 
-    /// The Lieferant market-partner ID this catalogue's products are sold
-    /// under, and the default for requests that do not name one.
-    ///
-    /// Distinct from `tenant`: the isolation key and the market identity are
-    /// the same string in a single-mandant install and different in a shared
-    /// one. Using `tenant` for both files every MaLo→product assignment under a
-    /// market party that does not trade, where `billingd`'s lookup by the real
-    /// MP-ID finds nothing. Defaults to `tenant` so a single-mandant deployment
-    /// need not repeat itself.
-    #[serde(default, rename = "lf_mp_id")]
-    lf_mp_id_override: Option<String>,
+    /// The Lieferant MP-ID this catalogue's products are sold under — the only
+    /// catalogue a write may change, and the default for a request that names
+    /// none. Required and distinct from `tenant`, the isolation key: „Für jede
+    /// Sparte (Gas bzw. Strom) und jede Rolle hat ein Marktteilnehmer genau
+    /// eine MP-ID" (Identifikatoren AWH V1.2 Kap. 2.1), so the Lieferant's code
+    /// is never derived from the tenant.
+    lf_mp_id: String,
 
     /// OIDC/JWT authentication configuration.
     ///
@@ -94,7 +90,7 @@ impl ProductdConfig {
     /// The market identity products are sold under.
     #[must_use]
     pub fn lf_mp_id(&self) -> &str {
-        self.lf_mp_id_override.as_deref().unwrap_or(&self.tenant)
+        &self.lf_mp_id
     }
 
     /// Every finding that keeps productd from running as documented: a
@@ -114,6 +110,16 @@ impl ProductdConfig {
         }
         if let Err(e) = self.check_auth_posture() {
             out.push(Befund::aus_fehler("oidc", e).bereich(Bereich::Zugriff));
+        }
+        if let Err(e) = rubo4e::identifiers::MarktpartnerId::new(self.lf_mp_id.trim()) {
+            out.push(Befund::blockiert(
+                "lf_mp_id",
+                format!(
+                    "lf_mp_id {:?} is not an MP-ID ({e}) — set the Lieferant's 13-digit \
+                     BDEW- or DVGW-Codenummer",
+                    self.lf_mp_id
+                ),
+            ));
         }
         out.extend(self.subscriptions.befunde());
         out
@@ -191,12 +197,37 @@ mod tests {
     /// request with synthetic dev claims carrying `LF`/`MSB`/`ESA`/`ADMIN` —
     /// which the Cedar policy grants every action, so the authorization layer
     /// was present and bypassed at the same time.
+    /// The Lieferant's MP-ID is a setting of its own: absent, the config does
+    /// not parse; set to something that is no MP-ID (the tenant key), the
+    /// start is refused at `lf_mp_id`.
+    #[test]
+    fn the_lf_mp_id_is_required_and_never_the_tenant() {
+        let ohne = r#"
+            tenant = "stadtwerke-musterstadt"
+            [database]
+            url = "env:DATABASE_URL"
+        "#;
+        assert!(toml::from_str::<ProductdConfig>(ohne).is_err());
+
+        let tenant_als_lf = r#"
+            tenant = "stadtwerke-musterstadt"
+            lf_mp_id = "stadtwerke-musterstadt"
+            allow_insecure_no_auth = true
+            [database]
+            url = "env:DATABASE_URL"
+        "#;
+        let cfg: ProductdConfig = toml::from_str(tenant_als_lf).expect("parses");
+        let pfade: Vec<String> = cfg.validate().into_iter().map(|b| b.pfad).collect();
+        assert_eq!(pfade, ["lf_mp_id"]);
+    }
+
     #[test]
     fn an_unauthenticated_posture_is_refused_unless_chosen() {
         // Parsed from TOML rather than built by hand: that is how a deployment
         // reaches this state, and it exercises the serde defaults that decide it.
         let minimal = r#"
-            tenant = "9900000000001"
+            tenant = "stadtwerke-musterstadt"
+            lf_mp_id = "9900000000001"
             [database]
             url = "env:DATABASE_URL"
         "#;
@@ -217,7 +248,8 @@ mod tests {
         // and silently left the top-level flag false.
         let chosen: ProductdConfig = toml::from_str(
             r#"
-            tenant = "9900000000001"
+            tenant = "stadtwerke-musterstadt"
+            lf_mp_id = "9900000000001"
             allow_insecure_no_auth = true
             [database]
             url = "env:DATABASE_URL"

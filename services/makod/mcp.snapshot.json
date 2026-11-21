@@ -581,6 +581,13 @@
           "description": "The setup interview's answers. Every question is optional: an unanswered\none is a gap in the proposal, never a default.",
           "type": "object",
           "properties": {
+            "tenant": {
+              "description": "The tenant — the data-isolation key every daemon writes to its rows.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "rollen": {
               "description": "The Rollen the deployment plays, each with its MP-ID.",
               "type": "array",
@@ -589,7 +596,7 @@
               }
             },
             "primaer": {
-              "description": "The MP-ID that is the storage key, where several are named.",
+              "description": "The MP-ID a CONTRL answers under for an interchange addressed to none\nof the own MP-IDs, where several are named.",
               "type": [
                 "string",
                 "null"
@@ -1092,6 +1099,13 @@
           "description": "The setup interview's answers. Every question is optional: an unanswered\none is a gap in the proposal, never a default.",
           "type": "object",
           "properties": {
+            "tenant": {
+              "description": "The tenant — the data-isolation key every daemon writes to its rows.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "rollen": {
               "description": "The Rollen the deployment plays, each with its MP-ID.",
               "type": "array",
@@ -1100,7 +1114,7 @@
               }
             },
             "primaer": {
-              "description": "The MP-ID that is the storage key, where several are named.",
+              "description": "The MP-ID a CONTRL answers under for an interchange addressed to none\nof the own MP-IDs, where several are named.",
               "type": [
                 "string",
                 "null"

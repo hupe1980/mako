@@ -73,7 +73,7 @@ async fn setup() -> (SlateDbStore, EdifactIngestDispatcher) {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     );
     (store, dispatcher)
 }

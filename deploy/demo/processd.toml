@@ -17,10 +17,16 @@ addr = "0.0.0.0:8580"
 url = "postgres://mako:mako@postgres:5432/processd"
 
 [identity]
-own_mp_id = "9900357000004"
-# Musterstadt Energievertrieb, the Stadtwerk's own supplier: its Anmeldungen
-# are held for a person (§ 20 Abs. 1 EnWG), which is how the seeded world has a
-# Freigabe waiting in the Desk.
+tenant = "stadtwerke-musterstadt"
+# One MP-ID per Marktrolle and Sparte — BDEW-Codenummer (99…) for Strom,
+# DVGW-Codenummer (98…) for Gas (Allgemeine Festlegungen 6.1d Kap. 2.13).
+# Each module answers only what is addressed to its own role's codes.
+nb_mp_ids  = ["9900357000004", "9800357000004"]
+lf_mp_ids  = ["9900357000028", "9800357000028"]
+msb_mp_ids = ["9900357000035", "9800357000035"]
+# Musterstadt Energievertrieb, the supplier affiliated with the Stadtwerk: its
+# Anmeldungen are held for a person (§ 20 Abs. 1 EnWG), which is how the seeded
+# world has a Freigabe waiting in the Desk.
 verbundene_lieferanten = ["9912345000005"]
 
 # processd's own key: makod grants it `ActOnBehalf`, so an approved answer is

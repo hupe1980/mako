@@ -198,6 +198,10 @@ pub fn documented(
             handlers::grundversorger::put_grundversorger
         ))
         .routes(routes!(
+            handlers::grundzustaendiger_msb::get_grundzustaendiger_msb,
+            handlers::grundzustaendiger_msb::put_grundzustaendiger_msb
+        ))
+        .routes(routes!(
             handlers::netzzugang::upsert_antrag,
             handlers::netzzugang::list_antraege
         ))

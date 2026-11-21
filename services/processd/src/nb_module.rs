@@ -74,7 +74,8 @@ use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 pub struct NbModuleConfig {
     pub marktd_url: String,
     pub marktd_api_key: SecretString,
-    pub own_mp_id: String,
+    /// `[identity]` — the NB module answers only what names one of `nb`.
+    pub identitaet: crate::config::Identitaet,
     /// The affiliated Lieferanten's MP-IDs (`[identity] verbundene_lieferanten`).
     pub verbundene_lieferanten: std::collections::HashSet<String>,
     pub tenant: String,
@@ -482,8 +483,9 @@ pub async fn evaluate_and_decide(
     };
 
     // ── 2. Misdirection check ─────────────────────────────────────────────
-    // Fast pre-check: if the event is not for our GLN, skip silently.
-    if !payload.grid_operator_gln.is_empty() && payload.grid_operator_gln != config.own_mp_id {
+    // Fast pre-check: an Anmeldung addressed to another Netzbetreiber — or to
+    // this operator's MP-ID of another role — is not this module's to answer.
+    if !config.identitaet.nb_adressiert(&payload.grid_operator_gln) {
         return Ok(false);
     }
 
@@ -734,8 +736,8 @@ pub async fn evaluate_and_decide(
         NbEntscheidung::Accept(_) => {
             // Two Anmeldungen leave the automatic path for operator review: a
             // Wechsel on a Selbstzahler MaLo (GPKE Teil 1, Vorbemerkung), and one
-            // whose LF MP-ID is the operator's own `own_mp_id`
-            // (`initiator_is_affiliate`), where § 20 Abs. 1 Satz 1 EnWG forbids
+            // whose LF MP-ID is an affiliated Lieferant's
+            // (`initiator_is_affiliate`, `[identity] verbundene_lieferanten`), where § 20 Abs. 1 Satz 1 EnWG forbids
             // the affiliate a faster path than any other LF.
             if incumbent_is_selbstzahler {
                 warn!(
@@ -1961,7 +1963,7 @@ async fn decide_abmeldung(
     queue: &PgApprovalQueue,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     // Not addressed to this NB — another operator's message on a shared bus.
-    if !payload.grid_operator_gln.is_empty() && payload.grid_operator_gln != config.own_mp_id {
+    if !config.identitaet.nb_adressiert(&payload.grid_operator_gln) {
         return Ok(false);
     }
 
@@ -3202,10 +3204,15 @@ mod tests {
     #[test]
     fn an_affiliated_lieferant_is_named_by_its_own_mp_id_not_the_nb_s() {
         // Each Marktrolle has its own MP-ID (Identifikatoren AWH V1.2 Kap. 2.1),
-        // so the affiliate's MP-ID is never `own_mp_id`: comparing against
+        // so the affiliate's MP-ID is never one of the NB's: comparing against
         // the NB's own code would never recognise one.
         let cfg = nb_config();
-        assert!(!cfg.verbundene_lieferanten.contains(&cfg.own_mp_id));
+        assert!(
+            cfg.identitaet
+                .nb
+                .iter()
+                .all(|nb| !cfg.verbundene_lieferanten.contains(nb))
+        );
         assert!(cfg.verbundene_lieferanten.contains("9900357000011"));
         assert!(!cfg.verbundene_lieferanten.contains("9900000000002"));
     }
@@ -3412,7 +3419,10 @@ mod tests {
         NbModuleConfig {
             marktd_url: "http://marktd.invalid".into(),
             marktd_api_key: SecretString::from("k"),
-            own_mp_id: "9900357000004".into(),
+            identitaet: crate::config::Identitaet {
+                nb: vec!["9900357000004".into(), "9800357000004".into()],
+                ..Default::default()
+            },
             verbundene_lieferanten: std::iter::once("9900357000011".to_owned()).collect(),
             tenant: "t".into(),
             auto_accept: false,

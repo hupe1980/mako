@@ -148,6 +148,17 @@
               "review_grund": null
             },
             {
+              "key": "deployment.tenant",
+              "value": "stadtwerke-musterstadt",
+              "origin": "explicit",
+              "class": "posture",
+              "quelle": null,
+              "doc": null,
+              "insecure": false,
+              "review_by": null,
+              "review_grund": null
+            },
+            {
               "key": "deployment.rollen",
               "value": "nb-gas",
               "origin": "explicit",

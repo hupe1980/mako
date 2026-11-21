@@ -49,9 +49,12 @@ The full route list with each Cedar action is the guide's
 
 ## Configuration
 
-`tenant`; `[database]` (`url`, and `migration_url` for the role that may write
+`tenant` (the isolation key); `lf_mp_id`, the Lieferant whose accounts the
+ledger keeps and the default of every `lf_mp_id` a request or event leaves out
+(required, an MP-ID); `[database]` (`url`, and `migration_url` for the role that may write
 the journal); `[oidc]`; the SEPA creditor `creditor_iban`, `creditor_id`,
-`creditor_name`, `[creditor_address]`; `makod_url` / `makod_api_key` (without
+`creditor_name` (without it every pain.008, EEG pain.001 and Mahnung is
+refused — `503 creditor_name_not_configured` on a REST door), `[creditor_address]`; `makod_url` / `makod_api_key` (without
 them the Sperr-Sequenz does not run); `outputd_url`, `vertragd_url`;
 `erp_webhook_url` / `erp_hmac_secret`. `dunning_auto_enabled` requires
 `dunning_fee_stufe{1,2,3}_ct` and `dunning_zahlungsfrist_stufe{1,2,3}_tage`.

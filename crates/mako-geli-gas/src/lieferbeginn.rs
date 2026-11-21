@@ -2304,6 +2304,7 @@ mod tests {
         Stammdaten {
             sg6: vec![seg("RFF", &[&["Z18", "51238696012"]])],
             bloecke: vec![StammdatenBlock {
+                zeitraum_id: None,
                 seq: "Z01".to_owned(),
                 segmente: vec![seg("CCI", &[&[], &[], &["Z15"]])],
             }],
@@ -3199,7 +3200,7 @@ mod tests {
         Deadline::new(
             mako_engine::ids::StreamId::new("test-stream-44010"),
             mako_engine::ids::ProcessId::new(),
-            mako_engine::ids::TenantId::from_party_id("9900357000004"),
+            mako_engine::ids::TenantId::from_tenant("9900357000004"),
             mako_engine::version::WorkflowId::new(WORKFLOW_NAME, "FV2026-10-01"),
             label,
             RECEIVED_AT,

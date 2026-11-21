@@ -231,7 +231,7 @@ Exactly one of `malo_id` (the NB is read from `marktd`
 |---|---|
 | `ARBEITSPREIS`, `GRUNDPREIS` | the product version in force and `PUBLISHED`, or the front end's [`vertriebspreis`](#a-front-end-s-own-price-vertriebspreis) |
 | `NETZENTGELT_ARBEITSPREIS`, `NETZENTGELT_GRUNDPREIS` | `marktd` Preisblatt Netznutzung of the NB — positions `ARBEITSPREIS_WIRKARBEIT`, `GRUNDPREIS` |
-| `MESSSTELLENBETRIEB` | `marktd` Preisblatt Messung of the NB as grundzuständiger Messstellenbetreiber — position `MESSSTELLENBETRIEB` |
+| `MESSSTELLENBETRIEB` | `marktd` Preisblatt Messung of the grundzuständige Messstellenbetreiber, filed under the MP-ID marktd records for the NB's grid (`GET /api/v1/netzbetreiber/{nb}/grundzustaendiger-msb`) — position `MESSSTELLENBETRIEB`. No recorded gMSB refuses `422 eingabe_fehlt`; the NB's own code is never read in its place |
 | `KONZESSIONSABGABE` | `marktd` Preisblatt Konzessionsabgabe — Strom: Tarifkunden up to 30 000 kWh (§ 2 Abs. 7 KAV), refused above; Gas: only a sheet for every Kundengruppe |
 | `SECT19_STROMNEV_UMLAGE`, `OFFSHORE_NETZUMLAGE`, `KWKG_UMLAGE` (Strom) | the dated series, group A′ |
 | `STROMSTEUER` / `ENERGIESTEUER`, `BEHG` (Gas) | the dated series; BEHG as for a B2B Gas quotation |
@@ -494,7 +494,7 @@ Both endpoints take the same query parameters and caching headers.
 | `only_dynamic` | bool | `false` | Return only §41a dynamic tariffs |
 | `limit` | integer | `100` | Page size (1–500) |
 | `cursor` | string | — | Pagination cursor from `meta.next_cursor` |
-| `lf_mp_id` | string | `cfg.tenant` | Override operator ID |
+| `lf_mp_id` | string | config `lf_mp_id` | Override operator ID |
 
 ### Example: Household electricity tariffs
 
@@ -506,7 +506,7 @@ curl -s "http://productd:9080/api/v1/comparison-feed?sparte=STROM&kundentyp=Haus
 {
   "meta": {
     "generated_at": "2026-07-17T12:00:00Z",
-    "lf_mp_id": "9900357000004",
+    "lf_mp_id": "9900357000028",
     "verbrauch_kwh": "3500",
     "sparte_filter": "STROM",
     "kundentyp_filter": "Haushalt",
@@ -643,7 +643,7 @@ digit).
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID | Primary key |
-| `lf_mp_id` | TEXT | The **market identity** products are sold under — not the tenant (config `lf_mp_id`, defaulting to `tenant`) |
+| `lf_mp_id` | TEXT | The **market identity** products are sold under — not the tenant (config `lf_mp_id`, required) |
 | `product_code` | TEXT | Operator-assigned product identifier |
 | `category` | TEXT | 14 values: `STROM`/`GAS`/`WAERME`/`WASSER`/`SOLAR`/`EEG`/`EINSPEISUNG`/`WAERMEPUMPE`/`WALLBOX`/`HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`/`BUNDLE`/`SHARING` |
 | `product_status` | TEXT | `PUBLISHED` (default) — visible to billingd and portals; `DRAFT` — staged, invisible until published |
@@ -727,8 +727,8 @@ The BO4E `Angebot` comes from `GET /angebote/{id}/comparison`, not from a tool.
 
 ```toml
 # productd.toml
-tenant   = "9910000000002"   # data-isolation key
-lf_mp_id = "9910000000002"   # market identity products are sold under; defaults to tenant
+tenant   = "stadtwerke-musterstadt"   # data-isolation key
+lf_mp_id = "9900357000028"   # required: the Lieferant's MP-ID products are sold under
 billingd_url = "http://billingd:9280"   # its [policy] behg_regime prices a year § 10 BEHG fixes none
 # billingd_api_key = "env:PRODUCTD_BILLINGD_API_KEY"
 # An Endkunden-Angebot reads the NB's Preisblätter and a MaLo's NB from marktd;

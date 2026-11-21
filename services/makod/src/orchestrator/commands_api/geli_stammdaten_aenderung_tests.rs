@@ -30,8 +30,9 @@ async fn state_for(role: &str) -> CommandsApiState {
         .await
         .expect("open in-memory SlateDB");
     CommandsApiState {
-        tenant_id: TenantId::from_party_id(OWN_MP_ID),
-        sender_party_id: OWN_MP_ID.to_owned(),
+        tenant_id: TenantId::from_tenant(OWN_MP_ID),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::party_registry::MpIdRegistry::single(OWN_MP_ID),
         configured_marktrollen: vec![role.to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -39,7 +40,7 @@ async fn state_for(role: &str) -> CommandsApiState {
         snapshot_store: store.as_snapshot_store(),
         malo_cache: Arc::new(SlateDbMaloCache::new(
             store.clone(),
-            TenantId::from_party_id(OWN_MP_ID),
+            TenantId::from_tenant(OWN_MP_ID),
         )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),

@@ -26,7 +26,8 @@ fn print_config(toml: &str) -> std::process::Output {
 }
 
 const BASE: &str = r#"
-tenant = "9900357000004"
+tenant = "stadtwerke-musterstadt"
+seller_name = "Stadtwerke Musterstadt GmbH"
 productd_url = "http://localhost:9080"
 edmd_url = "http://localhost:8380"
 marktd_url = "http://localhost:8080"

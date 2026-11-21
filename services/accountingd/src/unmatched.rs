@@ -261,7 +261,8 @@ pub async fn list(
 pub struct AssignRequest {
     /// 11-digit Marktlokations-ID of the account the payment belongs to.
     pub malo_id: String,
-    /// The Lieferant's MP-ID the account is kept under; defaults to the tenant.
+    /// The Lieferant's MP-ID the account is kept under; defaults to the
+    /// configured `lf_mp_id`.
     pub lf_mp_id: Option<String>,
 }
 
@@ -297,11 +298,12 @@ pub async fn assign(
     pool: &PgPool,
     ledger: &crate::ledger::PgLedger,
     tenant: &str,
+    default_lf_mp_id: &str,
     payment_id: Uuid,
     req: &AssignRequest,
     actor: &str,
 ) -> Result<ZahlungZugeordnet, ApiError> {
-    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(tenant);
+    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(default_lf_mp_id);
     let account = crate::pg::fetch_account(pool, &req.malo_id, lf_mp_id, tenant)
         .await
         .map_err(ApiError::internal)?

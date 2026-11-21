@@ -97,11 +97,11 @@ CREATE TABLE eeg_anlagen (
         -- so a plant that does not state one cannot be priced.
         'SOLAR_AUFDACH',    -- roof-mounted (§48 Abs. 1 EEG 2023)
         'SOLAR_FREIFLAECHE', -- ground-mounted (tendering >1 MWp)
-        'SOLAR_AGRIPV',     -- §51a Agri-PV (+0.5 ct/kWh premium)
+        'SOLAR_AGRIPV',     -- Agri-PV, a besondere Solaranlage
         'SOLAR_MIETERSTROM',-- §21 Abs. 3 building community solar
-        'SOLAR_STECKER',    -- Balkonkraftwerk <800 W (simplified)
+        'SOLAR_STECKER',    -- Steckersolargerät: ≤ 2 kW and ≤ 800 VA Wechselrichter (§ 8 Abs. 5a EEG 2023)
         -- Wind
-        'WIND_ONSHORE',     -- §21 EEG (tendering >750 kW)
+        'WIND_ONSHORE',     -- tendering above 1 MW (§ 22 Abs. 2 Satz 2 Nr. 1 EEG 2023)
         'WIND_OFFSHORE',    -- §§70ff EEG
         -- Biomass / Gas
         'BIOMASSE',         -- generic solid biomass
@@ -139,9 +139,10 @@ CREATE TABLE eeg_anlagen (
     -- gate in the service to list both spellings, and the ones that forgot
     -- (the KWKG kWh counter, the KWKG index) silently stopped working for
     -- half the plants.
-    settlement_model   TEXT        NOT NULL DEFAULT 'VERGUETUNG' CHECK (settlement_model IN (
+    settlement_model   TEXT        NOT NULL CHECK (settlement_model IN (
         'VERGUETUNG',                -- §21 Abs. 1 Einspeisevergütung
         'AUSFALLVERGUETUNG',         -- §21 Abs. 1 Satz 1 Nr. 3 Ausfallvergütung (−20 %)
+        'UNENTGELTLICHE_ABNAHME',    -- §21 Abs. 1 Satz 1 Nr. 2 unentgeltliche Abnahme (Anspruch null)
         'DIREKTVERMARKTUNG',         -- §20 gleitende Marktprämie
         'AUSSCHREIBUNG',             -- §22 wettbewerblich ermittelte Marktprämie
         'SONSTIGE_DIREKTVERMARKTUNG',-- §21a Direktvermarktung ohne EEG-Zahlung

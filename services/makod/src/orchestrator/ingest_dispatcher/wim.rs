@@ -474,7 +474,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // Per-PID, from the same table processd sizes its operator
-                    // queue by: 35001 → 4 WT, 35002 → 5 WT, 35005 → 10 WT.
+                    // queue by: 35001 → 4 WT, 35002 → 5 WT, 35005 → 5 WT.
                     // 35004 is GPKE Teil 3 and states no WiM window, so it
                     // carries no process deadline rather than a guessed one.
                     let deadlines = mako_wim::preisanfrage::antwort_frist_werktage(pid).map(|wt| {

@@ -840,6 +840,9 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                                 "pid":          pid.as_u32(),
                                 "invoice_ref":  invoice_ref.as_str(),
                                 "sender_mp_id": sender.as_str(),
+                                // NAD+MR — `invoicd` checks under the receiver
+                                // the INVOIC names, never a configured default.
+                                "receiver_gln": recipient.as_str(),
                                 "workflow":     F::WORKFLOW_NAME,
                                 "rechnung":     serde_json::to_value(rechnung.as_deref())
                                     .unwrap_or(serde_json::Value::Null),

@@ -31,7 +31,7 @@ async fn dispatcher() -> EdifactIngestDispatcher {
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant = TenantId::from_party_id(OWN_MP);
+    let tenant = TenantId::from_tenant(OWN_MP);
     EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),
@@ -410,7 +410,7 @@ async fn a_deaktivierung_takes_the_series_of_its_activation() {
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant = TenantId::from_party_id(OWN_MP);
+    let tenant = TenantId::from_tenant(OWN_MP);
     let dispatcher = EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),
@@ -497,7 +497,7 @@ async fn a_55071_is_received_as_a_zuordnungsermaechtigung() {
             .await
             .expect("in-memory store"),
     );
-    let tenant = TenantId::from_party_id(OWN_MP);
+    let tenant = TenantId::from_tenant(OWN_MP);
     let dispatcher =
         EdifactIngestDispatcher::new(Arc::clone(&store), store.as_snapshot_store(), 100, tenant);
     let outcome = dispatcher

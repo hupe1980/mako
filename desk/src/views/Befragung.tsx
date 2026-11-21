@@ -318,6 +318,14 @@ function Fragen({
 
   return (
     <>
+      <Abschnitt frage="tenant" titel={b.tenant.titel} text={b.tenant.text}>
+        <Feld
+          label={b.tenant.titel}
+          value={a.tenant ?? ""}
+          onChange={(v) => setze((x) => ({ ...x, tenant: v.trim() === "" ? null : v }))}
+        />
+      </Abschnitt>
+
       <Abschnitt frage="rollen" titel={b.rollen.titel} text={b.rollen.text}>
         <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
           {ROLLEN.map((r) => {

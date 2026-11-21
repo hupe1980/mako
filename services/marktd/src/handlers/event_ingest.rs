@@ -576,6 +576,29 @@ fn ends_supply(pid: u32, data: &serde_json::Value) -> bool {
     }
 }
 
+/// The Netzbetreiber marktd already records for a Marktlokation: the supply
+/// record's, else the grid topology's.
+async fn recorded_nb(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    malo_id: &str,
+) -> Result<Option<String>, mako_markt::error::MdmError> {
+    sqlx::query_scalar(
+        r"SELECT nb_mp_id FROM (
+              SELECT nb_mp_id, 1 AS rang FROM versorgungsstatus
+               WHERE malo_id = $1 AND tenant = $2
+              UNION ALL
+              SELECT nb_mp_id, 2 AS rang FROM malo_grid
+               WHERE malo_id = $1 AND tenant = $2
+          ) nb ORDER BY rang LIMIT 1",
+    )
+    .bind(malo_id)
+    .bind(tenant)
+    .fetch_optional(conn)
+    .await
+    .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))
+}
+
 /// Apply the supply-state transition an inbound makod CloudEvent implies, on the
 /// caller's transaction.
 ///
@@ -612,11 +635,27 @@ pub async fn derive_supply_state(
     let Ok(malo_id) = malo_str.parse::<mako_markt::domain::MaloId>() else {
         return Ok(Vec::new());
     };
-    let nb_mp_id = data
+    // The Netzbetreiber the supply record names: the event's, else the one
+    // already on record for the Marktlokation. Never the tenant — that is an
+    // isolation key, and `end_supply_tx`/`begin_eog_supply_tx` overwrite the
+    // row's NB with whatever is passed. With neither, the transitions that
+    // write the NB are skipped and named in the log.
+    let nb_mp_id = match data
         .get("nb_mp_id")
         .or_else(|| data.get("grid_operator"))
         .and_then(|v| v.as_str())
-        .map_or_else(|| tenant.to_owned(), str::to_owned);
+        .filter(|s| !s.is_empty())
+    {
+        Some(nb) => Some(nb.to_owned()),
+        None => recorded_nb(conn, tenant, malo_id.as_ref()).await?,
+    };
+    let ohne_nb = |was: &str| {
+        warn!(
+            malo_id = %malo_str, pid,
+            "event_ingest: {was} skipped — the event names no Netzbetreiber and marktd records \
+             none for this Marktlokation (versorgungsstatus, malo_grid)"
+        );
+    };
     // The Sparte is carried by the PID itself: GPKE Strom processes are 55xxx,
     // the GeLi Gas twins 44xxx. Subscribers filter on it and processd keys its
     // EoG case log on it, so it goes on every event this function emits.
@@ -629,7 +668,11 @@ pub async fn derive_supply_state(
 
     if is_initiated && ANMELDUNG_PIDS.contains(&pid) {
         // NB received Lieferbeginn Anfrage — record the pending transition.
-        if let Some(lf_mp_id_next) = data.get("new_supplier").and_then(|v| v.as_str()) {
+        let lf_mp_id_next = data.get("new_supplier").and_then(|v| v.as_str());
+        if lf_mp_id_next.is_some() && nb_mp_id.is_none() {
+            ohne_nb("announced Lieferbeginn");
+        }
+        if let (Some(lf_mp_id_next), Some(nb_mp_id)) = (lf_mp_id_next, nb_mp_id.as_deref()) {
             let lf_next_lieferbeginn = data
                 .get("process_date")
                 .and_then(|v| v.as_str())
@@ -651,7 +694,7 @@ pub async fn derive_supply_state(
                 lf_next_lieferbeginn,
                 prozent,
                 tranche_id,
-                &nb_mp_id,
+                nb_mp_id,
                 process_id,
             )
             .await?;
@@ -703,10 +746,14 @@ pub async fn derive_supply_state(
             && let Some(gap_from) = ende.next_day()
             && gap_from < beginn
         {
+            let Some(nb_mp_id) = nb_mp_id.as_deref() else {
+                ohne_nb("§ 38 gap announcement (Fall b)");
+                return Ok(events);
+            };
             events.push(gap_detected(
                 tenant,
                 malo_str,
-                &nb_mp_id,
+                nb_mp_id,
                 pid,
                 sparte,
                 gap_from,
@@ -725,6 +772,10 @@ pub async fn derive_supply_state(
         // `old_supplier` names which assignment ends; absent, every running one
         // does, which is what an untranchierte Marktlokation's Lieferende means.
         let old_supplier = data.get("old_supplier").and_then(|v| v.as_str());
+        let Some(nb_mp_id) = nb_mp_id.as_deref() else {
+            ohne_nb("Lieferende");
+            return Ok(events);
+        };
         // `false` when this ending is already recorded — a deployment that is
         // NB and LF at once confirms it from both sides' processes, and the
         // § 38 gap is announced once.
@@ -733,7 +784,7 @@ pub async fn derive_supply_state(
             &malo_id,
             tenant,
             old_supplier,
-            &nb_mp_id,
+            nb_mp_id,
             lieferende,
             process_id,
         )
@@ -832,6 +883,10 @@ pub async fn derive_supply_state(
             .and_then(|v| v.as_str())
             .and_then(parse_civil_date);
 
+        let Some(nb_mp_id) = nb_mp_id.as_deref() else {
+            ohne_nb("EoG Zuordnung");
+            return Ok(events);
+        };
         let (Some(gv), Some(status)) = (gv_mp_id, eog_status) else {
             warn!(
                 malo_id = %malo_str,
@@ -853,7 +908,7 @@ pub async fn derive_supply_state(
                   WHERE tenant = $1 AND nb_mp_id = $2 AND sparte = $3",
             )
             .bind(tenant)
-            .bind(&nb_mp_id)
+            .bind(nb_mp_id)
             .bind(sparte)
             .fetch_optional(&mut *conn)
             .await
@@ -862,7 +917,7 @@ pub async fn derive_supply_state(
         };
 
         Vs::begin_eog_supply_tx(
-            conn, &malo_id, tenant, gv, &nb_mp_id, status, eog_seit, process_id,
+            conn, &malo_id, tenant, gv, nb_mp_id, status, eog_seit, process_id,
         )
         .await?;
 

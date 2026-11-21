@@ -3337,6 +3337,7 @@ fn state_facts() -> eeg_billing::settlement_state::SettlementStateFacts {
         mastr_registriert: true,
         sect9_anlage: Sect9Anlage {
             leistung_kwp: d("50"),
+            inbetriebnahme: date!(2025 - 06 - 01),
             erzeugungsart: None,
             einspeiseverguetung_oder_mieterstrom: true,
             ist_kwk_anlage: false,
@@ -3407,6 +3408,7 @@ fn settlement_state_the_middle_band_owes_both_sect9_routes() {
     let gross = SettlementStateFacts {
         sect9_anlage: Sect9Anlage {
             leistung_kwp: d("100"),
+            inbetriebnahme: date!(2025 - 06 - 01),
             ..state_facts().sect9_anlage
         },
         ..nur_cap

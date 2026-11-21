@@ -2012,10 +2012,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 // The door the delivery came in by, as the reading records it.
                 match first.source {
                     crate::domain::IngestionSource::Manual => MeasurementSource::ManualEntry {
-                        operator_id: first
-                            .sender_mp_id
-                            .clone()
-                            .unwrap_or_else(|| first.tenant.clone()),
+                        operator_id: operator.to_string(),
                         reason: "Ablesung".to_owned(),
                     },
                     _ => MeasurementSource::Mscons {

@@ -644,10 +644,13 @@ pub async fn zahle(
     let payment_type = if instant { "SCT_INST" } else { "SCT_CORE" };
     // §25 Abs. 1 EEG 2023 — "unverzüglich nach Ende des Monats": the payout
     // leaves today, as the German calendar counts it.
+    let debtor_name = cfg.creditor_name().ok_or_else(|| {
+        AuszahlungFehler::Konfiguration(crate::config::CREDITOR_NAME_FEHLT.to_owned())
+    })?;
     let pain001_xml = crate::sepa::build_pain_001(
         &crate::sepa::DebtorIdentity {
             iban: debtor_iban,
-            name: cfg.creditor_name.as_deref().unwrap_or(tenant),
+            name: debtor_name,
             address: Some(&cfg.creditor_address),
         },
         &[crate::sepa::CreditTransferItem {

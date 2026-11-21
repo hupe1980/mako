@@ -5,7 +5,7 @@ template = "home.html"
 
 [extra]
 translated_from = "templates/index.html"
-source_sha256 = "456c266821c316fae2caf484d1db5ea3920fe46dae3f0f3118068fb1cb072090"
+source_sha256 = "992f1ec5ed4e12fcb5b5c1c5317a60ae03792fa62436e07cd601473175cddf94"
 
 eyebrow = "Rust · MIT oder Apache-2.0 · BDEW EDI@Energy"
 hero_title = "Marktkommunikation für Strom und Gas,<br>von rohem EDIFACT bis zur Produktion — KI-first, in Rust."
@@ -39,9 +39,9 @@ der MaBiS-Hub. mako trennt die Fachlogik bewusst von Transport und Format: Wenn 
 bewegt, zieht die Plattform mit einem Import nach — nicht mit einer Neuentwicklung."""
 
 [extra.pill]
-name = "Validator"
-text = "EDIFACT-Nachricht im Browser prüfen"
-path = "@/validator.md"
+name = "Werkzeuge"
+text = "EDIFACT-Validator und vier Rechner für den Energiemarkt, im Browser"
+path = "@/tools.md"
 
 [[extra.cta]]
 label = "Loslegen"

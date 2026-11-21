@@ -87,7 +87,7 @@ impl MockMsb {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(MSB_ID),
+                TenantId::from_tenant(MSB_ID),
                 WorkflowId::new("wim-steuerungsauftrag", FV),
             ),
         }

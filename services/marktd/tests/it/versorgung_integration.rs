@@ -2115,3 +2115,60 @@ async fn an_answered_55007_ends_the_supply_only_on_a_zustimmung() {
     assert_eq!(ended.lf_mp_id(), None, "a 55008 ends the Zuordnung");
     assert_eq!(ended.lieferende, Some(date!(2026 - 11 - 30)));
 }
+
+/// A supply event that names no Netzbetreiber writes the NB marktd records for
+/// the Marktlokation, and nothing when it records none — never the tenant,
+/// which `end_supply_tx` would otherwise write over the row's NB.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_supply_event_without_its_nb_never_records_the_tenant() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("nb_from_record").await else {
+        return;
+    };
+    let m = malo();
+    let lieferende = serde_json::json!({ "malo_id": m.to_string(), "process_date": "20261031" });
+
+    // No NB anywhere: the Lieferende is skipped, no row is written.
+    let mut tx = pool.begin().await.expect("begin");
+    let evts = derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(55_005),
+        &lieferende,
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("derive");
+    tx.commit().await.expect("commit");
+    assert!(evts.is_empty(), "{evts:?}");
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    assert!(vs.find(&m, TENANT).await.expect("find").is_none());
+
+    // The grid topology names the NB: the supply record takes it.
+    sqlx::query(
+        "INSERT INTO malo_grid (malo_id, tenant, nb_mp_id, sparte) VALUES ($1, $2, $3, 'STROM')",
+    )
+    .bind(MALO)
+    .bind(TENANT)
+    .bind(NB)
+    .execute(&pool)
+    .await
+    .expect("malo_grid");
+    let mut tx = pool.begin().await.expect("begin");
+    derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(55_005),
+        &lieferende,
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("derive");
+    tx.commit().await.expect("commit");
+    let rec = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(rec.nb_mp_id, NB);
+}

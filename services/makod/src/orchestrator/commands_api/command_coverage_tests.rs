@@ -88,10 +88,6 @@ const OHNE_KOMMANDO: &[(&str, &str)] = &[
         "the MSB's Bearbeitungsstand (`DispatchResponse`) has no door",
     ),
     (
-        "gpke-stammdatenaenderung",
-        "an A02 Rückmeldung and the Verantwortlicher's own Änderung have no door",
-    ),
-    (
         "mabis-anforderung",
         "the Anforderung (`SendAnforderung`) has no door",
     ),

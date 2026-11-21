@@ -104,7 +104,7 @@ async fn state_for(
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant_id = TenantId::from_party_id(own);
+    let tenant_id = TenantId::from_tenant(own);
     let dispatcher = EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),
@@ -117,7 +117,8 @@ async fn state_for(
     );
     let state = CommandsApiState {
         tenant_id,
-        sender_party_id: own.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(own),
         configured_marktrollen: vec![rolle.to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -484,7 +485,7 @@ fn korrekturliste_der_lf(listennummer: &str, grund: Option<&str>) -> edi_energy:
     let msg = mako_engine::outbox::OutboxMessage::new(
         StreamId::new("process/lf"),
         mako_engine::ids::ProcessId::new(),
-        TenantId::from_party_id(LF_MP),
+        TenantId::from_tenant(LF_MP),
         mako_engine::ids::CorrelationId::new(),
         mako_engine::ids::ConversationId::new(),
         mako_engine::ids::EventId::new(),

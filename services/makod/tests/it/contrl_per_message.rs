@@ -144,7 +144,7 @@ async fn rendered_for(own: &str, role: &str, wire: &str, reference: &str) -> Str
     let registry = registry(own, role);
     let svc = ContrlAckService::new(
         Arc::new(store.clone()),
-        TenantId::from_party_id(own),
+        TenantId::from_tenant(own),
         Arc::clone(&registry),
     );
     let Syntaxpruefung::Nachrichten(fehler) = syntaxpruefung(wire.as_bytes(), &parse(wire)) else {
@@ -247,7 +247,7 @@ async fn the_rest_door_rejects_the_whole_file_and_owes_the_contrl() {
     use tower::ServiceExt as _;
 
     let store = SlateDbStore::open_in_memory().await.expect("store");
-    let tenant = TenantId::from_party_id(OWN_STROM);
+    let tenant = TenantId::from_tenant(OWN_STROM);
     let registry = registry(OWN_STROM, "NB");
     let dispatcher = Arc::new(makod::ingest_dispatcher::EdifactIngestDispatcher::new(
         Arc::new(store.clone()),

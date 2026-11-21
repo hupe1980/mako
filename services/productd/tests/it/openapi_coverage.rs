@@ -118,7 +118,8 @@ fn concrete(template: &str) -> String {
 async fn every_documented_operation_is_served() {
     let cfg: productd::config::ProductdConfig = serde_json::from_value(serde_json::json!({
         "database": {"url": "postgres://startup-test/productd"},
-        "tenant": "9900357000004",
+        "tenant": "stadtwerke-musterstadt",
+        "lf_mp_id": "9900357000028",
         "oidc": {"mode": "demo"},
     }))
     .expect("the configuration parses");

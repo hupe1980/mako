@@ -53,7 +53,7 @@ async fn dispatcher() -> EdifactIngestDispatcher {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN_MP),
+        TenantId::from_tenant(OWN_MP),
     )
 }
 
@@ -142,7 +142,7 @@ async fn the_antwortfrist_runs_from_the_receipt_instant() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN_MP),
+        TenantId::from_tenant(OWN_MP),
     );
     let edi = fixture(55001);
     let msg = edi_energy::parse(edi.as_bytes()).expect("fixture parses");

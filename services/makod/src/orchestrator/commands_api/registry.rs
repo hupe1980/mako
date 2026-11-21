@@ -262,8 +262,9 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         dispatch: cmd_gpke_eog_ablehnen,
     },
     // ── GPKE Ankündigung Zuordnung LF (PID 55607 NB→LFN) ─────────────────────
-    // After Lieferantenwechsel the NB sends PID 55607 to the new LF (LFN).
-    // The LFN answers inside 55607's published Antwortfrist.
+    // The NB announces the Zuordnung of its own LF to an erzeugende Marktlokation
+    // (GPKE Teil 2 Kap. 2.4.2, Herstellung einer 100% LF-Zuordnung); the LF
+    // answers inside 55607's published Antwortfrist.
     CommandDescriptor {
         name: "gpke.zuordnung-lf.bestaetigen",
         permitted_roles: &[Marktrolle::Lf],
@@ -440,6 +441,28 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(19101),
         workflow: Some("gpke-geschaeftsdatenanfrage"),
         dispatch: cmd_gpke_geschaeftsdatenanfrage_ablehnen,
+    },
+    // ── GPKE Änderung der Lokationsbündelstruktur (UTILMD 55173 / 55175) ─────
+    // GPKE Teil 4 Kap. 1.4.2: the NB sends its own change to the MSB (55173)
+    // or the LF (55175) „sofort nach Kenntnisnahme", answered 55177 / 55180
+    // by the 2. WT; the bündel is the one marktd holds.
+    CommandDescriptor {
+        name: "gpke.lokationsbuendel.aendern",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55173),
+        workflow: Some("gpke-stammdatenaenderung"),
+        dispatch: cmd_gpke_lokationsbuendel_aendern,
+    },
+    // ── Berechnungsformel (UTILTS 25001 → 25010) ───────────────────────────────
+    // WiM Strom Teil 2 Kap. 2.3: the NB sends each MSB of the bündel the
+    // formula edmd computes the Lokation with; the MSB answers by the 5. WT,
+    // silence is Zustimmung.
+    CommandDescriptor {
+        name: "gpke.berechnungsformel.senden",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(25001),
+        workflow: Some("gpke-berechnungsformel"),
+        dispatch: cmd_gpke_berechnungsformel_senden,
     },
     // ── GeLi Gas Geschäftsdatenanfrage (BK7-24-01-009 Anlage Kap. 4.4) ────────
     // The LF sends ORDERS 17101, the MSB 17126; the Gasnetzbetreiber answers

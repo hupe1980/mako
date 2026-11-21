@@ -234,6 +234,78 @@ pub(crate) async fn get_virtual_lastgang(
     .into_response()
 }
 
+/// `GET /api/v1/virtual/{virtual_malo_id}/berechnungsformel`
+///
+/// The virtual Marktlokation's Berechnungsformel in the UTILTS terms the NB
+/// transmits it in (Prüfidentifikator 25001): its validity, its status, the
+/// Rechenschritt yielding the Energiemenge and every Bestandteil. It is the
+/// formula `/lastgang` computes with. A community share is no Berechnungsformel
+/// and is refused with `keine_berechnungsformel`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/virtual/{virtual_malo_id}/berechnungsformel",
+    tag = "virtual",
+    params(("virtual_malo_id" = String, Path, description = "The virtual Marktlokation's id")),
+    responses(
+        (status = 200, description = "OK", body = serde_json::Value),
+        (status = 401, description = "No or unverifiable token", body = mako_service::ApiError),
+        (status = 403, description = "Cedar refused the action", body = mako_service::ApiError),
+        (status = 404, description = "No virtual meter of that id", body = mako_service::ApiError),
+        (status = 409, description = "`keine_berechnungsformel` — a community share", body = mako_service::ApiError),
+    )
+)]
+pub(crate) async fn get_berechnungsformel(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(virtual_malo_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return ApiError::forbidden(e.to_string()).into_response();
+    }
+    let row = match sqlx::query(
+        "SELECT valid_from, valid_to FROM virtual_meter_configs WHERE virtual_malo_id = $1 AND tenant = $2 LIMIT 1",
+    )
+    .bind(&virtual_malo_id)
+    .bind(&state.tenant)
+    .fetch_optional(state.repo.pool())
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return ApiError::NotFound.into_response(),
+        Err(e) => {
+            return ApiError::internal(anyhow::Error::from(e).context("berechnungsformel validity query failed"))
+                .into_response();
+        }
+    };
+    let rule = match load_rule(&state, &virtual_malo_id).await {
+        Ok(rule) => rule,
+        Err(response) => return response,
+    };
+    let VirtualMeterRule::Formula { formula, .. } = rule else {
+        return ApiError::conflict(format!(
+            "{virtual_malo_id} is a community share, not a Berechnungsformel"
+        ))
+        .with_code("keine_berechnungsformel")
+        .into_response();
+    };
+    use sqlx::Row;
+    let bestandteile = crate::domain::virtual_meter::bestandteile(&formula);
+    Json(serde_json::json!({
+        "virtual_malo_id": virtual_malo_id,
+        "gueltig_ab": row.try_get::<time::Date, _>("valid_from").ok().map(|d| d.to_string()),
+        "gueltig_bis": row.try_get::<Option<time::Date>, _>("valid_to").ok().flatten().map(|d| d.to_string()),
+        "status": crate::domain::virtual_meter::formelstatus(&bestandteile),
+        "ergebnis_schritt": formula.result().get(),
+        "bestandteile": bestandteile,
+    }))
+    .into_response()
+}
+
 /// `GET /api/v1/virtual` — list all virtual meter configurations for this tenant.
 #[utoipa::path(
     get,

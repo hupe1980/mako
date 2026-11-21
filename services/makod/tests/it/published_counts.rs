@@ -219,6 +219,7 @@ fn the_answer_obligation_split_matches_the_catalogue() {
                 17 => "ORDERS",
                 13 => "MSCONS",
                 33 => "REMADV",
+                25 => "UTILTS",
                 other => panic!("PID range {other}xxx has no message type in this guard"),
             })
             .or_default() += 1;
@@ -243,12 +244,13 @@ fn the_answer_obligation_split_matches_the_catalogue() {
             "../../site/content/docs/reference/makotest.md",
             format!(
                 "All **{total}** published obligations are answerable — UTILMD {}, ORDRSP {}, \
-                 IFTSTA {}, QUOTES {}, ORDERS {}",
+                 IFTSTA {}, QUOTES {}, ORDERS {}, UTILTS {}",
                 by_message["UTILMD"],
                 by_message["ORDRSP"],
                 by_message["IFTSTA"],
                 by_message["QUOTES"],
                 by_message["ORDERS"],
+                by_message["UTILTS"],
             ),
         ),
     ];

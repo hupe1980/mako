@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! PROCESSD_DATABASE__URL=postgres://processd:secret@postgres/processd
-//! PROCESSD_IDENTITY__OWN_MP_ID=9900000000002
+//! PROCESSD_IDENTITY__TENANT=stadtwerke-musterstadt
 //! PROCESSD_MAKOD__API_KEY_FILE=/run/secrets/makod-api-key
 //! ```
 //!
@@ -26,7 +26,11 @@
 //! url = "env:DATABASE_URL"
 //!
 //! [identity]
-//! own_mp_id = "9900357000004"
+//! tenant                 = "stadtwerke-musterstadt"
+//! nb_mp_ids              = ["9900357000004", "9800357000004"]  # one per Sparte
+//! lf_mp_ids              = ["9900357000028", "9800357000028"]
+//! msb_mp_ids             = ["9900357000035", "9800357000035"]
+//! verbundene_lieferanten = ["9912345000005"]
 //!
 //! [makod]
 //! url     = "http://makod:8080"
@@ -226,27 +230,181 @@ pub use mako_service::config::DatabaseConfig;
 
 // ── Identity ──────────────────────────────────────────────────────────────────
 
+/// `[identity]` — who this deployment is: its tenant and the MP-IDs of each
+/// Marktrolle it acts in.
+///
+/// One list per role, because each Marktrolle — and each Sparte — has its own
+/// MP-ID: „Marktteilnehmer benötigen für jede Marktrolle Marktfunktion im
+/// Strom- bzw. Gasmarkt eine gesonderte Codenummer." (Allgemeine Festlegungen
+/// 6.1d Kap. 2.13, S. 17). A list names at most one BDEW-Codenummer (`99…`,
+/// Strom) and one DVGW-Codenummer (`98…`, Gas). A role this deployment does
+/// not act in keeps its list empty.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityConfig {
-    /// Operator primary MP-ID (BDEW-Codenummer starting with `99`, or DVGW `98`).
-    ///
-    /// Must match `makod.toml` `[[party]] primary = true`.
-    /// Used for `initiator_is_affiliate`, the Gleichbehandlung evidence column.
-    pub own_mp_id: String,
-    /// Tenant identifier written to every DB row.  Defaults to `own_mp_id`.
-    #[serde(default)]
+    /// Tenant identifier — data-isolation key written to every database row.
+    /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique
+    /// string is valid. Required and non-empty; it is never derived from an
+    /// MP-ID.
     pub tenant: String,
-    /// The MP-IDs of the Lieferanten belonging to the operator's vertically
-    /// integrated undertaking — each Marktrolle has its own MP-ID
-    /// (Identifikatoren AWH V1.2 Kap. 2.1), so an affiliated Lieferant is never
-    /// `own_mp_id`. An Anmeldung from one of them is the affiliate the § 7a
-    /// Abs. 5 EnWG Gleichbehandlung evidence compares, and the NB module and
-    /// the process read model both read this list.
+    /// The Netzbetreiber's MP-IDs. The NB, Neuanlage and EoG modules answer
+    /// only what is addressed to one of these.
+    #[serde(default)]
+    pub nb_mp_ids: Vec<String>,
+    /// The Lieferant's MP-IDs. The LF module reads „we supply" as an active
+    /// assignment under one of these.
+    #[serde(default)]
+    pub lf_mp_ids: Vec<String>,
+    /// The Messstellenbetreiber's MP-IDs. The MSB and ESA modules answer as
+    /// the MSB of the message's Sparte.
+    #[serde(default)]
+    pub msb_mp_ids: Vec<String>,
+    /// The MP-IDs of the affiliated Lieferanten of the operator's vertically
+    /// integrated undertaking beyond its own `lf_mp_ids`, which are affiliated
+    /// by definition ([`IdentityConfig::verbunden`]). An Anmeldung from one of
+    /// them is the affiliate the § 7a Abs. 5 EnWG Gleichbehandlung evidence
+    /// compares, and the NB module and the process read model both read it.
     ///
     /// Required, `[]` included: a deployment states that it has none rather
     /// than leaving the control off by omission.
     pub verbundene_lieferanten: Vec<String>,
+}
+
+/// The Marktrolle an MP-ID list of [`IdentityConfig`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EigeneRolle {
+    Nb,
+    Lf,
+    Msb,
+}
+
+impl EigeneRolle {
+    /// Every role, in `[identity]` order.
+    pub const ALLE: [Self; 3] = [Self::Nb, Self::Lf, Self::Msb];
+
+    /// The `[identity]` key holding this role's MP-IDs.
+    #[must_use]
+    pub const fn schluessel(self) -> &'static str {
+        match self {
+            Self::Nb => "nb_mp_ids",
+            Self::Lf => "lf_mp_ids",
+            Self::Msb => "msb_mp_ids",
+        }
+    }
+}
+
+impl IdentityConfig {
+    /// Every affiliated Lieferant: `verbundene_lieferanten` and this
+    /// deployment's own `lf_mp_ids`, each once.
+    #[must_use]
+    pub fn verbunden(&self) -> Vec<String> {
+        let mut out = self.verbundene_lieferanten.clone();
+        for lf in &self.lf_mp_ids {
+            if !out.contains(lf) {
+                out.push(lf.clone());
+            }
+        }
+        out
+    }
+
+    /// The MP-IDs configured for `rolle`.
+    #[must_use]
+    pub fn mp_ids(&self, rolle: EigeneRolle) -> &[String] {
+        match rolle {
+            EigeneRolle::Nb => &self.nb_mp_ids,
+            EigeneRolle::Lf => &self.lf_mp_ids,
+            EigeneRolle::Msb => &self.msb_mp_ids,
+        }
+    }
+
+    /// The typed identity the modules check against.
+    #[must_use]
+    pub fn identitaet(&self) -> Identitaet {
+        Identitaet {
+            nb: self.nb_mp_ids.clone(),
+            lf: self.lf_mp_ids.clone(),
+            msb: self.msb_mp_ids.clone(),
+        }
+    }
+}
+
+/// This deployment's own MP-IDs, by Marktrolle.
+///
+/// Each module asks only its own role's list: a message addressed to the
+/// Lieferant's code is not the Netzbetreiber's, however the two are deployed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Identitaet {
+    pub nb: Vec<String>,
+    pub lf: Vec<String>,
+    pub msb: Vec<String>,
+}
+
+impl Identitaet {
+    /// Whether `mp_id` is one of the Netzbetreiber's.
+    #[must_use]
+    pub fn is_nb(&self, mp_id: &str) -> bool {
+        self.nb.iter().any(|id| id == mp_id)
+    }
+
+    /// Whether `mp_id` is one of the Lieferant's.
+    #[must_use]
+    pub fn is_lf(&self, mp_id: &str) -> bool {
+        self.lf.iter().any(|id| id == mp_id)
+    }
+
+    /// Whether `mp_id` is one of the Messstellenbetreiber's.
+    #[must_use]
+    pub fn is_msb(&self, mp_id: &str) -> bool {
+        self.msb.iter().any(|id| id == mp_id)
+    }
+
+    /// Whether a message naming `empfaenger` as its Netzbetreiber is this
+    /// deployment's to answer. An empty recipient is ours only when this
+    /// deployment acts as a Netzbetreiber at all.
+    #[must_use]
+    pub fn nb_adressiert(&self, empfaenger: &str) -> bool {
+        if empfaenger.is_empty() {
+            !self.nb.is_empty()
+        } else {
+            self.is_nb(empfaenger)
+        }
+    }
+
+    /// The Netzbetreiber's MP-ID in `sparte`, when exactly one is configured.
+    #[must_use]
+    pub fn nb_fuer(&self, sparte: mako_markt::domain::Sparte) -> Option<&str> {
+        eine_fuer(&self.nb, sparte)
+    }
+
+    /// The Lieferant's MP-ID in `sparte`, when exactly one is configured.
+    #[must_use]
+    pub fn lf_fuer(&self, sparte: mako_markt::domain::Sparte) -> Option<&str> {
+        eine_fuer(&self.lf, sparte)
+    }
+
+    /// The Messstellenbetreiber's MP-ID in `sparte`, when exactly one is
+    /// configured.
+    #[must_use]
+    pub fn msb_fuer(&self, sparte: mako_markt::domain::Sparte) -> Option<&str> {
+        eine_fuer(&self.msb, sparte)
+    }
+}
+
+/// The one MP-ID of `ids` whose coding authority belongs to `sparte` — a
+/// BDEW-Codenummer (`99…`) for Strom, a DVGW-Codenummer (`98…`) for Gas
+/// (BDEW-AWH Identifikatoren V1.2 Kap. 2.2). `None` when there is none or more
+/// than one: a caller that cannot tell which code is its own refuses rather
+/// than borrowing another.
+fn eine_fuer(ids: &[String], sparte: mako_markt::domain::Sparte) -> Option<&str> {
+    let mut passend = ids.iter().filter(|id| {
+        id.parse::<mako_markt::domain::MarktpartnerId>()
+            .is_ok_and(|mp| match sparte {
+                mako_markt::domain::Sparte::Strom => mp.is_bdew(),
+                mako_markt::domain::Sparte::Gas => mp.is_dvgw(),
+            })
+    });
+    let eine = passend.next()?;
+    passend.next().is_none().then_some(eine.as_str())
 }
 
 // ── makod connection ──────────────────────────────────────────────────────────

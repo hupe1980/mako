@@ -21,7 +21,7 @@ addr = "0.0.0.0:8380"
 url = "postgres://mako:mako@postgres:5432/edmd?sslmode=disable"
 
 [identity]
-tenant = "9900357000004"
+tenant = "stadtwerke-musterstadt"
 # Operator of readings edmd produces itself (Zählerstände, Ablesungen, Typ-2).
 own_mp_id = "9900000000003"
 

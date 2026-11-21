@@ -185,7 +185,7 @@ pub async fn handle_webhook(
             &state.makod,
             &state.pool,
             &state.tenant,
-            &state.own_mp_id,
+            &state.identitaet,
         )
         .await
         {
@@ -344,7 +344,7 @@ pub async fn handle_webhook(
         let addressed_here = |p: &msb_module::MsbWechselPayload| {
             !msb_module::NB_ANSWERED_PIDS.contains(&p.pid)
                 || p.nb_mp_id.is_empty()
-                || p.nb_mp_id == state.own_mp_id
+                || state.identitaet.is_nb(&p.nb_mp_id)
         };
 
         if answerable.contains(&pid)
@@ -354,7 +354,7 @@ pub async fn handle_webhook(
             let queue = crate::pg::PgApprovalQueue::new(state.pool.clone());
             return match msb_module::handle_msb_wechsel(
                 &msb_module::MsbModuleConfig::for_state(
-                    &state.own_mp_id,
+                    &state.identitaet,
                     &state.tenant,
                     state.msb_auto_accept,
                     state.msb_auto_preisanfrage,
@@ -392,9 +392,24 @@ pub async fn handle_webhook(
         if esa_module::ESA_ANSWERED_PIDS.contains(&pid)
             && let Some(payload) = esa_module::EsaOrderPayload::parse(&event)
         {
+            // WiM Strom Teil 2 Kap. 4 is a Strom process: the answer goes out
+            // under this MSB's Strom MP-ID, and without exactly one the order
+            // is not this deployment's to answer.
+            let Some(msb_mp_id) = state
+                .identitaet
+                .msb_fuer(mako_markt::domain::Sparte::Strom)
+                .map(str::to_owned)
+            else {
+                tracing::warn!(
+                    pid,
+                    "processd ESA: [identity] msb_mp_ids holds no single Strom MP-ID \
+                     (99…) — the ESA order is not answered here"
+                );
+                return StatusCode::OK.into_response();
+            };
             let queue = crate::pg::PgApprovalQueue::new(state.pool.clone());
             let cfg = esa_module::EsaModuleConfig {
-                own_mp_id: state.own_mp_id.clone(),
+                msb_mp_id,
                 tenant: state.tenant.clone(),
                 auto_accept: state.esa_auto_accept,
                 auto_reject: state.esa_auto_reject,
@@ -664,7 +679,7 @@ pub async fn handle_webhook(
         match msb_module::handle_preisanfrage_reqote(
             &event,
             &msb_module::MsbModuleConfig::for_state(
-                &state.own_mp_id,
+                &state.identitaet,
                 &state.tenant,
                 state.msb_auto_accept,
                 state.msb_auto_preisanfrage,

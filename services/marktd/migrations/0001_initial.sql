@@ -570,6 +570,24 @@ CREATE TABLE grundversorger (
     PRIMARY KEY (tenant, nb_mp_id, sparte)
 );
 
+-- ── Grundzuständiger Messstellenbetreiber per Netzbetreiber ──────────────────
+--
+-- The MP-ID the grundzuständige MSB of an NB's grid acts under (§ 2 Nr. 4
+-- MsbG names the NB as that MSB until it transfers the Grundzuständigkeit;
+-- Identifikatoren AWH V1.2 Kap. 2.1 gives every role its own MP-ID). productd
+-- reads the PreisblattMessung of an offer under it; with no row the offer is
+-- refused rather than priced under the NB's code. The NB's MP-ID is already
+-- per Sparte, so it is the key.
+
+CREATE TABLE grundzustaendige_msb (
+    tenant      TEXT        NOT NULL,
+    nb_mp_id    TEXT        NOT NULL,
+    gmsb_mp_id  TEXT        NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (tenant, nb_mp_id)
+);
+
 -- ── NB price sheets (PreisblattNetznutzung) ───────────────────────────────────
 --
 -- Stores BO4E PreisblattNetznutzung objects published by Netzbetreiber.

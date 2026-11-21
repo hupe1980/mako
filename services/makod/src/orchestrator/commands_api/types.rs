@@ -8,10 +8,12 @@ use super::*;
 /// Shared state for the ERP commands API.
 #[derive(Clone)]
 pub struct CommandsApiState {
-    /// Operator tenant identifier (our MP-ID as a TenantId).
+    /// `[deployment] tenant`, as the engine's `TenantId`.
     pub tenant_id: TenantId,
-    /// Our operator MP-ID as a string (from `--tenant-id`).
-    pub sender_party_id: String,
+    /// `[deployment] tenant`.
+    pub tenant: String,
+    /// The `[[party]]` table: the MP-ID each own Marktrolle acts under.
+    pub parties: std::sync::Arc<crate::party_registry::MpIdRegistry>,
     /// Maximum request body size in bytes.
     ///
     /// Applied via [`DefaultBodyLimit`] to prevent unbounded heap allocation
@@ -64,6 +66,40 @@ pub struct CommandsApiState {
     /// `konfigurationsprodukte` list before dispatching the positive ORDRSP.
     /// When `None`, the guard is disabled (dev mode / deployments without marktd).
     pub marktd_client: Option<std::sync::Arc<mako_markt::marktd_client::MarktdClient>>,
+}
+
+impl CommandsApiState {
+    /// The MP-ID this deployment acts under in one of `rollen` — the one
+    /// declared, or a single-party deployment's only MP-ID.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::InvalidPayload`] when none of `rollen` resolves, or
+    /// when several resolve to different MP-IDs: the caller names its role
+    /// in `feld`, since a guess would send under another Marktrolle's code
+    /// (Allgemeine Festlegungen 6.1d Kap. 2.13).
+    pub(crate) fn own_mp_id(&self, rollen: &[&str], feld: &str) -> Result<String, DispatchError> {
+        let mut found: Vec<&str> = rollen
+            .iter()
+            .filter_map(|r| self.parties.mp_id_for_role(r))
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        match found.as_slice() {
+            [one] => Ok((*one).to_owned()),
+            [] => self.parties.sole_mp_id().map(str::to_owned).ok_or_else(|| {
+                DispatchError::InvalidPayload(format!(
+                    "no [[party]] declares the Marktrolle {}",
+                    rollen.join(" or ")
+                ))
+            }),
+            _ => Err(DispatchError::InvalidPayload(format!(
+                "this deployment acts as {} under different MP-IDs — name the role in \"{feld}\"",
+                rollen.join(" and ")
+            ))),
+            // `feld` is empty only for a single role, which cannot be ambiguous.
+        }
+    }
 }
 
 // ── Command envelope ──────────────────────────────────────────────────────────
@@ -121,7 +157,7 @@ pub struct ErpCommand {
     /// the invoicing commands are flat — `makod` renders the INVOIC envelope
     /// with an empty detail section and never holds an invoice's positions.
     ///
-    /// **Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or
+    /// **Never include** `receiver_party_id`, `pruefidentifikator`, or
     /// `message_ref` — these are engine-owned and will be ignored or rejected.
     #[schema(value_type = Object, example = json!({
         "malo_id": "51238696012", "lieferbeginn_datum": "2026-10-01", "transaktionsgrund": "E03",

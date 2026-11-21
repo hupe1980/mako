@@ -160,6 +160,7 @@ pub(crate) fn api_routes() -> OpenApiRouter<HandlerState> {
         .routes(routes!(get_lastgang_resampled))
         // Virtual meter — compute derived time series from a VirtualMeterRule
         .routes(routes!(get_virtual_lastgang))
+        .routes(routes!(get_berechnungsformel))
         .routes(routes!(list_virtual_meters, create_virtual_meter))
         .routes(routes!(get_virtual_meter, delete_virtual_meter))
         // Quality assessments — per-batch quality history

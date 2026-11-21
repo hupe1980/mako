@@ -40,6 +40,9 @@ pub enum SettlementModel {
     Verguetung,
     /// § 21 Abs. 1 Satz 1 Nr. 3 EEG 2023 — Ausfallvergütung.
     Ausfallverguetung,
+    /// § 21 Abs. 1 Satz 1 Nr. 2 EEG 2023 — unentgeltliche Abnahme, the
+    /// Einspeisevergütung whose claim „verringert sich … auf null".
+    UnentgeltlicheAbnahme,
     /// § 19 Abs. 1 Nr. 1 i.V.m. § 20 EEG 2023 — Marktprämie.
     Direktvermarktung,
     /// § 22 EEG 2023 — Marktprämie with a tender-awarded anzulegender Wert.
@@ -64,9 +67,10 @@ pub enum SettlementModel {
 
 impl SettlementModel {
     /// Every model, in `einsd`'s schema order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Verguetung,
         Self::Ausfallverguetung,
+        Self::UnentgeltlicheAbnahme,
         Self::Direktvermarktung,
         Self::Ausschreibung,
         Self::SonstigeDirektvermarktung,
@@ -85,6 +89,7 @@ impl SettlementModel {
         match self {
             Self::Verguetung => "VERGUETUNG",
             Self::Ausfallverguetung => "AUSFALLVERGUETUNG",
+            Self::UnentgeltlicheAbnahme => "UNENTGELTLICHE_ABNAHME",
             Self::Direktvermarktung => "DIREKTVERMARKTUNG",
             Self::Ausschreibung => "AUSSCHREIBUNG",
             Self::SonstigeDirektvermarktung => "SONSTIGE_DIREKTVERMARKTUNG",
@@ -219,7 +224,7 @@ pub struct KeinEnfgPosten {
 
 /// The EnFG head of `model`'s payment.
 ///
-/// The `match` is exhaustive: a thirteenth model is a compile error here, not
+/// The `match` is exhaustive: a further model is a compile error here, not
 /// a payment that silently lands under a default head.
 ///
 /// # Errors
@@ -232,10 +237,12 @@ pub fn zuordnung(model: SettlementModel) -> Result<EnfgZuordnung, KeinEnfgPosten
     use SettlementModel as M;
     match model {
         // § 19 Abs. 1 Nr. 1 (Marktprämie nach § 20), Nr. 2 (Einspeisevergütung
-        // nach § 21 Abs. 1 Nr. 1–4, the Ausfallvergütung being Nr. 3) and Nr. 3
-        // (Mieterstromzuschlag nach § 21 Abs. 3) EEG 2023.
+        // nach § 21 Abs. 1 Nr. 1–4, the unentgeltliche Abnahme being Nr. 2 and
+        // the Ausfallvergütung Nr. 3) and Nr. 3 (Mieterstromzuschlag nach § 21
+        // Abs. 3) EEG 2023.
         M::Verguetung
         | M::Ausfallverguetung
+        | M::UnentgeltlicheAbnahme
         | M::Direktvermarktung
         | M::Ausschreibung
         | M::Mieterstrom => Ok(EnfgZuordnung::Ein(Eeg19Abs1)),
@@ -299,6 +306,7 @@ mod tests {
         for m in [
             SettlementModel::Verguetung,
             SettlementModel::Ausfallverguetung,
+            SettlementModel::UnentgeltlicheAbnahme,
             SettlementModel::Direktvermarktung,
             SettlementModel::Ausschreibung,
             SettlementModel::Mieterstrom,

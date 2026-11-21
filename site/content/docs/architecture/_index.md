@@ -151,6 +151,7 @@ The pure, zero-I/O crates domain logic lives in:
 | `grid-billing` | NNE/KA/MMM/MSB grid settlement | `settle_nne`, `SettlementResult` with `CalculationTrace`; `reverse()`; opt-in `bo4e` → `into_rechnung()` |
 | `energy-billing` | Multi-product retail billing (LF) | `Product` (13 categories) through `BillingEngine`; §14a loads, Strom-/Energiesteuer, HT/NT, §41a EPEX; optional `eeg` and `bo4e` features |
 | `eeg-billing` | EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 10 schemes, §51/§52 rules; opt-in `bo4e` → §14 UStG Gutschrift as BO4E `Rechnung` |
+| `mako-messkonzept` | The Messkonzept of a Netzanschluss | `Netzanschluss::lokationsbuendel` (each Lokation with the source requiring it), `Netzanschluss::decisions` (§ 14a module, feed-in mode, iMSys, a further household — euros from `grid-billing`/`eeg-billing`), `Change::between`, `Catalogue::matching`, `structures` (BDEW Codeliste) |
 | `mako-invoic` | The INVOIC settle/dispute process, shared by GPKE, WiM, GaBi Gas and GeLi Gas | `InvoicFamily`, `InvoicWorkflow<F>` |
 | `invoic-checker` | INVOIC plausibility, eight stages | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `mako-pruefung` | The published Antwortcode decision trees, executable | `nb`/`lf`/`msb`/`mabis` behind `role-*` features; `codes::lookup`; `Cluster` picks the answer PID; unknown facts escalate |
@@ -271,7 +272,7 @@ All **14** daemons share one operational model:
 
 Ports, market roles and per-daemon design live in the
 [Services section](@/docs/services/_index.md). `makod` is the protocol gateway
-the rest sits behind: EDIFACT ↔ BO4E, 82 workflows over 499 Prüfidentifikatoren,
+the rest sits behind: EDIFACT ↔ BO4E, 83 workflows over 499 Prüfidentifikatoren,
 AS4 ingest and the deadline scheduler.
 
 | Daemon | Port | Role in the mesh |
@@ -515,10 +516,10 @@ signs, encrypts and verifies the receipt (`asx-rs`). Success acknowledges the
 entry; a failure retries inside the 72-hour window, then dead-letters. An
 unknown recipient dead-letters at once.
 
-A message addressed to the operator's own MP-ID bypasses AS4: `BdewAs4Sender`
+A message addressed to one of the operator's own MP-IDs bypasses AS4: `BdewAs4Sender`
 renders it, re-parses it with `Platform::parse_interchange` and hands each
 message to `EdifactIngestDispatcher::dispatch`. See
-[Integrated operators](@/docs/services/makod.md#integrated-operators-nb-msb-same-mp-id).
+[Integrated operators](@/docs/services/makod.md#integrated-operators-nb-lf-and-msb-in-one-deployment).
 
 ### ERP CloudEvents delivery
 

@@ -324,7 +324,7 @@ pub(crate) fn account_not_found(malo_id: &str) -> ApiError {
         .with_code("account_not_found")
 }
 
-/// The account's balance. `lf_mp_id` defaults to the tenant.
+/// The account's balance under the Lieferant `lf_mp_id`.
 ///
 /// # Errors
 ///
@@ -333,9 +333,8 @@ pub async fn balance(
     pool: &PgPool,
     tenant: &str,
     malo_id: &str,
-    lf_mp_id: Option<&str>,
+    lf_mp_id: &str,
 ) -> Result<Kontostand, ApiError> {
-    let lf_mp_id = lf_mp_id.unwrap_or(tenant);
     let a = crate::pg::fetch_account(pool, malo_id, lf_mp_id, tenant)
         .await
         .map_err(ApiError::internal)?
@@ -351,7 +350,7 @@ pub async fn balance(
 }
 
 /// The newest `limit` movements (default 100, at most 1000), with the balance
-/// the window opens at. `lf_mp_id` defaults to the tenant.
+/// the window opens at, under the Lieferant `lf_mp_id`.
 ///
 /// # Errors
 ///
@@ -361,10 +360,9 @@ pub async fn ledger(
     ledger: &crate::ledger::PgLedger,
     tenant: &str,
     malo_id: &str,
-    lf_mp_id: Option<&str>,
+    lf_mp_id: &str,
     limit: Option<i64>,
 ) -> Result<Kontoauszug, ApiError> {
-    let lf_mp_id = lf_mp_id.unwrap_or(tenant);
     let a = crate::pg::fetch_account(pool, malo_id, lf_mp_id, tenant)
         .await
         .map_err(ApiError::internal)?

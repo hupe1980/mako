@@ -53,17 +53,18 @@ web-service address per certificate.
 
 A receiving MSH therefore checks the signing certificate's OU against `eb:From`,
 and `makod` holds **one AS4 client per `[[party]]`**, each with its own three key
-pairs. A combined Strom+Gas operator holds two:
+pairs. A Lieferant in Strom and Gas holds two:
 
 ```toml
 [deployment]
-rollen = ["lf-strom", "msb-strom", "lf-gas", "msb-gas"]
+tenant = "stadtwerke-musterstadt"
+rollen = ["lf-strom", "lf-gas"]
 
 # Strom identity: BDEW-Codenummer (99…)
 [[party]]
 mp_id   = "9900357000004"
 primary = true
-roles   = ["LF", "MSB"]
+roles   = ["LF"]
 
 [party.as4]
 signing_cert_pem_file    = "/etc/makod/9900357000004/signing.cert.pem"   # EMT.MAK leaf, then intermediates
@@ -76,7 +77,7 @@ tls_key_pem_file         = "/etc/makod/9900357000004/tls.key.pem"
 # Gas identity: DVGW-Codenummer (98…)
 [[party]]
 mp_id = "9800357000005"
-roles = ["LFG", "GMSB"]
+roles = ["LFG"]
 
 [party.as4]
 signing_cert_pem_file    = "/etc/makod/9800357000005/signing.cert.pem"

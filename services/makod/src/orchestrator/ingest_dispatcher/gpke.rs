@@ -927,6 +927,21 @@ impl EdifactIngestDispatcher {
                     })
                 }
             }
+            // ── Antwort auf Berechnungsformel (UTILTS 25010) ──────────────────
+            // The MSB answers the NB's own 25001 and names it in `RFF+TN`;
+            // resume only — a 25010 to a formula this NB never sent opens
+            // nothing.
+            "gpke-berechnungsformel" => {
+                let cmd = adapters::gpke_berechnungsformel_registry().dispatch(raw, &fv)?;
+                let key = adapters::berechnungsformel_referenz(msg).unwrap_or_default();
+                self.resume_by_key::<mako_gpke::berechnungsformel::GpkeBerechnungsformelWorkflow>(
+                    inbound,
+                    &key,
+                    "gpke-berechnungsformel",
+                    cmd,
+                )
+                .await
+            }
             // ── GPKE Datenabruf ORDRSP/Ablehnung ──────────────────────────────
             // This side sent the ORDERS 17004/17102/17113; the only inbound
             // message is the MSB's rejection ORDRSP 19007/19102/19114. It

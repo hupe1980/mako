@@ -407,6 +407,29 @@ impl MpIdRegistry {
                 }
             }
 
+            // Kap. 2.13: one MP-ID names one Marktrolle. A sub-qualifier names
+            // its role (`VNB` is an `NB`), so `["NB", "VNB"]` is one role.
+            let mut marktrollen: Vec<&str> =
+                party.roles.iter().filter_map(|r| ahb_rolle(r)).collect();
+            marktrollen.sort_unstable();
+            marktrollen.dedup();
+            if marktrollen.len() > 1 {
+                out.push(
+                    ident(
+                        format!("party[{i}].roles"),
+                        format!(
+                            "[[party]] mp_id = {:?} names the Marktrollen {marktrollen:?}. \
+                             „Marktteilnehmer benötigen für jede Marktrolle Marktfunktion im \
+                             Strom- bzw. Gasmarkt eine gesonderte Codenummer\" (Allgemeine \
+                             Festlegungen V6.1d Kap. 2.13) — give each role its own [[party]] \
+                             entry.",
+                            party.mp_id,
+                        ),
+                    )
+                    .quelle("Allgemeine Festlegungen V6.1d, Kap. 2.13"),
+                );
+            }
+
             // Kap. 2.13: a single [[party]] entry must not mix Strom and Gas roles.
             if !strom_roles.is_empty() && !gas_roles.is_empty() {
                 out.push(
@@ -442,6 +465,7 @@ impl MpIdRegistry {
     ///   not an MP-ID).
     /// - Two entries share the same MP-ID (each Marktrolle requires its own code).
     /// - A role appears in more than one entry.
+    /// - An entry names more than one Marktrolle (Allgemeine Festlegungen Kap. 2.13).
     /// - More than one entry has `primary = true`.
     /// - A role string is not a known BDEW Marktrolle.
     /// - A single entry mixes Strom roles with Gas roles (Allgemeine Festlegungen Kap. 2.13).
@@ -573,11 +597,7 @@ impl MpIdRegistry {
     /// BDEW sub-qualifiers name the same Marktrolle at finer granularity —
     /// `ANB` and `VNB` are both Netzbetreiber Strom — and `[[party]]` accepts
     /// them, so a caller asking for `"NB"` must find a party that declared
-    /// `"VNB"`. Looking up only the literal string returned `None` here, and
-    /// [`mp_id_for_role_or_primary`] then silently substituted the primary
-    /// MP-ID: in a multi-party deployment that put a *different Marktrolle's*
-    /// code into NAD+MS and the UNB sender, which is precisely the identity
-    /// confusion Allgemeine Festlegungen Kap. 2.13 exists to prevent.
+    /// `"VNB"`.
     ///
     /// The Sparte guard is what keeps the widening safe: `GNB` also
     /// canonicalises to `NB`, but it is a Gas role with its own DVGW code, so a
@@ -586,8 +606,6 @@ impl MpIdRegistry {
     /// Returns `None` when no entry declares the role, and — with a warning —
     /// when two entries canonicalise to it with different MP-IDs, since
     /// guessing between them is how a wrong sender reaches the wire.
-    ///
-    /// [`mp_id_for_role_or_primary`]: MpIdRegistry::mp_id_for_role_or_primary
     #[must_use]
     pub fn mp_id_for_role(&self, role: &str) -> Option<&str> {
         let upper = role.to_uppercase();
@@ -625,32 +643,37 @@ impl MpIdRegistry {
         found
     }
 
-    /// Returns the MP-ID for the given BDEW Marktrolle, or [`primary_mp_id`] as fallback.
+    /// The MP-ID of the given BDEW Marktrolle, or the deployment's only MP-ID.
     ///
-    /// The fallback is correct for a single-`[[party]]` deployment, where the
-    /// primary MP-ID *is* every role's code. With several parties it means the
-    /// message goes out under some other Marktrolle's code, so it warns.
-    ///
-    /// [`primary_mp_id`]: MpIdRegistry::primary_mp_id
+    /// With a single `[[party]]` that MP-ID is the only identity the deployment
+    /// has. With several, any other would be a different Marktrolle's code on
+    /// the wire (Allgemeine Festlegungen 6.1d Kap. 2.13), so it answers `None`.
     #[must_use]
-    pub fn mp_id_for_role_or_primary(&self, role: &str) -> &str {
-        match self.mp_id_for_role(role) {
-            Some(mp_id) => mp_id,
-            None => {
-                if self.own_mp_ids.len() > 1 {
-                    tracing::warn!(
-                        role,
-                        primary = %self.primary_mp_id,
-                        configured_roles = ?self.all_roles,
-                        "no [[party]] entry declares Marktrolle {role}; falling back to the \
-                         primary MP-ID, which belongs to a different Marktrolle. The outbound \
-                         message will carry the wrong sender identity (Allgemeine Festlegungen Kap. 2.13). Add a \
-                         [[party]] entry for {role}.",
-                    );
-                }
-                self.primary_mp_id()
-            }
-        }
+    pub fn mp_id_for_role_or_sole(&self, role: &str) -> Option<&str> {
+        self.mp_id_for_role(role).or_else(|| self.sole_mp_id())
+    }
+
+    /// A one-party registry for tests: `mp_id` is the deployment's only
+    /// MP-ID, so every lookup without a declared role falls back to it.
+    #[cfg(test)]
+    #[must_use]
+    pub fn single(mp_id: &str) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(
+            Self::from_config(&[crate::config::PartyConfig {
+                mp_id: mp_id.to_owned(),
+                roles: vec!["NB".to_owned()],
+                primary: true,
+                agency: None,
+                as4: None,
+            }])
+            .expect("a valid MP-ID"),
+        )
+    }
+
+    /// The deployment's MP-ID when it has exactly one `[[party]]`, else `None`.
+    #[must_use]
+    pub fn sole_mp_id(&self) -> Option<&str> {
+        (self.own_mp_ids.len() == 1).then(|| self.primary_mp_id())
     }
 
     /// Returns the NAD DE3055 agency code for the given Marktpartner-ID.
@@ -678,13 +701,8 @@ impl MpIdRegistry {
     }
 
     /// The Marktrolle `mp_id` holds in this deployment, in the AHB's spelling
-    /// (`LF`, `NB`, `MSB`, `ÜNB`, …) — `None` for a counterparty, or for an own
-    /// MP-ID declared with roles of more than one AHB role.
-    ///
-    /// Each MP-ID identifies one Marktrolle („Für jede Sparte (Gas bzw. Strom)
-    /// und jede Rolle hat ein Markteilnehmer genau eine MP-ID", Identifikatoren
-    /// AWH V1.2 Kap. 2.1, S. 4), so an MP-ID declared with two cannot say which
-    /// one a message speaks as, and its role Bedingungen stay undecided.
+    /// (`LF`, `NB`, `MSB`, `ÜNB`, …) — `None` for a counterparty. An own MP-ID
+    /// names exactly one, which [`Self::pruefe`] holds.
     #[must_use]
     pub fn ahb_rolle(&self, mp_id: &str) -> Option<&'static str> {
         let mut rollen = self
@@ -783,109 +801,98 @@ impl MpIdRegistry {
     /// Marktrolle in both — `17115`/`17117` are a Sperrauftrag from the LF in
     /// GPKE and from the LFG in the AWH Sperrprozesse Gas. Pass the emitting
     /// workflow's `sparte` and the right one is chosen; pass `None` and the two
-    /// are weighed against each other, which in a dual-fuel deployment can only
-    /// warn and fall back to [`primary_mp_id`].
+    /// are weighed against each other.
     ///
-    /// [`primary_mp_id`]: MpIdRegistry::primary_mp_id
+    /// `None` when no declared role sends the PID and the deployment has more
+    /// than one MP-ID: the caller refuses rather than send under another
+    /// Marktrolle's code.
     #[must_use]
     pub fn sender_mp_id_for_orders_pid(
         &self,
         pid: u32,
         sparte: Option<mako_engine::types::Sparte>,
-    ) -> &str {
+    ) -> Option<&str> {
         use mako_engine::types::Sparte;
         match pid {
             // ── Sperrung / Entsperrung (PIDs 17115–17117) ──────────────────
             // LF initiates Sperrung Strom; LFG initiates Sperrung Gas.
             17115 | 17117 => match sparte {
-                Some(Sparte::Strom) => self.mp_id_for_role_or_primary("LF"),
-                Some(Sparte::Gas) => self.mp_id_for_role_or_primary("LFG"),
+                Some(Sparte::Strom) => self.mp_id_for_role_or_sole("LF"),
+                Some(Sparte::Gas) => self.mp_id_for_role_or_sole("LFG"),
                 None => self.resolve_ambiguous(pid, "LF", "LFG"),
             },
             // NB / GNB issues Entsperrung / MSB-Beauftragung.
             17116 => match sparte {
-                Some(Sparte::Strom) => self.mp_id_for_role_or_primary("NB"),
-                Some(Sparte::Gas) => self.mp_id_for_role_or_primary("GNB"),
+                Some(Sparte::Strom) => self.mp_id_for_role_or_sole("NB"),
+                Some(Sparte::Gas) => self.mp_id_for_role_or_sole("GNB"),
                 None => self.resolve_ambiguous(pid, "NB", "GNB"),
             },
 
             // ── GPKE Konfigurationseinrichtung (NB → MSB, Teil 3) ───────────
-            17134 | 17135 => self.mp_id_for_role_or_primary("NB"),
+            17134 | 17135 => self.mp_id_for_role_or_sole("NB"),
 
             // ── WiM Geräteübernahme (NB → MSB / MSBA) ──────────────────────
-            17001..=17011 => self.mp_id_for_role_or_primary("NB"),
+            17001..=17011 => self.mp_id_for_role_or_sole("NB"),
 
             // ── Datenabruf / Reklamation (LF → NB/MSB) ─────────────────────
-            17102 | 17113 => self.mp_id_for_role_or_primary("LF"),
+            17102 | 17113 => self.mp_id_for_role_or_sole("LF"),
 
             // ── Allokationsliste Gas (LF → NB) ──────────────────────────────
-            17110 | 17114 => self.mp_id_for_role_or_primary("LF"),
+            17110 | 17114 => self.mp_id_for_role_or_sole("LF"),
 
             // ── GPKE Konfigurationsänderung (LF → NB/MSB, Teil 3) ──────────
-            17120..=17133 => self.mp_id_for_role_or_primary("LF"),
+            17120..=17133 => self.mp_id_for_role_or_sole("LF"),
 
             // ── GeLi Gas 2.0 Anforderung Brennwert / Zustandszahl ───────────
             // PID overview 4.0 row 37780: LF → NB, GeLi Gas — so the Gas LF.
             // This was `resolve_ambiguous(LFG, GNB)`: the GNB is the *receiver*
             // and never the sender, so a dual-fuel deployment resolved it as
             // ambiguous and fell back to the primary MP-ID.
-            17103 => self.mp_id_for_role_or_primary("LFG"),
+            17103 => self.mp_id_for_role_or_sole("LFG"),
 
             // ── GPKE Teil 4 Geschäftsdatenanfrage vom MSB Gas ───────────────
             // PID overview 4.0 row 25560: **MSB (Gas) → NB (Strom)** — a Gas
             // Messstellenbetreiber asking a Strom Netzbetreiber. Neither LFG nor
             // GNB is the sender.
-            17104 => self.mp_id_for_role_or_primary("GMSB"),
+            17104 => self.mp_id_for_role_or_sole("GMSB"),
 
             // ── GeLi Gas Geschäftsdatenanfrage (LF → NB, Gas) ───────────────
-            17101 => self.mp_id_for_role_or_primary("LFG"),
+            17101 => self.mp_id_for_role_or_sole("LFG"),
 
             // ── MaBiS Anforderungen (BK6-24-174) ────────────────────────────
             // Sender per the PID overview 4.0 Kommunikation columns.
-            17201 | 17202 | 17210 | 17211 => self.mp_id_for_role_or_primary("LF"),
-            17203 | 17204 | 17207 => self.mp_id_for_role_or_primary("BKV"),
-            17205 | 17206 => self.mp_id_for_role_or_primary("NB"),
-            17208 => self.mp_id_for_role_or_primary("UNB"),
+            17201 | 17202 | 17210 | 17211 => self.mp_id_for_role_or_sole("LF"),
+            17203 | 17204 | 17207 => self.mp_id_for_role_or_sole("BKV"),
+            17205 | 17206 => self.mp_id_for_role_or_sole("NB"),
+            17208 => self.mp_id_for_role_or_sole("UNB"),
 
             // ── Redispatch 2.0 Anforderung Ausfallarbeit (anfNB → ANB) ──────
-            17209 => self.mp_id_for_role_or_primary("NB"),
+            17209 => self.mp_id_for_role_or_sole("NB"),
 
-            _ => {
-                // Not a silent fallback. In a single-MP-ID deployment the
-                // primary is trivially right; in the VIU configuration Kap. 2.13
-                // mandates — one MP-ID per Marktrolle per Sparte — it is a
-                // wrong `NAD+MS` on the wire, and that is the defect this
-                // table exists to prevent, so it is logged.
-                tracing::warn!(
-                    pid,
-                    "no sending Marktrolle is known for this ORDERS PID; falling back \
-                     to the primary MP-ID. Set \"sender\" in the ORDERS payload, or add \
-                     the PID to sender_mp_id_for_orders_pid.",
-                );
-                self.primary_mp_id()
-            }
+            // No sending Marktrolle known: only a single-party deployment
+            // has an answer that is not another role's code.
+            _ => self.sole_mp_id(),
         }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    fn resolve_ambiguous(&self, pid: u32, role_a: &str, role_b: &str) -> &str {
+    fn resolve_ambiguous(&self, pid: u32, role_a: &str, role_b: &str) -> Option<&str> {
         match (self.mp_id_for_role(role_a), self.mp_id_for_role(role_b)) {
-            (Some(a), Some(b)) if a == b => a,
+            (Some(a), Some(b)) if a == b => Some(a),
             (Some(_), Some(_)) => {
                 tracing::warn!(
                     pid,
                     role_a,
                     role_b,
                     "ORDERS sender MP-ID is ambiguous: {role_a} and {role_b} have \
-                     different MP-IDs. Set \"sender\" in the ORDERS payload to resolve. \
-                     Falling back to primary_mp_id.",
+                     different MP-IDs. Set \"sender\" in the ORDERS payload.",
                 );
-                self.primary_mp_id()
+                None
             }
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => self.primary_mp_id(),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => self.sole_mp_id(),
         }
     }
 }
@@ -963,7 +970,7 @@ mod role_resolution_tests {
         assert_eq!(reg.mp_id_for_role("NB"), Some("9900001000002"));
         assert_eq!(
             reg.sender_mp_id_for_orders_pid(17134, None),
-            "9900001000002",
+            Some("9900001000002"),
             "GPKE Konfigurationseinrichtung is sent by the NB, not the MSB"
         );
         assert_eq!(reg.mp_id_for_role("ANB"), Some("9900001000002"));
@@ -1015,13 +1022,20 @@ mod role_resolution_tests {
         assert_eq!(reg.mp_id_for_role("NB"), None);
     }
 
-    /// A single-party deployment keeps the primary fallback: that MP-ID really
-    /// is every role's code there.
+    /// A single-party deployment answers with its only MP-ID; a multi-party
+    /// one refuses, since any choice is another Marktrolle's code.
     #[test]
-    fn a_single_party_deployment_still_falls_back_to_primary() {
-        let parties = vec![party("9900001000001", &["NB"], true)];
-        let reg = MpIdRegistry::from_config(&parties).expect("valid config");
-        assert_eq!(reg.mp_id_for_role_or_primary("BKV"), "9900001000001");
+    fn only_a_single_party_deployment_falls_back() {
+        let reg = MpIdRegistry::from_config(&[party("9900001000001", &["NB"], true)])
+            .expect("valid config");
+        assert_eq!(reg.mp_id_for_role_or_sole("BKV"), Some("9900001000001"));
+        let reg = MpIdRegistry::from_config(&[
+            party("9900001000001", &["NB"], true),
+            party("9900001000002", &["LF"], false),
+        ])
+        .expect("valid config");
+        assert_eq!(reg.mp_id_for_role_or_sole("BKV"), None);
+        assert_eq!(reg.sender_mp_id_for_orders_pid(17999, None), None);
     }
 }
 
@@ -1093,11 +1107,9 @@ mod tests {
 
     #[test]
     fn single_party_no_primary_flag() {
-        let reg =
-            MpIdRegistry::from_config(&[party("9900001000001", &["NB", "LF"], false)]).unwrap();
+        let reg = MpIdRegistry::from_config(&[party("9900001000001", &["NB"], false)]).unwrap();
         assert_eq!(reg.primary_mp_id(), "9900001000001");
         assert_eq!(reg.mp_id_for_role("NB"), Some("9900001000001"));
-        assert_eq!(reg.mp_id_for_role("LF"), Some("9900001000001"));
         assert_eq!(reg.primary_agency(), "293"); // 99-prefix → BDEW
     }
 
@@ -1120,10 +1132,10 @@ mod tests {
     }
 
     #[test]
-    fn mp_id_for_role_or_primary_fallback() {
+    fn mp_id_for_role_or_sole_fallback() {
         let reg = MpIdRegistry::from_config(&[party("9900001000001", &["NB"], true)]).unwrap();
-        assert_eq!(reg.mp_id_for_role_or_primary("NB"), "9900001000001");
-        assert_eq!(reg.mp_id_for_role_or_primary("LF"), "9900001000001"); // fallback to primary
+        assert_eq!(reg.mp_id_for_role_or_sole("NB"), Some("9900001000001"));
+        assert_eq!(reg.mp_id_for_role_or_sole("LF"), Some("9900001000001"));
     }
 
     #[test]
@@ -1250,7 +1262,8 @@ mod tests {
     fn deployment_role_strings_normalisation() {
         // Gas sub-qualifiers map to Strom-canonical engine role names.
         let parties = vec![
-            party("9800001000001", &["GNB", "GMSB"], false), // GNB→NB, GMSB→MSB
+            party("9800001000001", &["GNB"], false),  // GNB→NB
+            party("9800001000005", &["GMSB"], false), // GMSB→MSB
             party("9800001000002", &["LFG"], false),
             party("9800001000003", &["FNB"], false), // FNB→UNB
             party("9800001000004", &["MGV"], false), // excluded (no engine role)
@@ -1341,22 +1354,48 @@ mod tests {
         assert!(MpIdRegistry::from_config(&[p]).is_err());
     }
 
+    /// RB is sparte-neutral: beside a Strom and a Gas party it trips no
+    /// Sparte check.
     #[test]
     fn rb_is_sparte_neutral() {
-        // RB alongside Strom roles must not trigger Kap. 2.13.
-        let r = MpIdRegistry::from_config(&[party("9900001000001", &["NB", "RB"], true)]);
-        assert!(r.is_ok(), "NB+RB should be ok: {r:?}");
+        let r = MpIdRegistry::from_config(&[
+            party("9900001000001", &["NB"], true),
+            party("9800001000001", &["GNB"], false),
+            party("4012345000023", &["RB"], false),
+        ]);
+        assert!(r.is_ok(), "NB, GNB and RB on their own codes: {r:?}");
+    }
 
-        // RB alongside Gas roles must not trigger Kap. 2.13.
-        let r = MpIdRegistry::from_config(&[party("9800001000001", &["GNB", "RB"], true)]);
-        assert!(r.is_ok(), "GNB+RB should be ok: {r:?}");
+    /// One MP-ID names one Marktrolle (Allgemeine Festlegungen 6.1d Kap.
+    /// 2.13): an NB and an MSB of one company hold two Codenummern.
+    #[test]
+    fn err_two_marktrollen_on_one_mp_id() {
+        for roles in [
+            &["NB", "MSB"][..],
+            &["NB", "LF", "MSB"],
+            &["GNB", "LFG"],
+            &["NB", "RB"],
+        ] {
+            let err = MpIdRegistry::from_config(&[party("9900001000001", roles, true)])
+                .expect_err("two Marktrollen on one MP-ID");
+            assert!(err.to_string().contains("Kap. 2.13"), "{roles:?}: {err}");
+        }
+    }
+
+    /// A sub-qualifier names its role, so `NB` beside `VNB` is one Marktrolle.
+    #[test]
+    fn a_sub_qualifier_is_the_same_marktrolle() {
+        let r = MpIdRegistry::from_config(&[party("9900001000001", &["NB", "VNB"], true)]);
+        assert!(r.is_ok(), "{r:?}");
     }
 
     #[test]
     fn separate_strom_gas_entries_ok() {
         let parties = vec![
-            party("9900001000001", &["NB", "MSB"], true), // Strom (NB+MSB share BDEW code — valid)
-            party("9800001000001", &["GNB", "GMSB"], false), // Gas
+            party("9900001000001", &["NB"], true),
+            party("9900001000003", &["MSB"], false),
+            party("9800001000001", &["GNB"], false),
+            party("9800001000003", &["GMSB"], false),
             party("9800001000002", &["LFG"], false),
         ];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
@@ -1368,9 +1407,9 @@ mod tests {
     #[test]
     fn sparte_of_resolves_own_mp_ids() {
         let parties = vec![
-            party("9900001000001", &["NB", "MSB"], true),    // Strom
-            party("9800001000001", &["GNB", "GMSB"], false), // Gas
-            party("4012345000023", &["RB"], false),          // sparte-neutral (GS1 GLN)
+            party("9900001000001", &["NB"], true),   // Strom
+            party("9800001000001", &["GNB"], false), // Gas
+            party("4012345000023", &["RB"], false),  // sparte-neutral (GS1 GLN)
         ];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
         assert_eq!(reg.sparte_of("9900001000001"), Some(RoleSparte::Strom));
@@ -1404,8 +1443,8 @@ mod tests {
     #[test]
     fn err_duplicate_role() {
         let parties = vec![
-            party("9900001000001", &["NB", "LF"], true),
-            party("9900001000002", &["LF", "MSB"], false), // LF in both
+            party("9900001000001", &["LF"], true),
+            party("9900001000002", &["LF"], false), // LF in both
         ];
         assert!(MpIdRegistry::from_config(&parties).is_err());
     }
@@ -1528,16 +1567,15 @@ mod orders_sender_coverage {
             // The NB is the primary here, so a PID whose real sender *is* the
             // NB is indistinguishable from a fallback. Those are listed in the
             // table explicitly, so check the table rather than the value.
-            if reg.sender_mp_id_for_orders_pid(pid, sparte_of(pid)) == primary
-                && !NB_SENT.contains(&pid)
-            {
+            let sender = reg.sender_mp_id_for_orders_pid(pid, sparte_of(pid));
+            if sender.is_none() || (sender == Some(primary) && !NB_SENT.contains(&pid)) {
                 fell_through.push(pid);
             }
         }
         assert!(
             fell_through.is_empty(),
-            "these routed ORDERS PIDs have no sending Marktrolle and fall back to the \
-             primary MP-ID, which is a wrong NAD+MS in any multi-role deployment: {fell_through:?}\n\
+            "these routed ORDERS PIDs have no sending Marktrolle, so a multi-role \
+             deployment refuses to render them: {fell_through:?}\n\
              Add each to sender_mp_id_for_orders_pid, or to EXEMPT with a reason."
         );
     }
@@ -1554,7 +1592,7 @@ mod orders_sender_coverage {
     ];
 
     /// The roles the table names must be roles `[[party]]` accepts, or the
-    /// lookup silently falls back to the primary for every deployment.
+    /// lookup refuses in every multi-role deployment.
     #[test]
     fn the_named_roles_resolve_in_a_viu_registry() {
         let reg = registry();
@@ -1567,7 +1605,7 @@ mod orders_sender_coverage {
         ] {
             assert_eq!(
                 reg.sender_mp_id_for_orders_pid(pid, sparte_of(pid)),
-                expected,
+                Some(expected),
                 "PID {pid} resolved to the wrong Marktrolle's MP-ID"
             );
         }

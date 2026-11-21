@@ -64,7 +64,7 @@ async fn combined_with(
             .expect("in-memory store"),
     );
     // One tenant for the deployment, both roles inside it.
-    let tenant_id = TenantId::from_party_id(GNB_MP);
+    let tenant_id = TenantId::from_tenant(GNB_MP);
     let dispatcher = EdifactIngestDispatcher::new(
         Arc::clone(&store),
         store.as_snapshot_store(),
@@ -73,7 +73,8 @@ async fn combined_with(
     );
     let state = CommandsApiState {
         tenant_id,
-        sender_party_id: GNB_MP.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(GNB_MP),
         configured_marktrollen: vec!["GNB".to_owned(), "LFG".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,

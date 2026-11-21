@@ -42,7 +42,7 @@ async fn gnb() -> (
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant_id = TenantId::from_party_id(GNB_MP);
+    let tenant_id = TenantId::from_tenant(GNB_MP);
     let dispatcher = EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),
@@ -55,7 +55,8 @@ async fn gnb() -> (
     );
     let state = CommandsApiState {
         tenant_id,
-        sender_party_id: GNB_MP.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(GNB_MP),
         configured_marktrollen: vec!["GNB".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,

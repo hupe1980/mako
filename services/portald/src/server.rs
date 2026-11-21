@@ -24,6 +24,19 @@ impl Daemon for Portald {
     /// everyone.
     fn validate(cfg: &PortaldConfig) -> Vec<mako_service::Befund> {
         let mut out = Vec::new();
+        // An `env:` reference resolves at build; its value is checked there.
+        if !cfg.lf_mp_id.starts_with("env:")
+            && let Err(e) = rubo4e::identifiers::MarktpartnerId::new(cfg.lf_mp_id.trim())
+        {
+            out.push(mako_service::Befund::blockiert(
+                "lf_mp_id",
+                format!(
+                    "lf_mp_id {:?} is not an MP-ID ({e}) — set the Lieferant's 13-digit \
+                     BDEW- or DVGW-Codenummer, as in accountingd",
+                    cfg.lf_mp_id
+                ),
+            ));
+        }
         if cfg.vertragd_url.is_none() && !cfg.allow_insecure_no_auth {
             out.push(
                 mako_service::Befund::blockiert(
@@ -43,6 +56,8 @@ impl Daemon for Portald {
     async fn build(cfg: Arc<PortaldConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
         let mut cfg = (*cfg).clone();
         cfg.resolve_env_refs()?;
+        rubo4e::identifiers::MarktpartnerId::new(cfg.lf_mp_id.trim())
+            .map_err(|e| anyhow::anyhow!("lf_mp_id {:?} is not an MP-ID: {e}", cfg.lf_mp_id))?;
 
         if cfg.allow_insecure_no_auth {
             tracing::warn!(

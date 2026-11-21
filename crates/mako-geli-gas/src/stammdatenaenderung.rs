@@ -2056,6 +2056,7 @@ mod tests {
     fn gemeinderabatt() -> Stammdaten {
         Stammdaten {
             bloecke: vec![mako_engine::payload::StammdatenBlock {
+                zeitraum_id: None,
                 seq: "Z12".to_owned(),
                 segmente: vec![mako_engine::payload::StammdatenSegment {
                     tag: "QTY".to_owned(),
@@ -2262,6 +2263,7 @@ mod tests {
         assert_eq!((p.process_date, p.vertragsbeginn), (None, None));
         let melos = Stammdaten {
             lokationen: vec![mako_engine::payload::StammdatenLokation {
+                zeitraum_id: None,
                 qualifier: "172".to_owned(),
                 id: "DE0000000000000000000000000000042".to_owned(),
             }],

@@ -219,6 +219,7 @@ pub mod anfrage_bestellung;
 pub mod ankuendigung_zuordnung_lf;
 pub mod antwortfrist;
 pub mod beendigung_zuordnung;
+pub mod berechnungsformel;
 pub mod datenabruf;
 pub mod datenabruf_msb;
 pub mod eog;
@@ -469,6 +470,9 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             WorkflowDriver::of::<stammdatenaenderung::GpkeStammdatenaenderungWorkflow>(
                 stammdatenaenderung::WORKFLOW_NAME,
             ),
+            WorkflowDriver::of::<berechnungsformel::GpkeBerechnungsformelWorkflow>(
+                berechnungsformel::WORKFLOW_NAME,
+            ),
             WorkflowDriver::of::<lf_anmeldung::GpkeLfAnmeldungWorkflow>(
                 lf_anmeldung::WORKFLOW_NAME,
             ),
@@ -656,7 +660,8 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             router.register(pid, abrechnungsdaten::WORKFLOW_NAME);
         }
 
-        // PID 55607 (Ankündigung Zuordnung LF, NB→LFN) — GPKE Teil 2 Kap. 2.2, BK6-24-174.
+        // PID 55607 (Ankündigung Zuordnung LF, NB→LF) — GPKE Teil 2 Kap. 2.4.2,
+        // Herstellung einer 100% LF-Zuordnung zu einer erzeugenden Marktlokation.
         // LF-role makod receives PID 55607 and responds with 55608/55609.
         for &pid in ANKUENDIGUNG_ZUORDNUNG_PIDS {
             router.register(pid, ankuendigung_zuordnung_lf::WORKFLOW_NAME);
@@ -797,6 +802,12 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         for &pid in utilts::UTILTS_PIDS {
             router.register(pid, utilts::WORKFLOW_NAME);
         }
+        // The MSB's Antwort auf Berechnungsformel resumes the NB's own 25001
+        // by the Vorgangsnummer it names in RFF+TN (WiM Strom Teil 2 Kap. 2.3).
+        router.register(
+            berechnungsformel::ANTWORT_PID,
+            berechnungsformel::WORKFLOW_NAME,
+        );
 
         // GPKE Stornierung PIDs 55022/55023/55024 (Anfrage + Antwort).
         // NB role: NB receives 55022 inbound and dispatches 55023/55024.
@@ -924,7 +935,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             },
             ProfileRequirement {
                 message_type: "UTILTS",
-                label: "UTILTS Konfigurationsdaten GPKE Teil 3 (25001, 25004–25010)",
+                label: "UTILTS Konfigurationsdaten GPKE Teil 3 (25001, 25004–25009) + Antwort auf Berechnungsformel (25010)",
             },
             ProfileRequirement {
                 message_type: "ORDERS",

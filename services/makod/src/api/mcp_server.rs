@@ -102,7 +102,7 @@ pub struct MakodMcpState {
     ///
     /// Single source of truth for tenant identity in this state struct.
     /// When `TenantId` (UUID) is needed for SlateDB operations, derive it
-    /// inline: `TenantId::from_party_id(&self.tenant)`.
+    /// inline: `TenantId::from_tenant(&self.tenant)`.
     pub tenant: String,
     /// Daemon version string (from `makod --version`).
     pub version: String,
@@ -962,7 +962,7 @@ impl MakodMcpHandler {
         match self
             .state
             .partner_store
-            .list(TenantId::from_party_id(&self.state.tenant))
+            .list(TenantId::from_tenant(&self.state.tenant))
             .await
         {
             Ok(all_partners) => {
@@ -1019,7 +1019,7 @@ impl MakodMcpHandler {
         match self
             .state
             .partner_store
-            .get(TenantId::from_party_id(&self.state.tenant), &mp_id)
+            .get(TenantId::from_tenant(&self.state.tenant), &mp_id)
             .await
         {
             Ok(Some(record)) => ContentBlock::json(&record)
@@ -1206,7 +1206,7 @@ impl MakodMcpHandler {
 
         let key = RegistryKey::parse(&p.business_key)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-        let tenant = TenantId::from_party_id(&self.state.tenant);
+        let tenant = TenantId::from_tenant(&self.state.tenant);
         let internal =
             |e: mako_engine::error::EngineError| McpError::internal_error(e.to_string(), None);
         let identities = processes_named(
@@ -1313,7 +1313,7 @@ impl MakodMcpHandler {
         };
         // The stream is derived from this deployment's tenant, so a process id
         // can name no other tenant's history.
-        let tenant = TenantId::from_party_id(&self.state.tenant);
+        let tenant = TenantId::from_tenant(&self.state.tenant);
         let stream = mako_engine::ids::StreamId::for_process(
             tenant,
             &mako_engine::ids::ProcessId::from_uuid(uuid),
@@ -1470,7 +1470,7 @@ Frist is its own outcome — processd `list_overdue_processes`.",
     )]
     async fn list_active_processes(&self) -> Result<CallToolResult, McpError> {
         use mako_engine::event_store::EventStore as _;
-        let prefix = format!("process/{}/", TenantId::from_party_id(&self.state.tenant));
+        let prefix = format!("process/{}/", TenantId::from_tenant(&self.state.tenant));
         let count = self
             .state
             .process_store
@@ -2190,7 +2190,7 @@ impl ServerHandler for MakodMcpHandler {
             return match self
                 .state
                 .partner_store
-                .get(TenantId::from_party_id(&self.state.tenant), &mp_id)
+                .get(TenantId::from_tenant(&self.state.tenant), &mp_id)
                 .await
             {
                 Ok(Some(record)) => {
@@ -2681,7 +2681,7 @@ mod tool_inventory_tests {
             .await
             .expect("store");
         let registry = store.as_process_registry();
-        let tenant = TenantId::from_party_id("9900357000004");
+        let tenant = TenantId::from_tenant("9900357000004");
         let process_id = ProcessId::new();
         let identity = ProcessIdentity::new(
             process_id,
@@ -2727,7 +2727,7 @@ mod tool_inventory_tests {
             .await
             .expect("store");
         let registry = store.as_process_registry();
-        let tenant = TenantId::from_party_id("9900357000004");
+        let tenant = TenantId::from_tenant("9900357000004");
         let malo = "51238696012";
         let mut expected = Vec::new();
         for (key, workflow) in [
@@ -2779,7 +2779,7 @@ mod tool_inventory_tests {
         let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
             .await
             .expect("store");
-        let tenant = TenantId::from_party_id("9900357000004");
+        let tenant = TenantId::from_tenant("9900357000004");
         let process = ProcessId::new();
         let ctx = CommandContext::new(
             tenant,

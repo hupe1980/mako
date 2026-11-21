@@ -1,0 +1,36 @@
++++
+title = "EEG-Vergütung — was verdient meine PV-Anlage?"
+description = "Der anzulegende Wert einer PV-Anlage nach EEG 2023 aus Größe und Inbetriebnahmedatum, mit Degression, dem Abzug nach § 53 und dem Ende des Förderzeitraums."
+template = "validator-tool.html"
+path = "de/rechner/eeg"
+
+[extra]
+tool = "eeg"
+family = "rechner"
+translated_from = "content/rechner-eeg.md"
+source_sha256 = "bcbeff7f7071dc8f045314d5b46fa70a64e6f744f8c49ef70e27fba453110a23"
+
+[extra.ui]
+privacy = "Läuft in deinem Browser · nichts verlässt diesen Tab"
+no_js = "Dieses Werkzeug läuft in deinem Browser und braucht dafür JavaScript."
+no_wasm = "Dieser Browser kann kein WebAssembly ausführen, das dieses Werkzeug braucht."
+loading = "Wird geladen …"
+load_failed = "Das Werkzeug ließ sich nicht laden"
+no_match = "Nichts passt."
+title = "Was verdient deine PV-Anlage?"
+lede = "Das EEG 2023 legt den Satz am Tag der Inbetriebnahme fest — nach Größe, Bauform und der **Degression** seitdem. Gib die Anlage ein; der Satz ist der, mit dem abgerechnet wird."
+bauform_label = "Bauform"
+aufdach = "Dach oder Gebäude"
+freiflaeche = "Freifläche"
+kwp_label = "Größe (kWp)"
+ibn_label = "In Betrieb seit"
+voll_label = "Volleinspeisung"
+einspeisung_label = "Eingespeist (kWh im Jahr, optional)"
+verguetung = "{ct} ct je kWh"
+aw = "Anzulegender Wert {aw} ct, abzüglich {abzug} ct nach § 53 EEG 2023 für die Einspeisevergütung."
+pro_jahr = "Etwa {eur} im Jahr für {kwh} kWh."
+bis = "Gezahlt bis {datum} (§ 25 EEG 2023)."
+no_aw = "Für diese Anlage gibt es keinen gesetzlichen Satz"
+no_aw_hint = "Ab dieser Größe kommt die Zahlung aus einer Ausschreibung, nicht aus dem Gesetz (§ 22 EEG 2023)."
+source = "§§ 48, 49, 53 EEG 2023."
++++

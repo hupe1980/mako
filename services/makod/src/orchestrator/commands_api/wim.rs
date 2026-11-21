@@ -262,7 +262,15 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
 
     let domain_cmd = DeviceChangeCommand::InitiateDeviceChange {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(
+            &[match (pid_code / 1000, pid_code % 1000) {
+                (55, 168) => "NB",
+                (44, 168) => "GNB",
+                (55, _) => "MSB",
+                _ => "GMSB",
+            }],
+            "",
+        )?),
         receiver: MarktpartnerCode::new(receiver_mp_id),
         melo_id: melo_id.clone(),
         process_date,
@@ -949,6 +957,10 @@ struct PreisanfrageBody {
     /// The Marktlokation the Anfrage addresses.
     #[serde(default)]
     malo_id: Option<String>,
+    /// `NB` or `LF` — the role asking a 35004/35005; needed when the
+    /// deployment plays both.
+    #[serde(default)]
+    anfragender: Option<String>,
 }
 
 pub(super) fn cmd_wim_preisanfrage_anfragen<'a>(
@@ -966,7 +978,7 @@ pub(super) fn cmd_wim_preisanfrage_anfragen<'a>(
 /// the answering QUOTES echoes and the ingest resumes by. The MSB's answer
 /// window is registered in the same write, per PID from the table the
 /// responding side sizes its own by ([`mako_wim::preisanfrage_antwort_frist_werktage`]):
-/// 35001 4 WT, 35002 5 WT, 35005 10 WT; 35004 states none, so it carries none.
+/// 35001 4 WT, 35002 5 WT, 35005 5 WT; 35004 states none, so it carries none.
 async fn dispatch_wim_preisanfrage_anfragen(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -1024,7 +1036,21 @@ async fn dispatch_wim_preisanfrage_anfragen(
             .collect();
     let command = PreisanfrageCommand::SendReqote {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(
+            &match (body.pid, body.anfragender.as_deref().map(str::trim)) {
+                (35_001, _) => vec!["MSB"],
+                (35_002, _) => vec!["LF"],
+                (_, Some("NB")) => vec!["NB"],
+                (_, Some("LF")) => vec!["LF"],
+                (_, None) => vec!["NB", "LF"],
+                (_, Some(other)) => {
+                    return Err(DispatchError::InvalidPayload(format!(
+                        "\"anfragender\" must be NB or LF; got {other:?}"
+                    )));
+                }
+            },
+            "anfragender",
+        )?),
         receiver: MarktpartnerCode::new(receiver),
         location: location.clone(),
         message_ref: MessageRef::new(format!("WIM-REQOTE-{}", uuid::Uuid::new_v4())),
@@ -1286,7 +1312,7 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
         .and_then(|v| v.as_str())
         .map(str::to_owned);
     let domain_cmd = RechnungsabwicklungCommand::SendBeendigung {
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["LF", "MSB"], "")?),
         counterparty: MarktpartnerCode::new(counterparty),
         location_id: malo_id.to_string(),
         message_ref: MessageRef::new(crate::edifact_renderer::msg_ref_from_uuid(&format!(

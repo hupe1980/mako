@@ -110,7 +110,7 @@ impl MockNb {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(NB_ID),
+                TenantId::from_tenant(NB_ID),
                 WorkflowId::new("wim-device-change", FV),
             ),
             platform: Platform::with_all_profiles(),

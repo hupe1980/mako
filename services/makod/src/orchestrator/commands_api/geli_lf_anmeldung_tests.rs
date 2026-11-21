@@ -24,8 +24,9 @@ async fn lfg_state() -> CommandsApiState {
         .await
         .expect("open in-memory SlateDB");
     let state = CommandsApiState {
-        tenant_id: TenantId::from_party_id(LF_MP_ID),
-        sender_party_id: LF_MP_ID.to_owned(),
+        tenant_id: TenantId::from_tenant(LF_MP_ID),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::party_registry::MpIdRegistry::single(LF_MP_ID),
         configured_marktrollen: vec!["LFG".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -33,7 +34,7 @@ async fn lfg_state() -> CommandsApiState {
         snapshot_store: store.as_snapshot_store(),
         malo_cache: Arc::new(SlateDbMaloCache::new(
             store.clone(),
-            TenantId::from_party_id(LF_MP_ID),
+            TenantId::from_tenant(LF_MP_ID),
         )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
@@ -145,7 +146,7 @@ fn gate_findings(stammdaten: mako_engine::payload::Stammdaten) -> Vec<String> {
         .expect("a UTILMD");
     crate::orchestrator::edifact_renderer::utilmd_ahb_findings(
         pending,
-        TenantId::from_party_id(LF_MP_ID),
+        TenantId::from_tenant(LF_MP_ID),
         &latest_format_version(),
     )
     .expect("the 44001 renders")

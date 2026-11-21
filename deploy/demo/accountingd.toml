@@ -10,7 +10,15 @@
 
 allow_insecure_no_auth = true
 
-tenant = "9900357000004"
+tenant = "stadtwerke-musterstadt"
+
+# The Lieferant (Strom) whose customer accounts this ledger keeps — its own
+# MP-ID, not the tenant key, and not the Netzbetreiber's 9900357000004.
+lf_mp_id = "9900357000028"
+
+# The Lieferant's legal name, as a bank and a customer read it on every
+# pain.008, EEG pain.001 and Mahnung.
+creditor_name = "Stadtwerke Musterstadt GmbH"
 
 [http]
 addr = "0.0.0.0:9380"

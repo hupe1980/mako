@@ -449,7 +449,7 @@ mod refresh_tests {
             .await
             .expect("store");
         let partners = store.as_partner_store();
-        let tenant = TenantId::from_party_id("9900357000004");
+        let tenant = TenantId::from_tenant("9900357000004");
         partners
             .upsert(
                 tenant,

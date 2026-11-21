@@ -73,11 +73,21 @@ async fn stammdaten(estate: &Estate) -> anyhow::Result<()> {
         .await?
         .ok("PUT preisblatt")?;
     // The gMSB's Messentgelte and the Konzessionsabgabe for Tarifkunden: what
-    // productd prices an Endkunden-Angebot from, beside the Netznutzung.
+    // productd prices an Endkunden-Angebot from, beside the Netznutzung. The
+    // grundzuständige MSB of the Stadtwerk's grid acts under its own MP-ID, so
+    // the link NB → gMSB is recorded and the sheet is filed under the gMSB.
     estate
         .put(
             "marktd",
-            &format!("/api/v1/preisblaetter-messung/{STADTWERK}"),
+            &format!("/api/v1/netzbetreiber/{STADTWERK}/grundzustaendiger-msb"),
+            &serde_json::json!({ "gmsb_mp_id": world::STADTWERK_MSB }),
+        )
+        .await?
+        .ok("PUT grundzuständiger MSB")?;
+    estate
+        .put(
+            "marktd",
+            &format!("/api/v1/preisblaetter-messung/{}", world::STADTWERK_MSB),
             &world::body("marktd-preisblatt-messung.json"),
         )
         .await?
@@ -160,9 +170,9 @@ async fn stammdaten(estate: &Estate) -> anyhow::Result<()> {
             if malo == world::ERIKA_MALO {
                 versorgung = json!({
                     "lieferstatus": "Beliefert",
-                    "lf_mp_id": STADTWERK,
+                    "lf_mp_id": world::STADTWERK_LF,
                     "lieferbeginn": "2026-01-01",
-                    "msb_mp_id": STADTWERK,
+                    "msb_mp_id": world::STADTWERK_MSB,
                     "nb_mp_id": STADTWERK,
                 });
             }
@@ -360,7 +370,7 @@ async fn eeg(estate: &Estate) -> anyhow::Result<()> {
 
 /// Erika Mustermann's supply, priced, invoiced, issued, booked and paid.
 async fn o2c(estate: &Estate) -> anyhow::Result<()> {
-    let lf = STADTWERK;
+    let lf = world::STADTWERK_LF;
     estate
         .put(
             "productd",
@@ -537,7 +547,10 @@ async fn bestellung(estate: &Estate) -> anyhow::Result<()> {
     let angebot = estate
         .post(
             "productd",
-            &format!("/api/v1/products/{STADTWERK}/endkunden-angebote"),
+            &format!(
+                "/api/v1/products/{}/endkunden-angebote",
+                world::STADTWERK_LF
+            ),
             &json!({
                 "product_code": world::PRODUCT_STROM,
                 "sparte": "STROM",
@@ -745,7 +758,7 @@ async fn gas(estate: &Estate) -> anyhow::Result<()> {
             .await?
             .ok("PUT Gas lokationszuordnung")?;
         let mut msb = world::body("marktd-melo-msb.json");
-        msb["msb_mp_id"] = json!(gas);
+        msb["msb_mp_id"] = json!(world::STADTWERK_GAS_MSB);
         estate
             .put("marktd", &format!("/api/v1/melos/{melo}/msb"), &msb)
             .await?
@@ -756,9 +769,9 @@ async fn gas(estate: &Estate) -> anyhow::Result<()> {
                 &format!("/api/v1/versorgung/{malo}"),
                 &json!({
                     "lieferstatus": "Beliefert",
-                    "lf_mp_id": gas,
+                    "lf_mp_id": world::STADTWERK_GAS_LF,
                     "lieferbeginn": "2026-01-01",
-                    "msb_mp_id": gas,
+                    "msb_mp_id": world::STADTWERK_GAS_MSB,
                     "nb_mp_id": gas,
                 }),
             )
@@ -769,7 +782,11 @@ async fn gas(estate: &Estate) -> anyhow::Result<()> {
     estate
         .put(
             "productd",
-            &format!("/api/v1/products/{STADTWERK}/{}", world::PRODUCT_GAS),
+            &format!(
+                "/api/v1/products/{}/{}",
+                world::STADTWERK_LF,
+                world::PRODUCT_GAS
+            ),
             &world::body("productd-product-gas.json"),
         )
         .await?

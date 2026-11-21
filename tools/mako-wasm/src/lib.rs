@@ -1,5 +1,5 @@
 //! The validator's module: `edi-energy` and `mako-fristen` behind one JSON
-//! call, compiled to WebAssembly for the docs site's `/validator/` page.
+//! call, compiled to WebAssembly for the docs site's `/validator/` and `/rechner/` pages.
 //!
 //! | Export | Takes | Returns |
 //! |---|---|---|
@@ -15,11 +15,13 @@
 //! Requests (`op`): `samples` — the bundled sample messages; `sample` — one
 //! sample's text; `check` — every message of an interchange, named and
 //! checked; `codes` — an Antwortcode in its Entscheidungsbaum; `frist` — a
-//! process's Antwortfrist; `id` — an identifier's check digit. Every answer is `{"ok": …}` or `{"refused": {code, message}}`.
+//! process's Antwortfrist; `id` — an identifier's check digit; `pog`,
+//! `eeg`, `preise`, `modul14a` — the calculators. Every answer is `{"ok": …}` or `{"refused": {code, message}}`.
 //! The module explains what the crates compute and decides nothing they do
 //! not.
 
 mod check;
+mod rechner;
 mod samples;
 mod werkzeuge;
 
@@ -56,6 +58,34 @@ enum Request {
     },
     Id {
         wert: String,
+    },
+    Pog {
+        #[serde(default)]
+        verbrauch_kwh: Option<rust_decimal::Decimal>,
+        #[serde(default)]
+        leistung_kw: Option<rust_decimal::Decimal>,
+        #[serde(default)]
+        sect14a: bool,
+        #[serde(default)]
+        optional: bool,
+        stichtag: String,
+    },
+    Eeg {
+        art: String,
+        leistung_kw: rust_decimal::Decimal,
+        inbetriebnahme: String,
+        #[serde(default)]
+        voll: bool,
+    },
+    Preise {
+        gruppe: String,
+        von: i32,
+        bis: i32,
+    },
+    Modul14a {
+        arbeitspreis_ct: rust_decimal::Decimal,
+        geraet_kwh: rust_decimal::Decimal,
+        pauschale_eur: rust_decimal::Decimal,
     },
 }
 
@@ -97,6 +127,25 @@ pub fn call(request: &str) -> String {
             t => werkzeuge::frist(&suche, t.and_then(Result::ok)),
         },
         Ok(Request::Id { wert }) => werkzeuge::id(&wert),
+        Ok(Request::Pog {
+            verbrauch_kwh,
+            leistung_kw,
+            sect14a,
+            optional,
+            stichtag,
+        }) => rechner::pog(verbrauch_kwh, leistung_kw, sect14a, optional, &stichtag),
+        Ok(Request::Eeg {
+            art,
+            leistung_kw,
+            inbetriebnahme,
+            voll,
+        }) => rechner::eeg(&art, leistung_kw, &inbetriebnahme, voll),
+        Ok(Request::Preise { gruppe, von, bis }) => rechner::preise(&gruppe, von, bis),
+        Ok(Request::Modul14a {
+            arbeitspreis_ct,
+            geraet_kwh,
+            pauschale_eur,
+        }) => rechner::modul14a(arbeitspreis_ct, geraet_kwh, pauschale_eur),
     };
     answer.to_string()
 }

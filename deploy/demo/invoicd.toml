@@ -17,7 +17,7 @@ addr = "0.0.0.0:8280"
 url = "postgres://mako:mako@postgres:5432/invoicd"
 
 [identity]
-tenant = "9900357000004"
+tenant = "stadtwerke-musterstadt"
 
 [makod]
 url     = "http://makod:8080"

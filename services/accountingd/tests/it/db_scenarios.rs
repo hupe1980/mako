@@ -3464,6 +3464,7 @@ async fn a_committed_settlement_announces_itself() {
         serde_json::from_value(serde_json::json!({
             "database": { "url": "unused-by-this-path" },
             "tenant":   TENANT,
+            "lf_mp_id": TENANT,
         }))
         .expect("a minimal accountingd config deserialises"),
     );
@@ -3809,6 +3810,7 @@ async fn a_payment_plan_schedule_carries_the_year_and_clamps_the_day() {
     let plan_id = pg::create_payment_plan(
         &pool,
         TENANT,
+        "LF1",
         pg::CreatePaymentPlanRequest {
             malo_id: uniq_malo(),
             lf_mp_id: None,
@@ -3855,6 +3857,7 @@ async fn a_payment_plan_schedule_carries_the_year_and_clamps_the_day() {
     let plan_id = pg::create_payment_plan(
         &pool,
         TENANT,
+        "LF1",
         pg::CreatePaymentPlanRequest {
             malo_id: uniq_malo(),
             lf_mp_id: None,
@@ -3920,18 +3923,18 @@ async fn a_payment_plan_with_no_instalment_size_is_refused() {
         operator_sub: None,
     };
     assert!(
-        pg::create_payment_plan(&pool, TENANT, req(0, 10_000))
+        pg::create_payment_plan(&pool, TENANT, "LF1", req(0, 10_000))
             .await
             .is_err(),
         "a zero instalment size is a division by zero, not a plan"
     );
     assert!(
-        pg::create_payment_plan(&pool, TENANT, req(-500, 10_000))
+        pg::create_payment_plan(&pool, TENANT, "LF1", req(-500, 10_000))
             .await
             .is_err()
     );
     assert!(
-        pg::create_payment_plan(&pool, TENANT, req(10_000, 0))
+        pg::create_payment_plan(&pool, TENANT, "LF1", req(10_000, 0))
             .await
             .is_err(),
         "there is nothing to pay down"

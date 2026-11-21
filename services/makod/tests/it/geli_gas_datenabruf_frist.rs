@@ -75,7 +75,7 @@ fn anfrage(pid: u32, ende: Option<&str>) -> edi_energy::AnyMessage {
 /// The answer window registered when `msg` arrives at [`RECEIVED_AT`].
 async fn registered_due(msg: &edi_energy::AnyMessage, pid: u32) -> time::OffsetDateTime {
     let store = SlateDbStore::open_in_memory().await.expect("store");
-    let tenant = TenantId::from_party_id(OWN);
+    let tenant = TenantId::from_tenant(OWN);
     let d = EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),
@@ -151,7 +151,7 @@ async fn a_brennwert_anfrage_without_its_ende_is_refused() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     );
     let refused = d
         .dispatch(
@@ -199,7 +199,7 @@ async fn an_address_only_anfrage_vom_msb_gas_spawns_under_its_dokumentennummer()
 #[tokio::test]
 async fn every_anfrage_vom_msb_gas_is_its_own_process() {
     let store = SlateDbStore::open_in_memory().await.expect("store");
-    let tenant = TenantId::from_party_id(OWN);
+    let tenant = TenantId::from_tenant(OWN);
     let d = EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),

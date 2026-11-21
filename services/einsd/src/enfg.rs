@@ -706,7 +706,7 @@ pub fn veraeusserungsform(model: SettlementModel) -> Result<Option<&'static str>
         M::Direktvermarktung | M::Ausschreibung => Ok(Some(
             "§ 21b Abs. 1 Satz 1 Nr. 1 EEG 2023 — Marktprämie nach § 20",
         )),
-        M::Verguetung | M::Ausfallverguetung => Ok(Some(
+        M::Verguetung | M::Ausfallverguetung | M::UnentgeltlicheAbnahme => Ok(Some(
             "§ 21b Abs. 1 Satz 1 Nr. 2 EEG 2023 — Einspeisevergütung nach § 21 Abs. 1 Satz 1",
         )),
         M::Mieterstrom => Ok(Some(

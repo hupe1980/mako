@@ -90,6 +90,9 @@ Commands:
   check-as4-controls     Refuse an AS4 control that is unreachable — the declared sign-and-encrypt
                         floor with no call site, or the unpinned base session reaching the
                         inbound pipeline (which refuses every signed message)
+  check-tenant-not-mp-id Refuse a fallback that lets the tenant or the primary [[party]] stand
+                        in for a Marktpartner-ID, a sender or a seller — each Marktrolle has
+                        its own code (Allgemeine Festlegungen 6.1d Kap. 2.13)
   check-tenant-predicate Refuse a statement against a tenant-scoped table that names neither
                         the tenant nor the table's own primary key — `tenant` is the isolation
                         key and Postgres does not supply it
@@ -239,6 +242,7 @@ mod check_runner_routes;
 mod check_specs;
 mod check_sql;
 mod check_sts_codes;
+mod check_tenant_not_mp_id;
 mod check_tenant_predicate;
 mod check_thin_main;
 mod check_tool_grants;
@@ -363,6 +367,7 @@ fn main() {
         Some("check-event-payloads") => check_event_payloads(),
         Some("check-event-verlauf") => check_event_verlauf(),
         Some("check-cedar-roles") => check_cedar_roles(),
+        Some("check-tenant-not-mp-id") => check_tenant_not_mp_id(),
         Some("check-tenant-predicate") => check_tenant_predicate(),
         Some("check-as4-controls") => check_as4_controls(),
         Some("check-answer-commands") => check_answer_commands(),
@@ -556,6 +561,13 @@ fn check_event_verlauf() {
 fn check_cedar_roles() {
     let (workspace_root, _) = workspace_info();
     if !check_cedar_roles::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_tenant_not_mp_id() {
+    let (workspace_root, _) = workspace_info();
+    if !check_tenant_not_mp_id::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

@@ -180,6 +180,34 @@ pub struct EinsdPolicy {
     /// Whether a § 52 Pflichtzahlung is set off against the month's payout.
     #[serde(default)]
     pub sect52_aufrechnung: mako_service::policy::Policy<Sect52Aufrechnung>,
+    /// The Veräußerungsform of a plant registered without one.
+    #[serde(default)]
+    pub sect21c_ohne_zuordnung: mako_service::policy::Policy<Sect21cOhneZuordnung>,
+}
+
+mako_service::policy_choice! {
+    /// The Veräußerungsform of a plant registered without one.
+    ///
+    /// § 21c Abs. 1 Satz 3 EEG 2023 deems a plant below 200 kW „für die der
+    /// Anlagenbetreiber keine andere Zuordnung getroffen hat" assigned to the
+    /// unentgeltliche Abnahme, where the claim „verringert sich … auf null"
+    /// (§ 21 Abs. 1 Satz 1 Nr. 2). Whether a commissioning notice already is
+    /// the Zuordnung to the Einspeisevergütung (Satz 5) is the Netzbetreiber's
+    /// reading. The default pays nothing on a guess: it asks.
+    pub enum Sect21cOhneZuordnung {
+        key: "sect21c_ohne_zuordnung",
+        doc: "@/docs/services/einsd.md#policy-sect21c-ohne-zuordnung",
+        default: tightening(AngabeVerlangen, "neither reading is assumed: a payment on the wrong one cannot be taken back, a missing one under the other is owed"),
+        options: {
+            /// Refuse the registration until it names its Veräußerungsform.
+            AngabeVerlangen = "angabe_verlangen" => "§ 21c Abs. 1 Satz 1 EEG 2023: the Anlagenbetreiber notifies the Veräußerungsform",
+            /// Read the registration as the Zuordnung to the Einspeisevergütung.
+            Einspeiseverguetung = "einspeiseverguetung" => "§ 21c Abs. 1 Satz 5 EEG 2023: „Die Zuordnung einer Anlage entspricht der Geltendmachung des entsprechenden Anspruchs“",
+            /// Below 200 kW, the unentgeltliche Abnahme with no claim; from
+            /// 200 kW the registration is refused.
+            UnentgeltlicheAbnahme = "unentgeltliche_abnahme" => "§ 21c Abs. 1 Satz 3 i. V. m. § 21 Abs. 1 Satz 1 Nr. 2 EEG 2023",
+        }
+    }
 }
 
 mako_service::policy_choice! {
@@ -292,6 +320,7 @@ impl EinsdConfig {
         mako_service::policy::PolicyReport::new()
             .with(&self.policy.beihilfe_politik)
             .with(&self.policy.sect52_aufrechnung)
+            .with(&self.policy.sect21c_ohne_zuordnung)
             .posture_flag("allow_insecure_no_auth", self.allow_insecure_no_auth)
             .posture_presence("oidc", self.oidc.is_some(), true)
             .posture_presence(

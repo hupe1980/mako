@@ -48,8 +48,9 @@ async fn make_state(marktrollen: &[&str]) -> makod::commands_api::CommandsApiSta
             .expect("cedar build"),
     );
     CommandsApiState {
-        tenant_id: TenantId::from_party_id("9900357000004"),
-        sender_party_id: "9900357000004".to_owned(),
+        tenant_id: TenantId::from_tenant("9900357000004"),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party("9900357000004"),
         configured_marktrollen: marktrollen.iter().map(|s| s.to_uppercase()).collect(),
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -57,7 +58,7 @@ async fn make_state(marktrollen: &[&str]) -> makod::commands_api::CommandsApiSta
         snapshot_store: store.as_snapshot_store(),
         malo_cache: Arc::new(SlateDbMaloCache::new(
             store.clone(),
-            TenantId::from_party_id("9900357000004"),
+            TenantId::from_tenant("9900357000004"),
         )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
@@ -174,7 +175,7 @@ async fn anmelden_registers_under_malo_id() {
     let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
         .await
         .expect("open in-memory SlateDB");
-    let tenant_id = TenantId::from_party_id("9900357000004");
+    let tenant_id = TenantId::from_tenant("9900357000004");
     let malo_id = "51238696781";
 
     let process_id = initiate_lf_anmeldung(&store, tenant_id, malo_id, 55001).await;
@@ -209,7 +210,7 @@ async fn lookup_unknown_malo_returns_empty() {
     let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
         .await
         .expect("open in-memory SlateDB");
-    let tenant_id = TenantId::from_party_id("9900357000004");
+    let tenant_id = TenantId::from_tenant("9900357000004");
 
     let found = store
         .as_process_registry()
@@ -226,7 +227,7 @@ async fn handle_antwort_accepted_transitions_to_active() {
     use mako_engine::process::Process;
 
     let store_inner = mako_engine::event_store::InMemoryEventStore::new();
-    let tenant_id = TenantId::from_party_id("9900357000004");
+    let tenant_id = TenantId::from_tenant("9900357000004");
     let malo_id = "51238696781";
 
     let process = Process::<GpkeLfAnmeldungWorkflow, _>::new(
@@ -292,7 +293,7 @@ async fn handle_antwort_rejected_transitions_to_rejected() {
     use mako_engine::process::Process;
 
     let store_inner = mako_engine::event_store::InMemoryEventStore::new();
-    let tenant_id = TenantId::from_party_id("9900357000004");
+    let tenant_id = TenantId::from_tenant("9900357000004");
     let malo_id = "51238696781";
 
     let process = Process::<GpkeLfAnmeldungWorkflow, _>::new(
@@ -352,7 +353,7 @@ async fn register_correlated_is_idempotent() {
     let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
         .await
         .expect("open in-memory SlateDB");
-    let tenant_id = TenantId::from_party_id("9900357000004");
+    let tenant_id = TenantId::from_tenant("9900357000004");
     let malo_id = "51238696781";
 
     let process_id = mako_engine::ids::ProcessId::new();

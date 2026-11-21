@@ -16,7 +16,7 @@ use crate::router_builds::load;
 
 const SR: &str = "C1234567890";
 /// The demo configuration's tenant — the one the router writes under.
-const TENANT: &str = "9900357000004";
+const TENANT: &str = "stadtwerke-musterstadt";
 const URI: &str = "/api/v1/steuerbare-ressourcen/C1234567890/konfigurationsprodukte";
 
 async fn put(app: axum::Router, body: &serde_json::Value) -> (u16, serde_json::Value) {

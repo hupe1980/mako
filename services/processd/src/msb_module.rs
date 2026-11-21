@@ -10,7 +10,7 @@
 //! | **55051** | **44051** | Ende MSB | MSBA → NB | the **NB** | 7 WT | `E_0202` / `E_2005` |
 //! | **55039** | **44039** | Kündigung MSB | MSBN → **MSBA** | the **MSB** | 3 WT | `E_0200` / `E_2000` |
 //! | **55168** | **44168** | Verpflichtungsanfrage | NB → **gMSB** | the **MSB** | 1 WT | `E_0240` / `E_2006` |
-//! | **35001/35002/35005** | — | REQOTE | → MSB | the **MSB** | 4/5/10 WT | — |
+//! | **35001/35002/35005** | — | REQOTE | → MSB | the **MSB** | 4/5/5 WT | — |
 //!
 //! The directions are not uniform, which is why the PID sets are two constants
 //! gated by separate Cargo features: a Kündigung MSB never reaches the NB at
@@ -62,7 +62,9 @@ use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 /// already-connected client.
 #[derive(Debug, Clone)]
 pub struct MsbModuleConfig {
-    pub own_mp_id: String,
+    /// `[identity]` — the MSB answers under its own MP-ID of the message's
+    /// Sparte, the NB-answered PIDs under the NB's.
+    pub identitaet: crate::config::Identitaet,
     pub tenant: String,
     /// `[msb] auto_accept`. When `true`, an `Accept` verdict dispatches the
     /// Bestätigung itself; when `false`, it goes to the approval queue with its
@@ -262,7 +264,7 @@ impl MsbModuleConfig {
     /// The config the webhook path needs, from the shared handler state.
     #[must_use]
     pub fn for_state(
-        own_mp_id: &str,
+        identitaet: &crate::config::Identitaet,
         tenant: &str,
         auto_accept: bool,
         auto_preisanfrage: bool,
@@ -270,7 +272,7 @@ impl MsbModuleConfig {
         vertragd_api_key: Option<secrecy::SecretString>,
     ) -> Self {
         Self {
-            own_mp_id: own_mp_id.to_owned(),
+            identitaet: identitaet.clone(),
             tenant: tenant.to_owned(),
             auto_accept,
             auto_preisanfrage,
@@ -508,7 +510,8 @@ async fn evaluate(
         // layer between the two MSB (Kap. 2.1.3) and every Prüfschritt is a
         // question about this MSB's own Messstellenbetriebsvertrag.
         55_039 | 44_039 => {
-            let vertrag = fetch_messstellenvertrag(cfg, &payload.melo_id).await;
+            let vertrag =
+                fetch_messstellenvertrag(cfg, &payload.melo_id, markt_sparte(payload.pid)).await;
             let anfrage = msb::KuendigungMsb {
                 sparte: sparte_of(payload.pid),
                 melo_id: payload.melo_id.clone(),
@@ -634,14 +637,25 @@ fn kuendigungstermin(
 async fn fetch_messstellenvertrag(
     cfg: &MsbModuleConfig,
     melo_id: &str,
+    sparte: mako_markt::domain::Sparte,
 ) -> Option<serde_json::Value> {
     use secrecy::ExposeSecret;
 
     let base = cfg.vertragd_url.as_ref()?;
+    // The contract is this MSB's in the Kündigung's Sparte; without exactly one
+    // MSB MP-ID for it the Vertragslage stays unknown rather than being read
+    // under another code.
+    let Some(msb_mp_id) = cfg.identitaet.msb_fuer(sparte) else {
+        warn!(
+            melo_id, %sparte,
+            "processd MSB: [identity] msb_mp_ids names no single MP-ID for this \
+             Sparte — the Vertragslage stays unknown"
+        );
+        return None;
+    };
     let url = format!(
-        "{}/api/v1/messstellenvertraege/{melo_id}/{}",
+        "{}/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}",
         base.trim_end_matches('/'),
-        cfg.own_mp_id
     );
     let mut req = reqwest::Client::new().get(&url);
     if let Some(key) = &cfg.vertragd_api_key {
@@ -994,7 +1008,7 @@ use mako_wim::preisanfrage::REQOTE_PIDS;
 ///
 /// ## Regulatory basis
 ///
-/// The answer window is per PID — 35001 → 4 WT, 35002 → 5 WT, 35005 → 10 WT —
+/// The answer window is per PID — 35001 → 4 WT, 35002 → 5 WT, 35005 → 5 WT —
 /// from [`mako_wim::preisanfrage::antwort_frist_werktage`].
 pub async fn handle_preisanfrage_reqote(
     event: &serde_json::Value,
@@ -1084,15 +1098,27 @@ pub async fn handle_preisanfrage_reqote(
         .await;
     }
 
+    // The Preisanfrage is WiM Strom Teil 1 (`mako_wim::preisanfrage`), so the
+    // Preisblatt is the one of this MSB's Strom MP-ID. Without exactly one, no
+    // Preisblatt is this MSB's to quote from.
+    let Some(msb_mp_id) = cfg.identitaet.msb_fuer(mako_markt::domain::Sparte::Strom) else {
+        return escalate(
+            "[identity] msb_mp_ids names no single Strom MP-ID (99…) — the \
+             PreisblattMessung to quote from cannot be chosen"
+                .to_owned(),
+        )
+        .await;
+    };
+
     // A marktd outage is not a business finding: only a genuine *absence* of a
     // PreisblattMessung may escalate. A transport error propagates so the
     // fan-out redelivers.
     let today = mako_fristen::heute();
     let preisblatt = marktd
-        .get_preisblatt_messung(&cfg.own_mp_id, today)
+        .get_preisblatt_messung(msb_mp_id, today)
         .await
         .map_err(|e| {
-            warn!(error = %e, own_mp_id = %cfg.own_mp_id, %process_id,
+            warn!(error = %e, msb_mp_id, %process_id,
                   "processd MSB: PreisblattMessung lookup failed — fan-out will redeliver");
             anyhow::anyhow!("marktd PreisblattMessung lookup failed: {e}")
         })?;
@@ -1101,7 +1127,7 @@ pub async fn handle_preisanfrage_reqote(
         return escalate(format!(
             "no PreisblattMessung is in force for aMSB {} on {today} — a QUOTES with no \
              prices must not go out automatically",
-            cfg.own_mp_id
+            msb_mp_id
         ))
         .await;
     };
@@ -1609,7 +1635,12 @@ mod tests {
     }
 
     fn msb_cfg() -> MsbModuleConfig {
-        MsbModuleConfig::for_state("9900987654321", "t", true, false, None, None)
+        let identitaet = crate::config::Identitaet {
+            nb: vec!["9900987654321".to_owned()],
+            msb: vec!["9900987654338".to_owned()],
+            ..Default::default()
+        };
+        MsbModuleConfig::for_state(&identitaet, "t", true, false, None, None)
     }
 
     /// A well-formed Anmeldung MSB the Vorlauf and Versicherung checks pass.

@@ -18,7 +18,10 @@
 use marktd::daemon::Marktd;
 use sqlx::PgPool;
 
-const TENANT: &str = "9900357000004";
+/// The demo configuration's tenant — the isolation key the router writes under.
+const TENANT: &str = "stadtwerke-musterstadt";
+/// The Stadtwerk's Netzbetreiber, under its own MP-ID.
+const NB: &str = "9900357000004";
 
 struct Harness {
     pool: PgPool,
@@ -245,7 +248,7 @@ async fn an_nb_contract_put_rolls_back_without_its_event() {
         "/api/v1/nb-contracts/NNV-1",
         Some(serde_json::json!({
             "malo_id": "51238696012",
-            "nb_mp_id": TENANT,
+            "nb_mp_id": NB,
             "sparte": "STROM",
             "netzebene": "NSP",
             "bilanzierungsmethode": "SLP",
@@ -270,7 +273,7 @@ async fn a_netzzugang_antrag_and_its_status_roll_back_without_their_event() {
         "antrag_typ": "zaehlpunktanordnung",
         "aktion": "bestellung",
         "netzanschluss_id": "NA-1",
-        "nb_mp_id": TENANT,
+        "nb_mp_id": NB,
         "antragsteller_ref": "REF-1"
     });
     h.send_losing_the_event(

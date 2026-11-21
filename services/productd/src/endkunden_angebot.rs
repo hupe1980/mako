@@ -24,7 +24,8 @@
 //! |---|---|
 //! | Netzbetreiber | the caller's `nb_mp_id`, or `marktd` `GET /api/v1/malos/{id}/grid` for the MaLo |
 //! | Netzentgelt Arbeits- und Grundpreis | `marktd` `GET /api/v1/preisblaetter/{nb}?date=` — positions `ARBEITSPREIS_WIRKARBEIT`, `GRUNDPREIS` |
-//! | Messstellenbetrieb | `marktd` `GET /api/v1/preisblaetter-messung/{nb}?date=` — the NB as grundzuständiger Messstellenbetreiber, position `MESSSTELLENBETRIEB` |
+//! | Grundzuständiger Messstellenbetreiber | `marktd` `GET /api/v1/netzbetreiber/{nb}/grundzustaendiger-msb` — the MP-ID the gMSB of the NB's grid acts under, its own and not the NB's |
+//! | Messstellenbetrieb | `marktd` `GET /api/v1/preisblaetter-messung/{gmsb}?date=` — the gMSB's sheet, position `MESSSTELLENBETRIEB` |
 //! | Konzessionsabgabe | `marktd` `GET /api/v1/preisblaetter-ka/{nb}?date=&sparte=&kundengruppe=` — position `KONZESSIONS_ABGABE` |
 //! | Strom: § 19 StromNEV-, Offshore-Netz-, KWKG-Umlage | `grid_billing::umlagen`, Letztverbrauchergruppe A′ |
 //! | Strom: Stromsteuer | `grid_billing::stromsteuer_for_year` (§ 3 StromStG) |
@@ -506,7 +507,10 @@ pub struct Eingaben<'a> {
     pub produkt: Option<Produktstand<'a>>,
     /// The `PreisblattNetznutzung` (`data`), `None` when `marktd` has none.
     pub netznutzung: Option<&'a serde_json::Value>,
-    /// The `PreisblattMessung` (`data`), `None` when `marktd` has none.
+    /// The MP-ID the grundzuständige MSB of the NB's grid acts under, `None`
+    /// when `marktd` records none — never the NB's own code.
+    pub gmsb_mp_id: Option<&'a str>,
+    /// The gMSB's `PreisblattMessung` (`data`), `None` when `marktd` has none.
     pub messung: Option<&'a serde_json::Value>,
     /// The Konzessionsabgabe sheet, `None` when `marktd` has none.
     pub konzessionsabgabe: Option<&'a KaBlatt>,
@@ -784,16 +788,19 @@ pub fn bepreise(e: &Eingaben<'_>) -> Result<Angebot, Ablehnung> {
             ),
         },
     };
-    let msb_was = format!(
-        "Preisblatt Messung des Netzbetreibers {nb} (grundzuständiger Messstellenbetreiber) zum \
-         {tag}"
-    );
-    let messung = match e.messung {
-        None => {
+    let msb_was = match e.gmsb_mp_id {
+        Some(gmsb) => format!(
+            "Preisblatt Messung des grundzuständigen Messstellenbetreibers {gmsb} \
+             (Netzbetreiber {nb}) zum {tag}"
+        ),
+        None => format!("grundzuständiger Messstellenbetreiber des Netzbetreibers {nb}"),
+    };
+    let messung = match (e.gmsb_mp_id, e.messung) {
+        (None, _) | (Some(_), None) => {
             fehlend.push(msb_was.clone());
             None
         }
-        Some(blatt) => lies(positionen(blatt, &msb_was), &mut fehlend).and_then(|pos| {
+        (Some(_), Some(blatt)) => lies(positionen(blatt, &msb_was), &mut fehlend).and_then(|pos| {
             lies(
                 jahrespreis(&pos, Leistungstyp::Messstellenbetrieb, menge, &msb_was),
                 &mut fehlend,
@@ -1020,7 +1027,11 @@ pub fn bepreise(e: &Eingaben<'_>) -> Result<Angebot, Ablehnung> {
         bezeichnung: "Messstellenbetrieb".to_owned(),
         einheit: "EUR/Jahr",
         wert: messung.round_kfm(2).to_string(),
-        quelle: marktd("Preisblatt Messung"),
+        quelle: format!(
+            "marktd Preisblatt Messung des grundzuständigen Messstellenbetreibers {} \
+             (Netzbetreiber {nb}), gültig am {tag}",
+            e.gmsb_mp_id.unwrap_or_default()
+        ),
     });
     preise.push(ct(
         "KONZESSIONSABGABE",
@@ -1087,6 +1098,12 @@ struct Blatt {
     data: serde_json::Value,
 }
 
+/// `GET /api/v1/netzbetreiber/{nb}/grundzustaendiger-msb`.
+#[derive(Debug, Deserialize)]
+struct Grundzustaendigkeit {
+    gmsb_mp_id: String,
+}
+
 /// `GET /api/v1/malos/{id}/grid`.
 #[derive(Debug, Deserialize)]
 struct Netzzuordnung {
@@ -1121,6 +1138,18 @@ impl MarktdQuelle {
         up.json(up.get(&format!("/api/v1/malos/{malo_id}/grid")))
             .await
             .map_err(|e| ApiError::upstream("marktd", e))
+    }
+
+    /// The MP-ID the grundzuständige MSB of `nb`'s grid acts under, or none.
+    async fn grundzustaendiger_msb(&self, nb: &str) -> Result<Option<String>, ApiError> {
+        let up = self.up()?;
+        Ok(up
+            .json::<Grundzustaendigkeit>(
+                up.get(&format!("/api/v1/netzbetreiber/{nb}/grundzustaendiger-msb")),
+            )
+            .await
+            .map_err(|e| ApiError::upstream("marktd", e))?
+            .map(|g| g.gmsb_mp_id))
     }
 
     async fn blatt(
@@ -1260,12 +1289,20 @@ pub async fn erstelle(
             &[("date", datum.as_str())],
         )
         .await?;
-    let messung = marktd
-        .blatt(
-            &format!("/api/v1/preisblaetter-messung/{nb_mp_id}"),
-            &[("date", datum.as_str())],
-        )
-        .await?;
+    // The Messung sheet is the gMSB's, filed under its own MP-ID; without the
+    // recorded link the offer names it as missing.
+    let gmsb_mp_id = marktd.grundzustaendiger_msb(&nb_mp_id).await?;
+    let messung = match &gmsb_mp_id {
+        None => None,
+        Some(gmsb) => {
+            marktd
+                .blatt(
+                    &format!("/api/v1/preisblaetter-messung/{gmsb}"),
+                    &[("date", datum.as_str())],
+                )
+                .await?
+        }
+    };
     let konzessionsabgabe = match ka_kundengruppe(sparte, anfrage.verbrauch_kwh) {
         Err(_) => None,
         Ok(gruppe) => {
@@ -1296,6 +1333,7 @@ pub async fn erstelle(
             },
         }),
         netznutzung: netznutzung.as_ref(),
+        gmsb_mp_id: gmsb_mp_id.as_deref(),
         messung: messung.as_ref(),
         konzessionsabgabe: konzessionsabgabe.as_ref(),
         ctx: &ctx,

@@ -1129,7 +1129,7 @@ mod tests {
         Deadline::new(
             StreamId::new("test-stream-nb-lieferende"),
             ProcessId::new(),
-            TenantId::from_party_id("9900000000003"),
+            TenantId::from_tenant("9900000000003"),
             WorkflowId::new(WORKFLOW_NAME, "FV2026-10-01"),
             label,
             FRIST,

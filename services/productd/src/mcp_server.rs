@@ -53,6 +53,8 @@ use tokio_util::sync::CancellationToken;
 pub struct ProductdMcpState {
     pub pool: PgPool,
     pub tenant: String,
+    /// The configured Lieferant MP-ID the catalogue sells under.
+    pub lf_mp_id: String,
     pub auth: mako_service::mcp_auth::McpAuth,
     /// The posture report the runner built at boot, served by `get_policy`.
     pub policy: Arc<mako_service::policy::PolicyReport>,
@@ -417,7 +419,7 @@ C&I/RLM customers are 5-50x the revenue of SLP households.",
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::list_angebote;
         let limit = p.limit.unwrap_or(20).min(100);
-        match list_angebote(&self.state.pool, &self.state.tenant, &self.state.tenant, p.status.as_deref(), limit).await {
+        match list_angebote(&self.state.pool, &self.state.lf_mp_id, &self.state.tenant, p.status.as_deref(), limit).await {
             Ok(rows) => ContentBlock::json(serde_json::json!({
                 "count": rows.len(),
                 "status_filter": p.status,

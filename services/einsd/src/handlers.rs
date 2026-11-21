@@ -31,7 +31,11 @@ use crate::{
 /// its text.
 fn refusal(e: impl Into<anyhow::Error>) -> ApiError {
     let e = e.into();
-    if e.chain().any(|c| c.is::<sqlx::Error>()) {
+    if e.chain()
+        .any(|c| c.is::<crate::pg::VeraeusserungsformMissing>())
+    {
+        ApiError::unprocessable(format!("{e:#}")).with_code("veraeusserungsform_missing")
+    } else if e.chain().any(|c| c.is::<sqlx::Error>()) {
         ApiError::internal(e)
     } else {
         ApiError::unprocessable(format!("{e:#}"))
@@ -650,7 +654,14 @@ pub async fn post_anlage(
         return ApiError::forbidden(e.to_string()).into_response();
     }
 
-    match upsert_anlage(&pool, &cfg.tenant, req).await {
+    match upsert_anlage(
+        &pool,
+        &cfg.tenant,
+        cfg.policy.sect21c_ohne_zuordnung.get(),
+        req,
+    )
+    .await
+    {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(e) => refusal(e).into_response(),
     }
@@ -684,7 +695,14 @@ pub async fn put_anlage(
     }
 
     req.tr_id = tr_id;
-    match upsert_anlage(&pool, &cfg.tenant, req).await {
+    match upsert_anlage(
+        &pool,
+        &cfg.tenant,
+        cfg.policy.sect21c_ohne_zuordnung.get(),
+        req,
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => refusal(e).into_response(),
     }
@@ -819,12 +837,13 @@ fn direktvermarktungspflicht_der_malo(anlagen: &[(bool, Decimal, Date)]) -> Opti
 ///
 /// `AUSSCHREIBUNG` is the wettbewerblich ermittelte Marktprämie (§ 22 EEG 2023)
 /// — still a Marktprämie on the wire; the auction only sets the anzulegender
-/// Wert. `Z90` is deliberately shared by `VERGUETUNG` and `AUSFALLVERGUETUNG`:
-/// the MIG has one code for both, which is why the caller also gets the flag.
+/// Wert. `Z90` is deliberately shared by `VERGUETUNG`, `AUSFALLVERGUETUNG` and
+/// `UNENTGELTLICHE_ABNAHME`, the three Varianten of the Einspeisevergütung:
+/// the MIG has one code for all three, which is why the caller also gets the flag.
 #[must_use]
 pub fn veraeusserungsform_of(settlement_model: &str) -> Option<&'static str> {
     match settlement_model {
-        "VERGUETUNG" | "AUSFALLVERGUETUNG" => Some("Z90"),
+        "VERGUETUNG" | "AUSFALLVERGUETUNG" | "UNENTGELTLICHE_ABNAHME" => Some("Z90"),
         "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => Some("Z91"),
         "SONSTIGE_DIREKTVERMARKTUNG" => Some("Z92"),
         "KWKG_ZUSCHLAG" => Some("Z94"),
@@ -2901,6 +2920,7 @@ mod veraeusserungsform_tests {
         for model in [
             "VERGUETUNG",
             "AUSFALLVERGUETUNG",
+            "UNENTGELTLICHE_ABNAHME",
             "DIREKTVERMARKTUNG",
             "AUSSCHREIBUNG",
             "SONSTIGE_DIREKTVERMARKTUNG",

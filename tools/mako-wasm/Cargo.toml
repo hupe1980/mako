@@ -21,6 +21,10 @@ edifact      = { workspace = true }
 mako-fristen = { workspace = true }
 # The Antwortcode catalogue only; no role's Prüfung runs here.
 mako-pruefung = { workspace = true }
+# The calculators read the settlement's own rules.
+eeg-billing  = { workspace = true }
+grid-billing = { workspace = true }
+rust_decimal = { workspace = true }
 rubo4e       = { workspace = true }
 serde        = { workspace = true }
 # Insertion order in every build: another workspace crate turns

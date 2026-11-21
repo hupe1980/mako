@@ -565,12 +565,12 @@ pre.mermaid, .mermaid { background: var(--surface); color: var(--text); border: 
 .vt-form { display: flex; flex-wrap: wrap; gap: .9rem; align-items: flex-end; }
 .vt-field { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; font-weight: 600; color: var(--text-soft); flex: 1 1 12rem; }
 .vt-field.vt-wide { flex: 3 1 20rem; }
-.vt-field input {
+.vt-field input, .vt-field select {
   font: 1.05rem/1.4 var(--mono); padding: .65rem .8rem; border-radius: 10px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text);
 }
-.vt-field input[type="datetime-local"] { font-family: var(--font); font-size: .95rem; }
-.vt-field input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 14%, transparent); }
+.vt-field input[type="datetime-local"], .vt-field input[type="date"], .vt-field select { font-family: var(--font); font-size: .95rem; }
+.vt-field input:focus, .vt-field select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 14%, transparent); }
 .vt-result { margin-top: 1.5rem; display: grid; gap: 1rem; }
 .vt-hint { margin: 0; font-weight: 600; }
 .vt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: .8rem; }
@@ -601,3 +601,38 @@ pre.mermaid, .mermaid { background: var(--surface); color: var(--text); border: 
 }
 .vt-row:hover { border-color: var(--primary); }
 @media (max-width: 640px) { .vt-row { grid-template-columns: auto 1fr; } .vt-row .ps-note { grid-column: 2; } }
+
+// Calculators: checkbox rows, a segmented radio group, a comparison table, bars.
+.vt-check { display: flex; align-items: center; gap: .5rem; min-height: 2.9rem; font-size: .92rem; cursor: pointer; }
+.vt-check input { width: 1.1rem; height: 1.1rem; accent-color: var(--primary); }
+.vt-seg { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .35rem; padding: .25rem; border-radius: 10px; background: var(--bg-alt); border: 1px solid var(--border); }
+.vt-seg label { flex: 1 1 auto; text-align: center; padding: .4rem .7rem; border-radius: 8px; font-size: .88rem; font-weight: 600; color: var(--text-soft); cursor: pointer; }
+.vt-seg input { position: absolute; opacity: 0; pointer-events: none; }
+.vt-seg label:has(input:checked) { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.vt-seg label:has(input:focus-visible) { outline: 2px solid var(--primary); }
+.vt-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.vt-table th, .vt-table td { padding: .6rem .8rem; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+.vt-table th[scope="row"], .vt-table thead th:first-child { text-align: left; white-space: normal; }
+.vt-table tfoot { font-weight: 700; }
+.vt-table tfoot th, .vt-table tfoot td { border-bottom: 0; }
+.vt-sources { margin: 0; padding-left: 1.1rem; font-size: .8rem; color: var(--text-soft); }
+.vt-up { color: var(--danger); }
+.vt-down { color: var(--primary); }
+.vt-bar { display: grid; grid-template-columns: minmax(8rem, 12rem) 1fr auto; gap: .75rem; align-items: center; margin: .5rem 0; font-size: .92rem; }
+.vt-bar-track { height: .7rem; border-radius: 99px; background: var(--bg-alt); overflow: hidden; }
+.vt-bar-fill { display: block; height: 100%; border-radius: 99px; background: var(--text-soft); transition: width .25s ease; }
+.vt-bar.is-win .vt-bar-fill { background: var(--primary); }
+.vt-bar strong { font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) {
+  .vt-bar { grid-template-columns: 1fr auto; }
+  .vt-bar-track { grid-column: 1 / -1; order: 3; }
+  .vt-table th, .vt-table td { padding: .5rem .45rem; font-size: .85rem; }
+}
+// The tools overview.
+.tools-family { margin: 2rem 0 0; }
+.tools-family:last-child { margin-bottom: 4rem; }
+.tools-family h2 { margin-bottom: .25rem; }
+.tools-family > p { color: var(--text-soft); margin-top: 0; }
+.tool-card h3 { margin: 0 0 .35rem; font-size: 1.05rem; }
+.tool-card p { margin: 0; color: var(--text-soft); font-size: .92rem; }
+.tool-icon { font-size: 1.4rem; display: block; margin-bottom: .4rem; }

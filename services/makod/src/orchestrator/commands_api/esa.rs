@@ -397,7 +397,7 @@ pub(super) async fn dispatch_esa_werteanfrage(
     // Tranchen-ID have the same shape).
     let ebene = esa_ebene(&location, &gegenstand.messprodukt);
     let msb = resolve_werteanfrage_msb(state, payload, &location).await?;
-    let esa = state.sender_party_id.clone();
+    let esa = state.own_mp_id(&["ESA"], "")?;
 
     esa_outbound_consent_gate(state, &esa, &msb, &location).await?;
 
@@ -483,7 +483,7 @@ pub(super) async fn dispatch_esa_bestellung(
     // caller supplies them we enforce the strict gate.
     if let (Some(msb), esa) = (
         payload.get("msb_mp_id").and_then(|v| v.as_str()),
-        state.sender_party_id.clone(),
+        state.own_mp_id(&["ESA"], "")?,
     ) {
         esa_outbound_consent_gate(state, &esa, msb, &location).await?;
     }

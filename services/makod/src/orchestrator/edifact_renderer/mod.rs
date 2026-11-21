@@ -159,11 +159,9 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 
 /// Render a domain-intent [`OutboxMessage`] to BDEW-conformant EDIFACT wire bytes.
 ///
-/// `registry` provides the operator's own MP-ID(s).  For ORDERS messages, the
-/// sender MP-ID is resolved from `payload["sender"]` when present; otherwise the
-/// registry's static PID → role table is used.
-/// For all other fallbacks (ORDRSP, INVOIC, REMADV without explicit `sender`)
-/// [`MpIdRegistry::primary_mp_id`] is used.
+/// `registry` provides the operator's own MP-ID(s). The sender is the
+/// payload's; for ORDERS the PID's sending Marktrolle stands in; otherwise only
+/// a single-party deployment's MP-ID does (`sender_of`).
 ///
 /// # Errors
 ///
@@ -179,6 +177,7 @@ pub fn render_to_wire_bytes(
     let p = &msg.payload;
     match msg.message_type.as_ref() {
         "UTILMD" => render_utilmd(p, msg),
+        "UTILTS" => render_utilts(p, msg, registry),
         "APERAK" => render_aperak(p, msg),
         "CONTRL" => render_contrl(p, msg),
         "REQOTE" => render_reqote(p, msg, registry),
@@ -388,6 +387,32 @@ fn finish_interchange_with_app_ref(
 mod aperak;
 mod contrl;
 mod dvgw;
+
+/// The sender of an outbound message: the payload's, or the deployment's only
+/// MP-ID.
+///
+/// A deployment with several `[[party]]` entries has one per Marktrolle
+/// (Allgemeine Festlegungen 6.1d Kap. 2.13), so a payload without its sender
+/// is refused rather than sent under another role's code.
+///
+/// # Errors
+///
+/// [`RenderError::MissingField`] `sender` when the payload names none and the
+/// deployment has more than one MP-ID.
+pub(super) fn sender_of<'a>(
+    explicit: Option<&'a str>,
+    registry: &'a MpIdRegistry,
+    message_type: &str,
+) -> Result<&'a str, RenderError> {
+    explicit
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| registry.sole_mp_id())
+        .ok_or_else(|| RenderError::MissingField {
+            message_type: message_type.into(),
+            field: "sender".into(),
+        })
+}
+
 #[cfg(test)]
 mod gas_aenderung_antwort_tests;
 mod iftsta;
@@ -396,6 +421,7 @@ mod invoic;
 mod mscons;
 mod orders;
 mod utilmd;
+mod utilts;
 #[cfg(test)]
 mod wim_answer_columns_tests;
 #[cfg(test)]
@@ -411,6 +437,7 @@ use mscons::*;
 use orders::*;
 use utilmd::*;
 pub(crate) use utilmd::{utilmd_ahb_findings, utilmd_gate_check};
+use utilts::*;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// The `Release` `msg` is rendered under — the one rule every renderer asks.
@@ -2781,7 +2808,7 @@ mod envelope_tests {
         use mako_engine::ids::{
             ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId,
         };
-        let tenant = TenantId::from_party_id("9900123456789");
+        let tenant = TenantId::from_tenant("9900123456789");
         let process = ProcessId::new();
         OutboxMessage::new(
             StreamId::for_process(tenant, &process),

@@ -107,7 +107,7 @@ impl MockLfn {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(LFN_ID),
+                TenantId::from_tenant(LFN_ID),
                 WorkflowId::new("gpke-sperrung", FV),
             ),
             platform: Platform::with_all_profiles(),

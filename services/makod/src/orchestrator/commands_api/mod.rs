@@ -325,6 +325,7 @@ fn remadv_antwort(payload: &serde_json::Value) -> Option<mako_invoic::RemadvAntw
 // remaining submodules hold one market-communication domain each. Everything
 // is re-exported here so the flat `crate::commands_api::*` paths keep working.
 
+mod berechnungsformel;
 mod e_rechnung;
 mod eog_stammdaten;
 mod ersteinbau;
@@ -340,6 +341,7 @@ pub mod idempotency;
 mod iftsta;
 mod invoic_stellen;
 mod lf_anmeldung_gas;
+mod lokationsbuendel_aenderung;
 mod mabis;
 mod msb_antworten;
 mod netzbilanz;
@@ -379,6 +381,7 @@ pub use handler::*;
 pub use registry::*;
 pub use types::*;
 
+use berechnungsformel::*;
 use ersteinbau::*;
 use esa::*;
 use gabi_gas::*;
@@ -387,6 +390,7 @@ use geli_geschaeftsdatenanfrage::*;
 use geschaeftsdatenanfrage::*;
 use gpke::*;
 use iftsta::*;
+use lokationsbuendel_aenderung::*;
 use mabis::*;
 use msb_antworten::*;
 use netzbilanz::*;
@@ -1229,8 +1233,9 @@ mod tests {
             .expect("cedar build"),
         );
         CommandsApiState {
-            tenant_id: TenantId::from_party_id("4033872000022"),
-            sender_party_id: "4033872000022".to_owned(),
+            tenant_id: TenantId::from_tenant("4033872000022"),
+            tenant: "stadtwerke-test".to_owned(),
+            parties: crate::party_registry::MpIdRegistry::single("4033872000022"),
             configured_marktrollen: marktrollen.iter().map(|s| s.to_uppercase()).collect(),
             max_body_bytes: 1_048_576,
             snapshot_interval: 100,
@@ -1238,7 +1243,7 @@ mod tests {
             snapshot_store: store.as_snapshot_store(),
             malo_cache: Arc::new(SlateDbMaloCache::new(
                 store.clone(),
-                TenantId::from_party_id("4033872000022"),
+                TenantId::from_tenant("4033872000022"),
             )),
             maloid_result_cache: MaloIdentResultCache::new(store.clone()),
             store: Arc::new(store),

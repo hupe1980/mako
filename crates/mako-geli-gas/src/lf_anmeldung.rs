@@ -707,6 +707,7 @@ mod tests {
         use mako_engine::payload::{StammdatenBlock, StammdatenSegment};
         let stammdaten = Stammdaten {
             bloecke: vec![StammdatenBlock {
+                zeitraum_id: None,
                 seq: "Z12".to_owned(),
                 segmente: vec![StammdatenSegment {
                     tag: "QTY".to_owned(),

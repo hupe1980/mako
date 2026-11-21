@@ -578,6 +578,7 @@ impl Workflow for GeliGasSperrungLfWorkflow {
                         data.gnb_gln.as_str(),
                         &mako_engine::payload::OrdchgPayload {
                             pid: Some(pid),
+                            sparte: Some(mako_engine::types::Sparte::Gas),
                             message_ref: Some(message_ref.as_str().to_owned()),
                             order_reference: Some(data.message_ref.as_str().to_owned()),
                             ..Default::default()

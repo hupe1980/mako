@@ -118,7 +118,7 @@ fn dispatcher(store: &SlateDbStore, refused: &[Fehlerklasse]) -> EdifactIngestDi
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     )
     .with_abgewiesene_klassen(refused)
 }
@@ -132,7 +132,7 @@ async fn post(
     refused: &[Fehlerklasse],
 ) -> (SlateDbStore, serde_json::Value) {
     let store = SlateDbStore::open_in_memory().await.expect("store");
-    let tenant = TenantId::from_party_id(OWN);
+    let tenant = TenantId::from_tenant(OWN);
     let mut pid_router = mako_engine::pid_router::PidRouter::new();
     pid_router.register(pid, workflow);
     let state = Arc::new(makod::edifact_api::EdifactApiState {

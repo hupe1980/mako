@@ -1485,7 +1485,7 @@ mod nb_initiator_tests {
         mako_engine::deadline::Deadline::new(
             mako_engine::ids::StreamId::new("test-stream-anfrage"),
             mako_engine::ids::ProcessId::new(),
-            mako_engine::ids::TenantId::from_party_id("9900357000004"),
+            mako_engine::ids::TenantId::from_tenant("9900357000004"),
             mako_engine::version::WorkflowId::new(WORKFLOW_NAME, "FV2026-10-01"),
             label,
             time::OffsetDateTime::UNIX_EPOCH,

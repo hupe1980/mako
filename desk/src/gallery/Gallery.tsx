@@ -690,9 +690,9 @@ function Specimens() {
                 { art: "abschnitt", text: "[identity]" },
                 {
                   art: "neu",
-                  text: 'own_mp_id = "9900357000004"',
-                  quelle: "processd [identity] own_mp_id",
-                  frage: "primaer",
+                  text: 'lf_mp_ids = ["9900357000028"]',
+                  quelle: "processd [identity] lf_mp_ids",
+                  frage: "rollen",
                 },
                 {
                   art: "gleich",
@@ -702,9 +702,9 @@ function Specimens() {
                 },
                 {
                   art: "weg",
-                  text: 'own_mp_id = "9900001000001"',
-                  quelle: "processd [identity] own_mp_id",
-                  frage: "primaer",
+                  text: 'lf_mp_ids = ["9900001000001"]',
+                  quelle: "processd [identity] lf_mp_ids",
+                  frage: "rollen",
                 },
                 {
                   art: "fehlt",

@@ -117,7 +117,7 @@ min_connections = 2
 # This deployment's identity: the `resource_tenant` every Cedar check compares
 # the caller's `mako_tenant` against, the `tenant` column on tenant-scoped rows,
 # and the source URN of every outbound CloudEvent.
-tenant = "9900357000004"           # required
+tenant = "stadtwerke-musterstadt"  # required — data-isolation key
 
 [makod]
 base_url  = "http://makod:8080"   # required
@@ -341,6 +341,7 @@ is a `422` naming the stage in `code`:
 | `GET` | `/api/v1/lokationsbuendelstrukturen` | `read-utilmd-stammdaten` | The Codeliste der Lokationsbündelstrukturen (BDEW V1.0): each `lokationsbuendelcode` with its Bezeichnung |
 | `PUT` | `/api/v1/malos/{malo_id}/lokationsbuendel-angaben` | `write-netznutzungsdaten` (NB) | One dated row of the NB's Lokationsbündel-Angaben; an overlapping row is `422` |
 | `GET/PUT` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattMessung`; GET includes `auf_abschlaege` |
+| `GET/PUT` | `/api/v1/netzbetreiber/{nb_mp_id}/grundzustaendiger-msb` | `read-malo-grid` / `write-malo-grid` | The MP-ID the grundzuständige MSB of the NB's grid acts under (`{ gmsb_mp_id }`) — its own, not the NB's (§ 2 Nr. 4 MsbG; one MP-ID per Rolle, Identifikatoren AWH V1.2 Kap. 2.1). productd reads the Messung sheet of an Endkunden-Angebot under it; unrecorded, `GET` is `404` |
 | `GET/PUT` | `/api/v1/preisblaetter-ka/{nb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattKonzessionsabgabe` |
 | `GET/PUT` | `/api/v1/preisblaetter-dienstleistung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattDienstleistung` |
 | `GET/PUT` | `/api/v1/preisblaetter-hardware/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattHardware` |

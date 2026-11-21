@@ -352,6 +352,7 @@ const fn at(hour: u8) -> Time {
 /// | 55693 | Änderung Daten der TR (LF → NB) | NB | 2. WT nach dem ÜT |
 /// | 55557 | Änderung MSB-Abrechnungsdaten der MaLo (MSB → NB) | NB | 2. WT nach dem ÜT |
 /// | 55639–55643 | Stammdatenänderung vom MSB (NeLo/MaLo/SR/Tranche/MeLo) | NB | 2. WT nach dem ÜT |
+/// | 55173 / 55175 | Änderung der Lokationsbündelstruktur (NB → MSB / LF) | MSB / LF | 2. WT nach dem ÜT |
 ///
 /// **17102 is keyed for Strom.** The Sparte Gas files the same PID as the
 /// Geschäftsdatenanfrage vom LF an den NB, answered „spätestens bis zum Ablauf
@@ -366,6 +367,28 @@ const fn at(hour: u8) -> Time {
 /// des 61. WT nach dem ÜT". A 24-hour deadline on that process manufactures a
 /// rejection roughly three months early.
 pub const GPKE: &[AntwortObligation] = &[
+    AntwortObligation {
+        trigger_pid: 55_173,
+        name: "Änderung der Lokationsbündelstruktur (NB → MSB)",
+        answered_by: "MSB",
+        antwort_pids: (55_177, 55_177),
+        ebd: None,
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.2 Prozessschritt 5 — spätester ÜT ist \
+                 der 2. WT nach dem ÜT von Nr. 4",
+    },
+    AntwortObligation {
+        trigger_pid: 55_175,
+        name: "Änderung der Lokationsbündelstruktur (NB → LF)",
+        answered_by: "LF",
+        antwort_pids: (55_180, 55_180),
+        ebd: None,
+        frist: FristShape::EndOfWerktag(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) Kap. 1.4.2 Prozessschritt 2 — spätester ÜT ist \
+                 der 2. WT nach dem ÜT von Nr. 1",
+    },
     AntwortObligation {
         trigger_pid: 55_001,
         name: "Anmeldung verb. Marktlokation (Lieferbeginn)",
@@ -952,7 +975,8 @@ pub fn gas_lieferbeginn_antwort_bei_ausbleiben(
 /// | 35002 | Anfrage Rechnungsabwicklung über LF | MSB | 5 WT | — |
 /// | 15002 | Angebot Rechnungsabwicklung über LF | LF | 8 WT | `E_0205`/`E_0208` |
 /// | 17006 | Beendigung Rechnungsabwicklung über LF | Gegenseite | 8 WT | `E_0206`/`E_0209` |
-/// | 35005 | Anfrage Angebot Änderung Technik | MSB | 10 WT | — |
+/// | 35005 | Anfrage Angebot Änderung Technik | MSB | **5 WT** | — |
+/// | 25001 | Berechnungsformel (UTILTS, WiM Teil 2) | MSB | 5 WT, Zustimmung on lapse | `E_0218` |
 /// | 17011 | Beauftragung Änderung Technik | MSB | 10 WT | `E_0249`/`E_0250`/`E_0279`/`E_0283` ¹ |
 /// | 21029 | Vorabinformation Ersteinbau iMS | **wMSB** | 3 WT | `E_0233` |
 /// | 17004 | Anforderung von Werten — Ablehnung (WiM Teil 2) | MSB | 2 WT | ¹ |
@@ -964,11 +988,12 @@ pub fn gas_lieferbeginn_antwort_bei_ausbleiben(
 /// Abmeldung.
 ///
 /// **Nor is the REQOTE family one window.** The four REQOTE PIDs open four
-/// different Use-Cases and only 35002 is answered in 5 Werktage: 35001 is the
-/// Anforderung eines Geräteübernahmeangebots (Kap. 3.2.2 Nr. 2 — **4 WT**) and
-/// 35005 opens the Messlokationsänderung (Kap. 3.3 — **10 WT**). Answering all
-/// four in 5 gives the Geräteübernahme a day it does not have and lets a
-/// Technikänderung run five Werktage past its window unflagged.
+/// different Use-Cases: 35001 is the Anforderung eines Geräteübernahmeangebots
+/// (Kap. 3.2.2 Nr. 2 — **4 WT**), 35002 the Rechnungsabwicklung über den LF
+/// (**5 WT**), and 35005 the Angebot for a Messlokationsänderung — **5 WT**,
+/// from the BDEW-AWH „Prozesse zur Änderung der Technik an Lokationen" V1.1,
+/// which replaces WiM Teil 1 Kap. 3.3 from 01.10.2025 (Kap. 1, S. 3). The
+/// 10 WT of that chapter answer the *Beauftragung* 17011, not the Anfrage.
 ///
 /// 17009 is in the table for completeness but its Frist is a
 /// [`Vorlauffrist`](crate::vorlauf) in disguise: „spätester ÜT ist der 2. WT
@@ -995,6 +1020,18 @@ pub fn gas_lieferbeginn_antwort_bei_ausbleiben(
 /// its own 5-Werktage window here, and must never be routed into the
 /// Preisanfrage auto-quote path — see [`ESA_WERTEANFRAGE_PID`].
 pub const WIM: &[AntwortObligation] = &[
+    AntwortObligation {
+        trigger_pid: 25_001,
+        name: "Berechnungsformel (UTILTS)",
+        answered_by: "MSB",
+        antwort_pids: (25_010, 25_010),
+        ebd: Some("E_0218"),
+        frist: FristShape::EndOfWerktag(BERECHNUNGSFORMEL_ANTWORT_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 2 Kap. 2.3.2 Nr. 2 — spätester ÜT ist der 5. WT nach dem ÜT von \
+                 Nr. 1; „Verstreicht die Frist, ohne dass eine Antwort eingeht, gilt dies als \
+                 Zustimmung“",
+    },
     AntwortObligation {
         trigger_pid: 55_039,
         name: "Kündigung MSB",
@@ -1138,9 +1175,9 @@ pub const WIM: &[AntwortObligation] = &[
         answered_by: "MSB",
         antwort_pids: (15_005, 15_005),
         ebd: None,
-        frist: FristShape::EndOfWerktag(TECHNIKAENDERUNG_WERKTAGE),
+        frist: FristShape::EndOfWerktag(TECHNIKAENDERUNG_ANGEBOT_WERKTAGE),
         family: Family::Wim,
-        source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2 — 10 Werktage",
+        source: "BDEW-AWH Änderung der Technik an Lokationen V1.1 Kap. 2.1.2 / 2.2.2 Nr. 2 (S. 8 / S. 15) — Angebot oder Ablehnung, spätester ÜT ist der 5. WT",
     },
     AntwortObligation {
         trigger_pid: 17_011,
@@ -1158,7 +1195,7 @@ pub const WIM: &[AntwortObligation] = &[
         ebd: None,
         frist: FristShape::EndOfWerktag(TECHNIKAENDERUNG_WERKTAGE),
         family: Family::Wim,
-        source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2 — 10 Werktage",
+        source: "BDEW-AWH Änderung der Technik an Lokationen V1.1 Kap. 2.1.2 / 2.2.2 Nr. 4 (S. 9) — Antwort auf Bestellung; WiM Strom Teil 1 Kap. 3.3.1.2 Nr. 2 — 10 Werktage",
     },
     AntwortObligation {
         trigger_pid: ERSTEINBAU_VORABINFORMATION_PID,
@@ -1291,9 +1328,19 @@ pub const RECHNUNGSABWICKLUNG_ANFRAGE_WERKTAGE: u32 = 5;
 /// (WiM Strom Teil 1 Kap. 3.6.3.4.2 / 3.6.3.5.2 Nr. 2).
 pub const RECHNUNGSABWICKLUNG_WERKTAGE: u32 = 8;
 
-/// Answer window on a Messlokationsänderung (Änderung der Technik), in
-/// Werktage (WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2).
+/// Answer window on a Bestellung or Beauftragung of a Messlokationsänderung
+/// (Änderung der Technik), in Werktage (BDEW-AWH Änderung der Technik an
+/// Lokationen V1.1 Kap. 2.1.2 / 2.2.2 Nr. 4; WiM Strom Teil 1 Kap. 3.3.1.2 Nr. 2).
 pub const TECHNIKAENDERUNG_WERKTAGE: u32 = 10;
+
+/// Answer window on a Berechnungsformel (UTILTS 25001 → 25010), in Werktage; a
+/// lapse counts as Zustimmung (WiM Strom Teil 2 Kap. 2.3.2 Nr. 2).
+pub const BERECHNUNGSFORMEL_ANTWORT_WERKTAGE: u32 = 5;
+
+/// Answer window on an Anfrage for an Angebot of a Messlokationsänderung
+/// (REQOTE 35005), in Werktage (BDEW-AWH Änderung der Technik an Lokationen V1.1
+/// Kap. 2.1.2 / 2.2.2 Nr. 2, S. 8 / S. 15).
+pub const TECHNIKAENDERUNG_ANGEBOT_WERKTAGE: u32 = 5;
 
 /// Answer window on a Geschäftsdatenanfrage, in Werktage
 /// (GPKE Teil 4 Kap. 3.2 Nr. 2/4).
@@ -2141,11 +2188,15 @@ mod tests {
             "the ESA window is WiM Teil 2, got {:?}",
             o.source
         );
-        for preisanfrage in [35_001_u32, 35_002, 35_005] {
+        for (preisanfrage, quelle) in [
+            (35_001_u32, "Teil 1"),
+            (35_002, "Teil 1"),
+            (35_005, "Änderung der Technik"),
+        ] {
             let p = antwort_obligation(preisanfrage).expect("published");
             assert!(
-                p.source.contains("Teil 1"),
-                "{preisanfrage} is a Teil 1 Preisanfrage, got {:?}",
+                p.source.contains(quelle) && !p.source.contains("Teil 2"),
+                "{preisanfrage} is a Preisanfrage from {quelle}, got {:?}",
                 p.source
             );
         }
@@ -2189,8 +2240,8 @@ mod tests {
         );
         assert_eq!(
             antwort_obligation(35_005).map(|o| o.frist),
-            Some(FristShape::EndOfWerktag(TECHNIKAENDERUNG_WERKTAGE)),
-            "35005 opens the Messlokationsänderung — 10 WT"
+            Some(FristShape::EndOfWerktag(5)),
+            "35005 asks for an Angebot — 5 WT (AWH Änderung der Technik Kap. 2.1.2 Nr. 2), not the Beauftragung's 10"
         );
         // 35004 opens the GPKE Teil 3 Konfigurationsprozess, so it lives in
         // the GPKE table with **2** Werktage — not in the WiM family at five.
@@ -2439,6 +2490,38 @@ mod tests {
                 );
             }
             day += Duration::days(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod lokationsbuendel_tests {
+    use super::*;
+
+    /// The Berechnungsformel is answered in 5 Werktage out of `E_0218` (WiM
+    /// Strom Teil 2 Kap. 2.3.2 Nr. 2), and a change of the Lokationsbündel-
+    /// struktur in the 2 of the Stammdatenänderung vom NB (GPKE Teil 4 Kap.
+    /// 1.4.2) — one row per recipient.
+    #[test]
+    fn the_berechnungsformel_and_the_bundle_change_have_their_windows() {
+        let f = antwort_obligation(25_001).expect("catalogued");
+        assert_eq!(f.frist, FristShape::EndOfWerktag(5));
+        assert_eq!(
+            (f.answered_by, f.antwort_pids, f.ebd),
+            ("MSB", (25_010, 25_010), Some("E_0218"))
+        );
+        assert!(
+            f.source.contains("Zustimmung"),
+            "the lapse's meaning is in the source"
+        );
+        for (pid, wer, antwort) in [(55_173, "MSB", 55_177), (55_175, "LF", 55_180)] {
+            let o = antwort_obligation(pid).expect("catalogued");
+            assert_eq!(o.frist, FristShape::EndOfWerktag(2), "{pid}");
+            assert_eq!(
+                (o.answered_by, o.antwort_pids),
+                (wer, (antwort, antwort)),
+                "{pid}"
+            );
         }
     }
 }

@@ -56,7 +56,7 @@ async fn loopback_round_trip_spawns_process() {
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant = TenantId::from_party_id(registry.primary_mp_id());
+    let tenant = TenantId::from_tenant(registry.primary_mp_id());
 
     // Dispatcher + loopback state, mirroring `main.rs` wiring.
     let dispatcher = Arc::new(makod::ingest_dispatcher::EdifactIngestDispatcher::new(

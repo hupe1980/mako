@@ -5027,9 +5027,13 @@ pub struct CreatePaymentPlanRequest {
 /// The plan and its whole schedule are written in **one transaction**: a plan
 /// whose installments are missing is a debt with no way to pay it down, and the
 /// dunning run reads the two together.
+///
+/// The account is `req.lf_mp_id`'s, or `default_lf_mp_id`'s when the request
+/// names none — the configured Lieferant, never the tenant.
 pub async fn create_payment_plan(
     pool: &PgPool,
     tenant: &str,
+    default_lf_mp_id: &str,
     req: CreatePaymentPlanRequest,
 ) -> anyhow::Result<Uuid> {
     use time::format_description::well_known::Iso8601;
@@ -5047,7 +5051,7 @@ pub async fn create_payment_plan(
     let first_due = time::Date::parse(&req.first_due_date, &Iso8601::DEFAULT)
         .context("parse first_due_date")?;
 
-    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(tenant);
+    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(default_lf_mp_id);
     let account_id = upsert_account(pool, &req.malo_id, lf_mp_id, tenant).await?;
 
     // ceil(total/installment) without the `total + installment - 1` form,

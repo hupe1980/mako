@@ -43,7 +43,7 @@ async fn handler() -> Arc<MakodApiHandler> {
         .expect("open in-memory SlateDB");
     Arc::new(MakodApiHandler {
         store,
-        tenant_id: mako_engine::ids::TenantId::from_party_id(TENANT),
+        tenant_id: mako_engine::ids::TenantId::from_tenant(TENANT),
     })
 }
 

@@ -98,19 +98,18 @@ pub const QUOTES_PIDS: &[u32] = &[15001, 15002, 15004, 15005];
 /// whether an obligation was met.
 ///
 /// **There is no single Preisanfrage window.** The four REQOTE PIDs open four
-/// different Use-Cases and WiM Strom Teil 1 gives three of them different
-/// numbers:
+/// different Use-Cases, each with its own source:
 ///
 /// | PID | Use-Case | Frist | Fundstelle |
 /// |---|---|---|---|
 /// | 35001 | Anforderung Geräteübernahmeangebot | **4 WT** | Kap. 3.2.2 Nr. 2 |
 /// | 35002 | Anfrage Rechnungsabwicklung über den LF | **5 WT** | Kap. 3.6.3.6.2 Nr. 2 |
-/// | 35005 | Anfrage Angebot Änderung Technik | **10 WT** | Kap. 3.3.1.2 Nr. 2 |
+/// | 35005 | Anfrage Angebot Änderung Technik | **5 WT** | AWH Änderung der Technik V1.1 Kap. 2.1.2 Nr. 2 |
 /// | 35004 | Anfrage einer Konfiguration (GPKE Teil 3) | *unquantified* | — |
 ///
-/// A flat window is wrong in both directions: it gives the
-/// Geräteübernahmeangebot a Werktag it does not have and lets a Technikänderung
-/// run past its window unflagged.
+/// A flat window gives the Geräteübernahmeangebot a Werktag it does not have,
+/// and borrowing the Beauftragung's 10 WT for 35005 lets a late Angebot run
+/// five Werktage unflagged.
 ///
 /// `None` means the window is **unknown**, never unbounded: for 35004 because
 /// GPKE Teil 3 states it elsewhere, and for **35003** because that is the ESA

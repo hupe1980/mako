@@ -34,7 +34,8 @@ const MALO_ID: &str = "51238696012";
 fn command_state(store: &Arc<SlateDbStore>, tenant: TenantId) -> CommandsApiState {
     CommandsApiState {
         tenant_id: tenant,
-        sender_party_id: LF_MP_ID.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(LF_MP_ID),
         configured_marktrollen: vec!["LF".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -115,7 +116,7 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
             .await
             .expect("in-memory store"),
     );
-    let tenant = TenantId::from_party_id(LF_MP_ID);
+    let tenant = TenantId::from_tenant(LF_MP_ID);
     let state = command_state(&store, tenant);
 
     state
@@ -237,7 +238,7 @@ async fn a_follow_up_command_still_resolves_after_a_replacement_process_spawns()
             .await
             .expect("in-memory store"),
     );
-    let tenant = TenantId::from_party_id(LF_MP_ID);
+    let tenant = TenantId::from_tenant(LF_MP_ID);
     let state = command_state(&store, tenant);
     state
         .malo_cache

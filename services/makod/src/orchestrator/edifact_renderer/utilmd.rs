@@ -620,6 +620,11 @@ pub(super) fn render_utilmd(
     // Zählpunktbezeichnung). Sending the Strom qualifier there is a segment the
     // receiver's own profile rejects, which is why this follows the track and
     // not the caller.
+    //
+    // Stammdaten carried whole that name the same Lokation in their own `SG5
+    // LOC` — with its Zeitraum-ID, as a change of the Lokationsbündelstruktur
+    // does — write it there; writing it here as well would send it twice.
+    let location_id = location_id.filter(|id| !u.stammdaten.lokationen.iter().any(|l| l.id == *id));
     let tx = match (location_id, u.lokationstyp.as_deref()) {
         (None, _) => tx,
         (Some(id), Some(qualifier)) if !qualifier.is_empty() => tx.location(
@@ -671,13 +676,19 @@ pub(super) fn render_utilmd(
                 .into(),
             },
         )?;
-        tx = tx.location(typ, &lokation.id);
+        tx = match lokation.zeitraum_id {
+            Some(z) => tx.location_im_zeitraum(typ, &lokation.id, z),
+            None => tx.location(typ, &lokation.id),
+        };
     }
     for segment in &u.stammdaten.sg6 {
         tx = tx.sg6_segment(&segment.tag, segment.elemente.clone());
     }
     for block in &u.stammdaten.bloecke {
-        let mut sg8 = tx.stammdaten(&block.seq);
+        let mut sg8 = match block.zeitraum_id {
+            Some(z) => tx.stammdaten_im_zeitraum(&block.seq, z),
+            None => tx.stammdaten(&block.seq),
+        };
         for segment in &block.segmente {
             sg8 = sg8.segment(&segment.tag, segment.elemente.clone());
         }

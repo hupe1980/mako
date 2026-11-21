@@ -67,7 +67,7 @@ pub struct MigrationApiState {
     pub store: Arc<SlateDbStore>,
     /// Cedar-based authorization engine.
     pub cedar: Arc<CedarAuthorizer>,
-    /// Operator tenant (MP-ID) — the Cedar resource scope.
+    /// Operator tenant (`[deployment] tenant`) — the Cedar resource scope.
     pub tenant: String,
 }
 

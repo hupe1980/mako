@@ -430,7 +430,7 @@ pub(super) async fn dispatch_lf_anmeldung(
 
     let domain_cmd = LfAnmeldungCommand::InitiateAnmeldung {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["LF"], "")?),
         receiver,
         location_id: malo_id.clone(),
         process_date,
@@ -1235,7 +1235,7 @@ pub(super) async fn dispatch_lf_neuanlage(
     let domain_cmd =
         LfAnmeldungCommand::InitiateNeuanlage(Box::new(mako_gpke::NeuanlageAnmeldung {
             pid,
-            sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+            sender: MarktpartnerCode::new(state.own_mp_id(&["LF"], "")?),
             receiver: MarktpartnerCode::new(nb.to_string()),
             marktlokation: marktlokation.clone(),
             process_date: body.vertragsbeginn.clone(),
@@ -1850,7 +1850,7 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
     let vorgang_key = mako_gpke::eog_nb_vorgang_key(&vorgangsnummer);
     let domain_cmd = mako_gpke::EogCommand::Anmelden {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["LF"], "")?),
         receiver: MarktpartnerCode::new(body.gv_mp_id),
         location_id: malo_id.clone(),
         process_date: body.process_date,
@@ -2184,7 +2184,7 @@ async fn dispatch_gpke_zuordnungsmeldung(
 
     let domain_cmd = mako_gpke::ZuordnungsmeldungCommand::Senden {
         meldung,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["LF"], "")?),
         receiver: MarktpartnerCode::new(receiver),
         location_id: malo_id.clone(),
         // `SG5 LOC` DE 3227. `Z16` Marktlokation unless the caller names another
@@ -2326,7 +2326,7 @@ async fn dispatch_gpke_beendigung_zuordnung_anfragen(
     let zuordnungsbeginn = super::eog_stammdaten::stichtag(&process_date)?;
 
     let domain_cmd = mako_gpke::BeendigungZuordnungCommand::Anfragen {
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["LF"], "")?),
         receiver: MarktpartnerCode::new(lfa_mp_id),
         location_id: malo_id.clone(),
         tranche: payload
@@ -2490,7 +2490,7 @@ async fn dispatch_gpke_nb_lieferende_ankuendigen(
     let vorgang_key = nb_lieferende::nb_vorgang_key(&vorgangsnummer);
     let domain_cmd = mako_gpke::NbLieferendeCommand::Ankuendigen(Box::new(
         mako_gpke::NbLieferendeAnkuendigung {
-            sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+            sender: MarktpartnerCode::new(state.own_mp_id(&["LF"], "")?),
             receiver: MarktpartnerCode::new(body.lf_mp_id),
             location_id: malo_id.clone(),
             zuordnungsende,

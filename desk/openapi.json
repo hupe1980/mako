@@ -25,7 +25,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -72,7 +72,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -278,7 +278,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -357,7 +357,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -465,7 +465,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -529,7 +529,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -588,7 +588,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -782,7 +782,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -840,7 +840,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -920,7 +920,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -969,7 +969,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1136,7 +1136,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1243,7 +1243,7 @@
           "accounts"
         ],
         "summary": "`PUT /api/v1/accounts/{malo_id}/vorauszahlung`",
-        "description": "Store or replace the BO4E `Vorauszahlung` COM for an account.\n\nBody: `rubo4e::current::Vorauszahlung` JSON (camelCase).\n\nValidation:\n- Read as `Bo4e<rubo4e::current::Vorauszahlung>`, so the BO4E gate runs as\n  the body deserialises; the canonical round-trip is what is stored.\n- `abschlag_ct` is updated atomically from `betrag.wert` (EUR → ct × 100)\n  so the existing Abschlagslauf scheduler continues to work.\n\nQuery parameter: `?lf_mp_id=<mp_id>` (defaults to tenant config).\n\n§40 Abs. 1 EnWG: Abschlag must match estimated consumption.\nTyped `Vorauszahlung` enables `portald` Jahresabschluss preview and\nauto-adjustment when deviation exceeds 10 %.",
+        "description": "Store or replace the BO4E `Vorauszahlung` COM for an account.\n\nBody: `rubo4e::current::Vorauszahlung` JSON (camelCase).\n\nValidation:\n- Read as `Bo4e<rubo4e::current::Vorauszahlung>`, so the BO4E gate runs as\n  the body deserialises; the canonical round-trip is what is stored.\n- `abschlag_ct` is updated atomically from `betrag.wert` (EUR → ct × 100)\n  so the existing Abschlagslauf scheduler continues to work.\n\nQuery parameter: `?lf_mp_id=<mp_id>` (defaults to the configured `lf_mp_id`).\n\n§40 Abs. 1 EnWG: Abschlag must match estimated consumption.\nTyped `Vorauszahlung` enables `portald` Jahresabschluss preview and\nauto-adjustment when deviation exceeds 10 %.",
         "operationId": "put_vorauszahlung",
         "parameters": [
           {
@@ -11635,6 +11635,77 @@
         }
       }
     },
+    "/svc/edmd/api/v1/virtual/{virtual_malo_id}/berechnungsformel": {
+      "get": {
+        "tags": [
+          "virtual"
+        ],
+        "summary": "`GET /api/v1/virtual/{virtual_malo_id}/berechnungsformel`",
+        "description": "The virtual Marktlokation's Berechnungsformel in the UTILTS terms the NB\ntransmits it in (Prüfidentifikator 25001): its validity, its status, the\nRechenschritt yielding the Energiemenge and every Bestandteil. It is the\nformula `/lastgang` computes with. A community share is no Berechnungsformel\nand is refused with `keine_berechnungsformel`.",
+        "operationId": "get_berechnungsformel",
+        "parameters": [
+          {
+            "name": "virtual_malo_id",
+            "in": "path",
+            "description": "The virtual Marktlokation's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No virtual meter of that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`keine_berechnungsformel` — a community share",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/edmd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/svc/edmd/api/v1/virtual/{virtual_malo_id}/lastgang": {
       "get": {
         "tags": [
@@ -21459,6 +21530,128 @@
           },
           "422": {
             "description": "The request was refused; `code` names the rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/marktd/api/v1/netzbetreiber/{nb_mp_id}/grundzustaendiger-msb": {
+      "get": {
+        "tags": [
+          "malo-grid"
+        ],
+        "summary": "`GET /api/v1/netzbetreiber/{nb_mp_id}/grundzustaendiger-msb`",
+        "operationId": "get_grundzustaendiger_msb",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "13-digit MP-ID of the Netzbetreiber",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The gMSB MP-ID of the grid: `{ nb_mp_id, gmsb_mp_id }`",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No gMSB recorded for this Netzbetreiber",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "malo-grid"
+        ],
+        "summary": "`PUT /api/v1/netzbetreiber/{nb_mp_id}/grundzustaendiger-msb` — record it.",
+        "operationId": "put_grundzustaendiger_msb",
+        "parameters": [
+          {
+            "name": "nb_mp_id",
+            "in": "path",
+            "description": "13-digit MP-ID of the Netzbetreiber",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`PutGrundzustaendigerMsbBody`: `{ gmsb_mp_id }`",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Written"
+          },
+          "401": {
+            "description": "No valid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/marktd.ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`mp_id_ungueltig`: a value is no MP-ID",
             "content": {
               "application/json": {
                 "schema": {
@@ -39425,7 +39618,7 @@
               "string",
               "null"
             ],
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant."
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`."
           },
           "malo_id": {
             "type": "string",
@@ -45440,7 +45633,7 @@
           },
           "payload": {
             "type": "object",
-            "description": "Command-specific payload.\n\nEach command defines its own required fields.  For most GPKE/GeLi\ncommands the minimal payload is a `malo_id` string (the 11-digit\nMarktlokations-ID) plus the process-specific date.  The engine\nresolves all partner MP-IDs (NB, MSB) and MeLo data from the MaLo cache.\n\nExample for `gpke.lieferbeginn.anmelden`\n(`mako_markt::commands::GpkeLieferbeginnAnmelden`, every field Muss on\nthe 55001):\n```json\n{\n  \"malo_id\":            \"51238696012\",\n  \"lieferbeginn_datum\": \"2026-10-01\",\n  \"transaktionsgrund\":  \"E03\",\n  \"bilanzkreis\":        \"11XBK-LF-------9\",\n  \"haushaltskunde\":     true,\n  \"enfg_grundlage\":     \"ZG1\",\n  \"kunde\": { \"nachname\": \"Mustermann\", \"anschrift\": { \"strasse\": \"Hauptstraße\",\n             \"hausnummer\": \"1\", \"postleitzahl\": \"50667\", \"ort\": \"Köln\", \"landescode\": \"DE\" } }\n}\n```\n\nNot a BO4E document: this is a **command** envelope, and each command\nnames the scalar fields it reads out of it (see the module docs). Even\nthe invoicing commands are flat — `makod` renders the INVOIC envelope\nwith an empty detail section and never holds an invoice's positions.\n\n**Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or\n`message_ref` — these are engine-owned and will be ignored or rejected."
+            "description": "Command-specific payload.\n\nEach command defines its own required fields.  For most GPKE/GeLi\ncommands the minimal payload is a `malo_id` string (the 11-digit\nMarktlokations-ID) plus the process-specific date.  The engine\nresolves all partner MP-IDs (NB, MSB) and MeLo data from the MaLo cache.\n\nExample for `gpke.lieferbeginn.anmelden`\n(`mako_markt::commands::GpkeLieferbeginnAnmelden`, every field Muss on\nthe 55001):\n```json\n{\n  \"malo_id\":            \"51238696012\",\n  \"lieferbeginn_datum\": \"2026-10-01\",\n  \"transaktionsgrund\":  \"E03\",\n  \"bilanzkreis\":        \"11XBK-LF-------9\",\n  \"haushaltskunde\":     true,\n  \"enfg_grundlage\":     \"ZG1\",\n  \"kunde\": { \"nachname\": \"Mustermann\", \"anschrift\": { \"strasse\": \"Hauptstraße\",\n             \"hausnummer\": \"1\", \"postleitzahl\": \"50667\", \"ort\": \"Köln\", \"landescode\": \"DE\" } }\n}\n```\n\nNot a BO4E document: this is a **command** envelope, and each command\nnames the scalar fields it reads out of it (see the module docs). Even\nthe invoicing commands are flat — `makod` renders the INVOIC envelope\nwith an empty detail section and never holds an invoice's positions.\n\n**Never include** `receiver_party_id`, `pruefidentifikator`, or\n`message_ref` — these are engine-owned and will be ignored or rejected."
           }
         },
         "additionalProperties": false

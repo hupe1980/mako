@@ -117,6 +117,25 @@ fn send(p: u32) -> InvoicCommand {
 /// read it, only carries it.
 const NACHRICHT: &str = "UNH+INV1+INVOIC:D:06A:UN:2.8e'BGM+380+INV-2026-002+9'UNT+3+INV1'";
 
+/// A validated invoice is announced to `invoicd` naming its receiver
+/// (NAD+MR): `invoicd` refuses an announcement without it rather than check
+/// the invoice under a configured default.
+#[tokio::test]
+async fn the_check_announcement_names_the_receiver() {
+    let p = process::<BothRoles>();
+    let ran = p
+        .run(receive(31002, true), RunOptions::system())
+        .await
+        .unwrap();
+    let initiated = ran
+        .outbox
+        .iter()
+        .find(|o| &*o.message_type == "ProcessInitiated")
+        .expect("a validated invoice is announced");
+    assert_eq!(initiated.payload["receiver_gln"], payer().as_str());
+    assert_eq!(initiated.payload["sender_mp_id"], issuer().as_str());
+}
+
 /// The issuer's `SendInvoic` enqueues the message it carries as the
 /// one `INVOIC` outbox entry of the write that records `InvoicSent`, addressed
 /// to the payer.

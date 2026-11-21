@@ -194,11 +194,13 @@ pub(super) fn antwort(
     // `SG5` in the MIG's order: the Marktlokation, then every Messlokation
     // (Bedingung `[165]` „Wenn bekannt").
     out.lokationen.push(StammdatenLokation {
+        zeitraum_id: None,
         qualifier: "Z16".to_owned(),
         id: lb.malo_id.clone(),
     });
     for id in &melo_ids {
         out.lokationen.push(StammdatenLokation {
+            zeitraum_id: None,
             qualifier: "Z17".to_owned(),
             id: (*id).to_owned(),
         });

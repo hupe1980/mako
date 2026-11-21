@@ -772,6 +772,11 @@ pub fn aw_ct_bei_inbetriebnahme(
         return solar_pv_ueberschuss_aw_ct(leistung_kw, inbetriebnahme);
     }
     if art == E::SolarFreiflaeche {
+        // An Anlage des ersten Segments above 1 MW is ausschreibungspflichtig
+        // (§ 22 Abs. 3 Satz 2 Nr. 1): no gesetzlich bestimmter Wert to look up.
+        if leistung_kw > Decimal::from(1000u32) {
+            return None;
+        }
         return solar_pv_freiflaeche_aw_ct(inbetriebnahme);
     }
 
@@ -856,6 +861,17 @@ pub fn sect53_deduction(art: crate::technology::ErzeugungsArt) -> rust_decimal::
 #[cfg(test)]
 mod statutory_rate_tests {
     use super::*;
+
+    /// A Freiflächenanlage is an Anlage des ersten Segments: above 1 MW it is
+    /// ausschreibungspflichtig (§ 22 Abs. 3 Satz 2 Nr. 1), so it has no
+    /// gesetzlich bestimmter Wert — up to 1 MW it has one.
+    #[test]
+    fn a_freiflaechenanlage_above_one_megawatt_has_no_statutory_value() {
+        let tag = time::macros::date!(2024 - 03 - 01);
+        let art = crate::ErzeugungsArt::SolarFreiflaeche;
+        assert!(aw_ct_bei_inbetriebnahme(art, dec!(1000), tag).is_some());
+        assert_eq!(aw_ct_bei_inbetriebnahme(art, dec!(1500), tag), None);
+    }
 
     /// Assert a whole ladder at once: `(Bemessungsleistung, ct/kWh)`.
     fn assert_ladder(table: &RateTable, tiers: &[(&str, &str)], what: &str) {

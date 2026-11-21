@@ -164,6 +164,7 @@ graph TB
 │  POST|GET /api/v1/virtual                                  ← create / list configs            │
 │  GET|DELETE /api/v1/virtual/{virtual_malo_id}              ← one config                       │
 │  GET  /api/v1/virtual/{virtual_malo_id}/lastgang           ← computed series                  │
+│  GET  /api/v1/virtual/{virtual_malo_id}/berechnungsformel  ← the formula as UTILTS 25001     │
 │  GET  /api/v1/sharing/{community_id}/allocation            ← §42c allocation                  │
 │  GET  /api/v1/sharing/participants/{malo_id}/allocation    ← one participant's allocation     │
 │  GET  /api/v1/sharing/readiness                            ← §42c delivery readiness          │

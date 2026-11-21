@@ -16,6 +16,7 @@ pub mod device;
 pub mod einwilligung;
 pub mod event_ingest;
 pub mod grundversorger;
+pub mod grundzustaendiger_msb;
 pub mod lokationsbuendel;
 pub mod lokationszuordnung;
 pub mod mabis_zp;

@@ -26,7 +26,7 @@ async fn dispatcher() -> EdifactIngestDispatcher {
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant = TenantId::from_party_id(MGV_MP);
+    let tenant = TenantId::from_tenant(MGV_MP);
     EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),
@@ -40,7 +40,7 @@ async fn ingest_state() -> makod::edifact_api::EdifactApiState {
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant = TenantId::from_party_id(MGV_MP);
+    let tenant = TenantId::from_tenant(MGV_MP);
     let dispatcher = Arc::new(EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),

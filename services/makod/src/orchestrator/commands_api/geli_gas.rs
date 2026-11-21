@@ -202,7 +202,7 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
     let message_ref = MessageRef::new(format!("DATENABRUF-{}", uuid::Uuid::new_v4()));
     let domain_cmd = GeliGasDatenabrufCommand::InitiateAnfrage {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["LFG"], "")?),
         receiver: gnb_mp_id,
         message_ref,
         messlokation: melo,
@@ -353,7 +353,7 @@ pub(super) async fn dispatch_geli_eog_anmelden(
     let message_ref = MessageRef::new(format!("EOG-GAS-{}", uuid::Uuid::new_v4()));
     let domain_cmd = GasSupplierChangeCommand::InitiateGnbProcess {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["GNB"], "")?),
         receiver: MarktpartnerCode::new(gv_mp_id),
         malo_id: malo_id.clone(),
         document_date,
@@ -502,7 +502,7 @@ async fn dispatch_geli_beendigung_zuordnung_anfragen(
         .map_err(DispatchError::InvalidPayload)?;
     let domain_cmd = GasSupplierChangeCommand::InitiateGnbProcess {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["GNB"], "")?),
         receiver: MarktpartnerCode::new(body.lfa_mp_id.trim()),
         malo_id: malo_id.clone(),
         document_date,
@@ -687,7 +687,7 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
     let pid = Pruefidentifikator::new(44022).map_err(DispatchError::InvalidPayload)?;
     let domain_cmd = LfStornierungCommand::InitiateStornierung {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["LFG"], "")?),
         receiver: gnb_mp_id,
         malo: malo_id.clone(),
         bgm_qualifier,
@@ -921,7 +921,7 @@ async fn spawn_geli_lf_anmeldung(
     let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
     let domain_cmd = GeliGasLfAnmeldungCommand::InitiateAnmeldung {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["LFG"], "")?),
         receiver,
         malo_id: malo_id.clone(),
         process_date,
@@ -1561,7 +1561,7 @@ async fn dispatch_geli_zuordnungsmeldung(
 
     let domain_cmd = mako_geli_gas::zuordnungsmeldung::ZuordnungsmeldungCommand::Senden {
         meldung,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(&["GNB"], "")?),
         receiver: MarktpartnerCode::new(receiver),
         location_id: malo_id.clone(),
         transaktionsgrund,
@@ -2252,7 +2252,14 @@ async fn dispatch_geli_stammdaten_aenderung_senden(
     let pid = Pruefidentifikator::new(body.pid).map_err(DispatchError::InvalidPayload)?;
     let domain_cmd = GasStammdatenCommand::SendAenderung {
         pid,
-        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        sender: MarktpartnerCode::new(state.own_mp_id(
+            &[if matches!(body.pid, 44_109 | 44_120) {
+                "LFG"
+            } else {
+                "GNB"
+            }],
+            "",
+        )?),
         receiver: MarktpartnerCode::new(body.empfaenger_mp_id.trim()),
         location_id: malo_id.clone(),
         aenderungsdatum: body.aenderungsdatum.clone(),

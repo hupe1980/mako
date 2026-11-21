@@ -10,7 +10,7 @@
 
 allow_insecure_no_auth = true
 
-tenant = "9900357000004"
+tenant = "stadtwerke-musterstadt"
 
 productd_url    = "http://productd:9080"
 marktd_url      = "http://marktd:8180"

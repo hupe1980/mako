@@ -43,8 +43,10 @@ BILLINGD_CONFIG=deploy/demo/billingd.toml cargo run -p billingd -- --check-confi
 ## Configuration
 
 `tenant`; `productd_url`, `edmd_url`, `marktd_url` (required), `vertragd_url`,
-`outputd_url`, `accountingd_url`; `seller_name` with `seller_vat_id` and/or
-`seller_tax_number`; `erp_webhook_url` / `erp_hmac_secret` (the webhook endpoint
+`outputd_url`, `accountingd_url`; `seller_name` (required — every Rechnung and Gebührenbescheid names
+it, and the start is refused without it) with `seller_vat_id` and/or
+`seller_tax_number`; `seller_gln` (a GS1 GLN, BT-34 under EAS 0088 — a
+BDEW-/DVGW-Codenummer is not one; absent, BT-34 is omitted); `erp_webhook_url` / `erp_hmac_secret` (the webhook endpoint
 `default`); `[subscriptions] retention_days`; `[database]`,
 `[oidc]`. `[gebuehrenbescheid]` is required to bill a public-law Gebühr.
 `[policy]` holds

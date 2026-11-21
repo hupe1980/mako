@@ -33,8 +33,8 @@ const EINE_MP_ID: &str = "BDEW-AWH Identifikatoren V1.2, Kap. 2.1 (S. 4)";
 const CODENUMMER: &str = "BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5): Stelle 1+2 \
      „99 = BDEW/Strom“, „98 = DVGW/Gas“";
 
-/// A Codenummer names one Energieart.
-const SPARTEN_GETRENNT: &str = "Allgemeine Festlegungen V6.1d, Kap. 2.13";
+/// A Codenummer names one Marktrolle in one Energieart.
+const SPARTEN_GETRENNT: &str = "Allgemeine Festlegungen V6.1d, Kap. 2.13 (S. 17)";
 
 /// Each MP-ID signs, decrypts and connects with its own key pairs.
 const AS4_SCHLUESSEL: &str = "BDEW AS4-Profil 1.2, Kap. 2.3.4.4; Regelungen zum \
@@ -43,12 +43,14 @@ const AS4_SCHLUESSEL: &str = "BDEW AS4-Profil 1.2, Kap. 2.3.4.4; Regelungen zum 
 /// The Zuordnungsermächtigung is granted per ZRT, BG, BK and LF.
 const BILANZKREIS_STROM: &str = "BK6-24-174 Anlage 3 (MaBiS), Kap. 10.2.1";
 
-const PRIMAER: &str = "makod [[party]] primary: genau eine MP-ID ist der Speicherschlüssel \
-     aller Ereignisströme";
+const PRIMAER: &str = "makod [[party]] primary: die MP-ID, unter der eine CONTRL auf eine \
+     Übertragungsdatei an keine eigene MP-ID antwortet";
+const TENANT: &str = "[deployment] tenant / [identity] tenant: der Datenschlüssel jeder \
+     Zeile, in allen Diensten derselbe — eine beliebige feste Zeichenkette, keine MP-ID";
 const ROLLEN: &str = "makod [deployment] rollen: jede erklärte Rolle braucht genau eine \
      [[party]]-MP-ID";
-const EIGENE_MP_ID: &str = "processd [identity] own_mp_id: die MP-ID, die in makod \
-     primary = true trägt";
+const EIGENE_MP_IDS: &str = "processd [identity] nb_mp_ids / lf_mp_ids / msb_mp_ids: die \
+     MP-IDs, unter denen processd je Rolle antwortet — dieselben wie makods [[party]]";
 const VERBUNDENE: &str = "processd [identity] verbundene_lieferanten: Pflichtangabe, [] \
      eingeschlossen; jede Rolle hat ihre eigene MP-ID (BDEW-AWH Identifikatoren V1.2, \
      Kap. 2.1)";
@@ -326,10 +328,14 @@ pub struct DienstAntwort {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Antworten {
+    /// The tenant — the data-isolation key every daemon writes to its rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
     /// The Rollen the deployment plays, each with its MP-ID.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rollen: Vec<RolleAntwort>,
-    /// The MP-ID that is the storage key, where several are named.
+    /// The MP-ID a CONTRL answers under for an interchange addressed to none
+    /// of the own MP-IDs, where several are named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primaer: Option<String>,
     /// A Lieferant's Bilanzkreise per Sparte.
@@ -431,6 +437,8 @@ struct Geladen {
     parteien: BTreeMap<String, BTreeSet<Rolle>>,
     /// `[deployment] rollen`, from makod's policy report.
     rollen: Option<BTreeSet<Rolle>>,
+    /// `[deployment] tenant`, from makod's policy report.
+    tenant: Option<String>,
     /// `[[einrichtung.dienst]]`: (name, url).
     dienste: Vec<(String, String)>,
 }
@@ -457,6 +465,11 @@ fn geladen_aus(berichte: &[DienstBericht]) -> Geladen {
             .policy
             .get("deployment.rollen")
             .map(|e| e.value.split(',').filter_map(Rolle::von_token).collect());
+        g.tenant = einrichtung
+            .policy
+            .get("deployment.tenant")
+            .map(|e| e.value.clone())
+            .filter(|t| !t.is_empty());
     }
     g
 }
@@ -476,6 +489,7 @@ fn vorbelegen(g: &Geladen) -> Antworten {
         }
     }
     Antworten {
+        tenant: g.tenant.clone(),
         rollen: rollen
             .into_iter()
             .map(|(rolle, mp_id)| RolleAntwort { rolle, mp_id })
@@ -735,28 +749,36 @@ fn rollen_pruefen(
             );
         rollen.insert(r.rolle, mp_id);
     }
-    // One Codenummer names one Sparte: a 13-digit GLN under both is refused.
-    let mut sparte_von: BTreeMap<String, Sparte> = BTreeMap::new();
+    // One Codenummer names one Marktrolle in one Sparte.
+    let mut rolle_von: BTreeMap<String, Rolle> = BTreeMap::new();
     for (rolle, mp_id) in &mut rollen {
         let Some(m) = mp_id.clone() else { continue };
-        match sparte_von.get(&m) {
-            Some(s) if *s != rolle.sparte() => {
+        match rolle_von.get(&m) {
+            Some(andere) => {
                 abgelehnt.push(
                     Befund::blockiert(
                         format!("rollen.{}", rolle.token()),
-                        format!(
-                            "{m:?} ist schon einer {}-Rolle zugeordnet — Strom und Gas brauchen \
-                             je eine eigene MP-ID",
-                            s.as_str()
-                        ),
+                        if andere.sparte() == rolle.sparte() {
+                            format!(
+                                "{m:?} ist schon der Rolle {} zugeordnet — jede Marktrolle \
+                                 braucht ihre eigene MP-ID",
+                                andere.token()
+                            )
+                        } else {
+                            format!(
+                                "{m:?} ist schon einer {}-Rolle zugeordnet — Strom und Gas \
+                                 brauchen je eine eigene MP-ID",
+                                andere.sparte().as_str()
+                            )
+                        },
                     )
                     .bereich(Bereich::Identitaeten)
                     .quelle(SPARTEN_GETRENNT),
                 );
                 *mp_id = None;
             }
-            _ => {
-                sparte_von.insert(m, rolle.sparte());
+            None => {
+                rolle_von.insert(m, *rolle);
             }
         }
     }
@@ -816,12 +838,7 @@ pub fn vorschlag(antworten: &Antworten, geladen: &[DienstBericht]) -> Vorschlag 
         ));
     }
     if !rollen.is_empty() {
-        dateien.push(processd_datei(
-            antworten,
-            &rollen,
-            primaer.as_deref(),
-            &mut abgelehnt,
-        ));
+        dateien.push(processd_datei(antworten, &rollen, &mut abgelehnt));
     }
     let luecken = dateien.iter().map(|d| d.luecken).sum();
     Vorschlag {
@@ -845,6 +862,7 @@ fn makod_datei(
 
     if !rollen.is_empty() {
         d.abschnitt(Art::Abschnitt, "[deployment]");
+        tenant_zeile(&mut d, antworten, g);
         let gewollt: BTreeSet<Rolle> = rollen.keys().copied().collect();
         if let Some(alt) = g.rollen.as_ref().filter(|alt| **alt != gewollt) {
             d.zeile(
@@ -886,7 +904,8 @@ fn makod_datei(
             Some(p) if p == mp_id => d.zeile(art, "primary = true".to_owned(), PRIMAER, "primaer"),
             Some(_) => {}
             None => d.fehlt(
-                "primary = true bei genau einer [[party]] — welche MP-ID ist der Speicherschlüssel?"
+                "primary = true bei genau einer [[party]] — unter welcher MP-ID antwortet eine CONTRL auf \
+                 eine Übertragungsdatei an keine eigene?"
                     .to_owned(),
                 PRIMAER,
                 "primaer",
@@ -1083,26 +1102,80 @@ fn party_as4(d: &mut Entwurf, as4: Option<&As4Antwort>, mp_id: &str, abgelehnt: 
     }
 }
 
+/// `tenant = …`, marked against the loaded one; a gap when unanswered.
+fn tenant_zeile(d: &mut Entwurf, antworten: &Antworten, g: &Geladen) {
+    let tenant = antworten
+        .tenant
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    let Some(t) = tenant else {
+        d.fehlt(
+            "tenant — der Datenschlüssel aller Dienste, z. B. \"stadtwerke-musterstadt\""
+                .to_owned(),
+            TENANT,
+            "tenant",
+        );
+        return;
+    };
+    if let Some(alt) = g.tenant.as_deref().filter(|alt| *alt != t) {
+        d.zeile(
+            Art::Weg,
+            format!("tenant = {}", zitiert(alt)),
+            TENANT,
+            "tenant",
+        );
+    }
+    d.zeile(
+        art_gegen(g, g.tenant.as_deref() == Some(t)),
+        format!("tenant = {}", zitiert(t)),
+        TENANT,
+        "tenant",
+    );
+}
+
 fn processd_datei(
     antworten: &Antworten,
     rollen: &BTreeMap<Rolle, Option<String>>,
-    primaer: Option<&str>,
     abgelehnt: &mut Vec<Befund>,
 ) -> Datei {
     let mut d = Entwurf::neu("processd", "processd.toml", false);
     d.abschnitt(Art::Abschnitt, "[identity]");
-    match primaer {
-        Some(p) => d.zeile(
+    match antworten
+        .tenant
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        Some(t) => d.zeile(
             Art::Neu,
-            format!("own_mp_id = {}", zitiert(p)),
-            EIGENE_MP_ID,
-            "primaer",
+            format!("tenant = {}", zitiert(t)),
+            TENANT,
+            "tenant",
         ),
         None => d.fehlt(
-            "own_mp_id — die MP-ID mit primary = true".to_owned(),
-            EIGENE_MP_ID,
-            "primaer",
+            "tenant — derselbe wie in makod".to_owned(),
+            TENANT,
+            "tenant",
         ),
+    }
+    for (schluessel, art) in [
+        ("nb_mp_ids", [Rolle::NbStrom, Rolle::NbGas]),
+        ("lf_mp_ids", [Rolle::LfStrom, Rolle::LfGas]),
+        ("msb_mp_ids", [Rolle::MsbStrom, Rolle::MsbGas]),
+    ] {
+        let ids: Vec<&str> = art
+            .iter()
+            .filter_map(|r| rollen.get(r).and_then(Option::as_deref))
+            .collect();
+        if !ids.is_empty() {
+            d.zeile(
+                Art::Neu,
+                format!("{schluessel} = {}", liste(ids.into_iter())),
+                EIGENE_MP_IDS,
+                "rollen",
+            );
+        }
     }
     match &antworten.verbundene_lieferanten {
         Some(v) => d.zeile(
@@ -1229,6 +1302,7 @@ mod tests {
     /// Strom Bilanzkreis — and the Gas Bilanzkreis left open.
     fn lieferant_strom_und_gas() -> Antworten {
         Antworten {
+            tenant: Some("stadtwerke-musterstadt".into()),
             rollen: vec![
                 rolle(Rolle::LfStrom, "9900357000004"),
                 rolle(Rolle::LfGas, "9800357000005"),
@@ -1316,7 +1390,19 @@ mod tests {
         );
 
         let processd = datei(&v, "processd");
-        assert!(processd.toml.contains("own_mp_id = \"9900357000004\""));
+        assert!(
+            processd
+                .toml
+                .contains("tenant = \"stadtwerke-musterstadt\"")
+        );
+        assert!(
+            processd
+                .toml
+                .contains("lf_mp_ids = [\"9900357000004\", \"9800357000005\"]"),
+            "{}",
+            processd.toml
+        );
+        assert!(makod.toml.contains("tenant = \"stadtwerke-musterstadt\""));
         assert!(processd.toml.contains("standard = [\"11XBK-STD------Y\"]"));
         let gas = processd
             .zeilen
@@ -1553,5 +1639,38 @@ mod tests {
         let v = vorschlag(&a, &[]);
         assert_eq!(v.abgelehnt.len(), 1);
         assert_eq!(v.abgelehnt[0].quelle.as_deref(), Some(SPARTEN_GETRENNT));
+    }
+
+    /// One Codenummer names one Marktrolle: an NB and an MSB of one company
+    /// hold two, so the second Rolle under the same MP-ID is refused.
+    #[test]
+    fn one_mp_id_for_two_rollen_is_refused() {
+        let a = Antworten {
+            rollen: vec![
+                rolle(Rolle::NbStrom, "9900357000004"),
+                rolle(Rolle::MsbStrom, "9900357000004"),
+            ],
+            ..Antworten::default()
+        };
+        let v = vorschlag(&a, &[]);
+        assert_eq!(v.abgelehnt.len(), 1, "{:?}", v.abgelehnt);
+        assert_eq!(v.abgelehnt[0].quelle.as_deref(), Some(SPARTEN_GETRENNT));
+    }
+
+    /// Without a tenant the proposal carries a gap for it rather than a value.
+    #[test]
+    fn an_unanswered_tenant_is_a_gap() {
+        let a = Antworten {
+            rollen: vec![rolle(Rolle::NbStrom, "9900357000004")],
+            ..Antworten::default()
+        };
+        let v = vorschlag(&a, &[]);
+        assert!(!v.vollstaendig);
+        assert!(
+            datei(&v, "makod")
+                .zeilen
+                .iter()
+                .any(|z| z.art == Art::Fehlt && z.frage.as_deref() == Some("tenant"))
+        );
     }
 }

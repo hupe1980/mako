@@ -3636,6 +3636,73 @@ pub const E_0247_CODES: &[AntwortCode] = &[
     ),
 ];
 
+/// `E_0218` — Berechnungsformel prüfen; prüfende Rolle MSB (EBD 4.3 Kap.
+/// 8.17.1, S. 608–610).
+pub const EBD_BERECHNUNGSFORMEL: &str = "E_0218";
+const E_0218: Option<&'static str> = Some(EBD_BERECHNUNGSFORMEL);
+
+/// `E_0218` — the MSB's Antwort auf Berechnungsformel (UTILTS 25010), one code
+/// per Verwendungszeitraum: „Alle in den Zeiträumen gefundene Fehler sind,
+/// unter Nennung der jeweiligen Zeitraum-ID, zu nennen."
+pub const E_0218_CODES: &[AntwortCode] = &[
+    code!(
+        "A13",
+        E_0218,
+        Ablehnung,
+        "Für den Verwendungszeitraum mit dem Status „keine Daten“ werden Daten erwartet. (Prüfschritt 18)"
+    ),
+    code!(
+        "A09",
+        E_0218,
+        Zustimmung,
+        "Berechnungsformel muss bilateral ausgetauscht werden. (Prüfschritt 20)"
+    ),
+    code!(
+        "A10",
+        E_0218,
+        Ablehnung,
+        "Der Lokation ist nicht genau eine Messlokation zugeordnet (Prüfschritt 40)"
+    ),
+    code!(
+        "A11",
+        E_0218,
+        Zustimmung,
+        "Energiemenge der Lokation ist mit der Energiemenge der Messlokation identisch (Prüfschritt 40)"
+    ),
+    code!(
+        "A02",
+        E_0218,
+        Ablehnung,
+        "Zeitraum der Berechnungsformel unplausibel. (Prüfschritt 60)"
+    ),
+    code!(
+        "A04",
+        E_0218,
+        Ablehnung,
+        "Es sind zu viele Messlokationen in der Berechnungsformel für diesen Zeitraum vorhanden. (Prüfschritt 70)"
+    ),
+    code!(
+        "A05",
+        E_0218,
+        Ablehnung,
+        "Es fehlen Messlokationen in der Berechnungsformel. (Prüfschritt 80)"
+    ),
+    code!(
+        "A06",
+        E_0218,
+        Ablehnung,
+        "ID der Messlokationen stimmen für den Zeitraum nicht überein (Prüfschritt 90)"
+    ),
+    code!(
+        "A07",
+        E_0218,
+        Ablehnung,
+        "Die Flussrichtung mindestens einer Messlokation ist nicht korrekt angegeben. (Prüfschritt 100)"
+    ),
+    code!("A12", E_0218, Zustimmung, "Zustimmung (Prüfschritt 110)"),
+    code!("A99", E_0218, Ablehnung, "Sonstiges (Prüfschritt 110)"),
+];
+
 /// `E_0249` — Beauftragung zur Messlokationsänderung prüfen, **vom NB**.
 pub const EBD_MESSLOKATIONSAENDERUNG_NB: &str = "E_0249";
 const E_0249: Option<&'static str> = Some(EBD_MESSLOKATIONSAENDERUNG_NB);
@@ -7265,6 +7332,7 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_TECHNIK_BESTELLUNG_NB, E_0279_CODES),
     (EBD_TECHNIK_BESTELLUNG_LF, E_0283_CODES),
     (EBD_TECHNIK_DURCHFUEHRUNG, E_0286_CODES),
+    (EBD_BERECHNUNGSFORMEL, E_0218_CODES),
     (EBD_MESSLOKATIONSAENDERUNG_NB, E_0249_CODES),
     (EBD_MESSLOKATIONSAENDERUNG_LF, E_0250_CODES),
     (EBD_GESAMTVORGANG, E_0232_CODES),

@@ -33,7 +33,7 @@ async fn dispatcher() -> EdifactIngestDispatcher {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN_MP),
+        TenantId::from_tenant(OWN_MP),
     )
 }
 

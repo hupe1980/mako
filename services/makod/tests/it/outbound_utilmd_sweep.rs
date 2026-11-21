@@ -209,7 +209,7 @@ fn registry() -> makod::party_registry::MpIdRegistry {
         },
         PartyConfig {
             mp_id: LF.to_owned(),
-            roles: vec!["LF".to_owned(), "MSB".to_owned()],
+            roles: vec!["LF".to_owned()],
             primary: false,
             agency: None,
             as4: None,

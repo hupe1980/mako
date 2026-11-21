@@ -82,7 +82,7 @@ const RELEASE_RESPONSE: &str = "S2.1";
 fn lfn_process() -> Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore> {
     Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(LFN_ID),
+        TenantId::from_tenant(LFN_ID),
         WorkflowId::new("gpke-lf-anmeldung", FV_START),
     )
 }
@@ -90,7 +90,7 @@ fn lfn_process() -> Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore> {
 fn nb_process() -> Process<GpkeSupplierChangeWorkflow, InMemoryEventStore> {
     Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(NB_ID),
+        TenantId::from_tenant(NB_ID),
         WorkflowId::new("gpke-supplier-change", FV_START),
     )
 }

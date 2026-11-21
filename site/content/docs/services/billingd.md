@@ -1119,7 +1119,7 @@ outputd's append-only template store keeps it resolvable.
 ## Configuration
 
 ```toml
-tenant        = "9910000000002"
+tenant        = "stadtwerke-musterstadt"   # isolation key, never printed
 
 productd_url  = "http://productd:9080"    # required
 edmd_url      = "http://edmd:8380"        # required
@@ -1128,8 +1128,10 @@ vertragd_url    = "http://vertragd:9780"  # product assignment, buyer
 outputd_url     = "http://outputd:9880"   # render and issue
 accountingd_url = "http://accountingd:9380" # paid Abschläge
 
-# § 14 Abs. 4 Nr. 2 UStG: one of the two is required, or billingd refuses to start.
+# Required: the seller (BT-27) every Rechnung and Gebührenbescheid names.
 seller_name       = "Stadtwerke Musterstadt GmbH"
+# seller_gln      = "4006381333931"        # BT-34, EAS 0088 — a GS1 GLN only
+# § 14 Abs. 4 Nr. 2 UStG: one of the two is required, or billingd refuses to start.
 seller_vat_id     = "DE123456789"          # BT-31
 seller_tax_number = "123/456/78901"        # BT-32
 seller_iban       = "DE89370400440532013000" # BT-84, BG-16

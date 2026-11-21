@@ -43,6 +43,7 @@ const SCHLUESSEL: &str = "erstlauf-schluessel";
 /// codes the tests use.
 fn antworten() -> Antworten {
     Antworten {
+        tenant: Some("stadtwerke-musterstadt".to_owned()),
         rollen: vec![
             RolleAntwort {
                 rolle: Rolle::LfStrom,

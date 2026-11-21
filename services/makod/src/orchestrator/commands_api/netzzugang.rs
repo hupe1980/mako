@@ -49,7 +49,7 @@ pub(super) async fn dispatch_netzzugang(
 
     let antrag = NetzzugangAntrag {
         id: uuid::Uuid::new_v4(),
-        tenant: state.sender_party_id.clone(),
+        tenant: state.tenant.clone(),
         antrag_typ,
         aktion,
         netzanschluss_id,

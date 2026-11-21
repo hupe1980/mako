@@ -278,9 +278,13 @@ export const de = {
         verbunden: (liste: string) =>
           liste ? `Verbundene Lieferanten: ${liste}` : "Keine verbundenen Lieferanten",
       },
+      tenant: {
+        titel: "Tenant",
+        text: "Der Datenschlüssel, den jeder Dienst in seine Zeilen schreibt — in allen Diensten derselbe, z. B. „stadtwerke-musterstadt“. Keine MP-ID.",
+      },
       rollen: {
         titel: "Rollen und MP-IDs",
-        text: "Welche Rollen spielt die Bereitstellung, und unter welcher MP-ID? Strom braucht eine BDEW-Codenummer (99…), Gas eine DVGW-Codenummer (98…).",
+        text: "Welche Rollen spielt die Bereitstellung, und unter welcher MP-ID? Jede Rolle hat ihre eigene; Strom braucht eine BDEW-Codenummer (99…), Gas eine DVGW-Codenummer (98…).",
         mpId: (rolle: string) => `MP-ID ${rolle}`,
         namen: {
           "lf-strom": "Lieferant Strom",
@@ -296,7 +300,7 @@ export const de = {
       },
       primaer: {
         titel: "Primäre MP-ID",
-        text: "Der Speicherschlüssel aller Ereignisströme — einmal gewählt, bleibt er.",
+        text: "Unter ihr antwortet eine CONTRL auf eine Übertragungsdatei, die an keine eigene MP-ID adressiert ist.",
       },
       bilanzkreise: {
         titel: "Bilanzkreise",
@@ -1470,6 +1474,10 @@ export const de = {
     process_not_found:
       "Unter diesem Schlüssel ist kein Prozess bekannt. Prüf die Schreibweise — oder die Nachricht ist noch nicht eingegangen.",
     malo_not_found: "Diese MaLo ist nicht bekannt.",
+    creditor_name_not_configured:
+      "Für SEPA fehlt der Name des Zahlungsempfängers — trag `creditor_name` in die Konfiguration von accountingd ein.",
+    foreign_catalogue: "Dieser Katalog gehört zu einem anderen Lieferanten als diesem Dienst.",
+    mp_id_ungueltig: "Das ist keine gültige Marktpartner-ID — 13 Ziffern, Strom 99…, Gas 98….",
     partner_not_found: "Dieser Marktpartner ist nicht bekannt.",
     ambiguous_process:
       "Der Schlüssel passt auf mehr als einen Prozess. Such genauer, etwa nach der Prozess-ID.",

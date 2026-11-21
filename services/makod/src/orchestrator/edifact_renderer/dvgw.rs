@@ -50,10 +50,7 @@ pub(super) fn render_dvgw(
             document.message_type()
         )));
     }
-    let sender = p
-        .get("sender")
-        .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(p.get("sender").and_then(|v| v.as_str()), registry, "DVGW")?;
     let receiver = p
         .get("receiver")
         .and_then(|v| v.as_str())

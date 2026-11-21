@@ -92,15 +92,14 @@ fn restrechnung_invoice() -> energy_billing::Invoice {
 fn cfg() -> BillingdConfig {
     serde_json::from_value(serde_json::json!({
         "database": { "url": "postgres://localhost/x" },
-        // A valid GS1 GLN: a BDEW-Codenummer is issued through GS1, so a real
-        // operator's MP-ID has a correct check digit and BT-34 can honestly
-        // claim EAS 0088. `9900000000001` — the placeholder used elsewhere in
-        // the fixtures — does not: the first twelve digits require a `4`.
-        "tenant": "9900000000004",
+        "tenant": "stadtwerke-musterstadt",
         "productd_url": "http://productd",
         "edmd_url": "http://edmd",
         "marktd_url": "http://marktd",
         "seller_name": "Stadtwerke Musterstadt GmbH",
+        // A GS1 GLN with a correct check digit — what BT-34 under EAS 0088
+        // claims. A BDEW-Codenummer is not one.
+        "seller_gln": "4006381333931",
         "seller_vat_id": "DE123456789",
         "seller": {
             "street": "Musterstraße 1",
@@ -387,30 +386,33 @@ fn the_render_request_carries_the_semantic_model() {
 /// (en16931 0.4.0) can, and this pins both directions.
 #[test]
 fn the_seller_electronic_address_is_a_gln_or_absent() {
-    // A correctly configured operator: a real BDEW-Codenummer is a real GLN.
+    // A configured GLN is emitted under EAS 0088.
     let model = einvoice::build(&mixed_rate_invoice(), &cfg()).expect("model builds");
     let bt34 = model
         .seller
         .electronic_address
         .clone()
         .expect("a valid GLN is emitted");
-    assert_eq!(bt34.content(), "9900000000004");
+    assert_eq!(bt34.content(), "4006381333931");
     assert_eq!(bt34.scheme(), Some("0088"));
 
-    // A mistyped one: the term is omitted rather than asserting a GLN the
-    // identifier is not. BT-34 is optional in EN 16931 core, so the retail
+    // A mistyped one, and none at all: the term is omitted rather than
+    // asserting a GLN. BT-34 is optional in EN 16931 core, so the retail
     // document stays valid — it simply stops making a claim it cannot support.
-    let mut mistyped = cfg();
-    mistyped.tenant = "9900000000001".to_owned();
-    let model = einvoice::build(&mixed_rate_invoice(), &mistyped).expect("model builds");
-    assert!(
-        model.seller.electronic_address.is_none(),
-        "a bad GS1 check digit must omit BT-34, not claim it",
-    );
-    assert!(
-        einvoice::validate(&model).fatal().next().is_none(),
-        "BT-34 is optional in core; omitting it must not invalidate the document",
-    );
+    // Neither the tenant nor an MP-ID is ever offered in its place.
+    for gln in [Some("4006381333932"), None] {
+        let mut cfg = cfg();
+        cfg.seller_gln = gln.map(str::to_owned);
+        let model = einvoice::build(&mixed_rate_invoice(), &cfg).expect("model builds");
+        assert!(
+            model.seller.electronic_address.is_none(),
+            "{gln:?}: BT-34 must be omitted, not claimed",
+        );
+        assert!(
+            einvoice::validate(&model).fatal().next().is_none(),
+            "BT-34 is optional in core; omitting it must not invalidate the document",
+        );
+    }
 }
 
 /// Every invoice carries its billing period (BG-14).
@@ -483,7 +485,7 @@ fn production_stamps_the_terms_the_gate_specimen_proves_templates_against() {
 fn the_seller_steuernummer_reaches_the_model_and_the_wire() {
     let mut v = serde_json::to_value(serde_json::json!({
         "database": { "url": "postgres://localhost/x" },
-        "tenant": "9900000000004",
+        "tenant": "stadtwerke-musterstadt",
         "productd_url": "http://productd",
         "edmd_url": "http://edmd",
         "marktd_url": "http://marktd",

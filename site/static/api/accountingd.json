@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.44.0"
+    "version": "0.45.0"
   },
   "paths": {
     "/api/v1/accounts/{malo_id}": {
@@ -33,7 +33,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -80,7 +80,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -286,7 +286,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -365,7 +365,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -473,7 +473,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -537,7 +537,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -596,7 +596,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -790,7 +790,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -848,7 +848,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -928,7 +928,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -977,7 +977,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1144,7 +1144,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant.",
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1251,7 +1251,7 @@
           "accounts"
         ],
         "summary": "`PUT /api/v1/accounts/{malo_id}/vorauszahlung`",
-        "description": "Store or replace the BO4E `Vorauszahlung` COM for an account.\n\nBody: `rubo4e::current::Vorauszahlung` JSON (camelCase).\n\nValidation:\n- Read as `Bo4e<rubo4e::current::Vorauszahlung>`, so the BO4E gate runs as\n  the body deserialises; the canonical round-trip is what is stored.\n- `abschlag_ct` is updated atomically from `betrag.wert` (EUR → ct × 100)\n  so the existing Abschlagslauf scheduler continues to work.\n\nQuery parameter: `?lf_mp_id=<mp_id>` (defaults to tenant config).\n\n§40 Abs. 1 EnWG: Abschlag must match estimated consumption.\nTyped `Vorauszahlung` enables `portald` Jahresabschluss preview and\nauto-adjustment when deviation exceeds 10 %.",
+        "description": "Store or replace the BO4E `Vorauszahlung` COM for an account.\n\nBody: `rubo4e::current::Vorauszahlung` JSON (camelCase).\n\nValidation:\n- Read as `Bo4e<rubo4e::current::Vorauszahlung>`, so the BO4E gate runs as\n  the body deserialises; the canonical round-trip is what is stored.\n- `abschlag_ct` is updated atomically from `betrag.wert` (EUR → ct × 100)\n  so the existing Abschlagslauf scheduler continues to work.\n\nQuery parameter: `?lf_mp_id=<mp_id>` (defaults to the configured `lf_mp_id`).\n\n§40 Abs. 1 EnWG: Abschlag must match estimated consumption.\nTyped `Vorauszahlung` enables `portald` Jahresabschluss preview and\nauto-adjustment when deviation exceeds 10 %.",
         "operationId": "put_vorauszahlung",
         "parameters": [
           {
@@ -4484,7 +4484,7 @@
               "string",
               "null"
             ],
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the tenant."
+            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`."
           },
           "malo_id": {
             "type": "string",

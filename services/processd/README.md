@@ -57,8 +57,11 @@ in the operator guide's [Routes and authorization](https://hupe1980.github.io/ma
 
 ## Configuration
 
-- `[identity] own_mp_id` (must match `makod`'s primary party) and
-  `verbundene_lieferanten` (required, `[]` included).
+- `[identity]`: `tenant` (required, the data-isolation key), one MP-ID list
+  per Marktrolle — `nb_mp_ids`, `lf_mp_ids`, `msb_mp_ids`, one code per Sparte
+  each, matching `makod`'s `[[party]]` entries — and `verbundene_lieferanten`
+  (required, `[]` included; the own `lf_mp_ids` are affiliated as well). Each module answers only under its own role's
+  codes.
 - `[makod]`, `[marktd]` (`url`, `api_key`), `[webhook] inbound_secret` — the
   secret of processd's entry in marktd's `[[subscriptions.endpoints]]`, which
   is how marktd delivers to it — `[oidc]`.

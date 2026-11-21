@@ -29,7 +29,7 @@ struct UtilmdTransactionSpec {
     free_texts: Vec<(String, String)>,
     agr: Option<(String, String)>,
     /// `SG5 LOC` — one entry per Lokation the Vorgang names.
-    locations: Vec<(String, String)>,
+    locations: Vec<(String, String, Option<String>)>,
     /// `SG8 SEQ+Z22` „Daten der Summenzeitreihe" with its `SG8 RFF+AUU`
     /// Version der Zeitreihe.
     ///
@@ -97,6 +97,8 @@ struct Anschrift {
 #[derive(Debug, Clone, Default)]
 pub struct Sg8Block {
     seq: String,
+    /// `SEQ` DE 1050 — the Zeitraum-ID the block refers to, where it has one.
+    zeitraum: Option<String>,
     items: Vec<Sg8Item>,
 }
 
@@ -410,7 +412,11 @@ fn emit_sg6<W: std::io::Write>(
 
 /// Emit one `SG8` block.
 fn emit_sg8_block<W: std::io::Write>(w: &mut Writer<W>, block: &Sg8Block) -> Result<(), Error> {
-    emit_seg!(w, "SEQ", &block.seq);
+    if let Some(z) = &block.zeitraum {
+        emit_seg!(w, "SEQ", &block.seq, z);
+    } else {
+        emit_seg!(w, "SEQ", &block.seq);
+    }
     for item in &block.items {
         match item {
             // `CCI+<7059>++<7037>` — C502 is nicht benutzt and still occupies
@@ -713,8 +719,14 @@ fn emit_sg4<W: std::io::Write>(
     if let Some((svc_req, resp_type)) = &tx.agr {
         emit_comp!(w, "AGR", [svc_req, resp_type]);
     }
-    for (loc_q, loc_id) in &tx.locations {
-        emit_comp!(w, "LOC", [loc_q], [loc_id]);
+    for (loc_q, loc_id, zeitraum) in &tx.locations {
+        // `C517` DE 3224 — the Zeitraum-ID of the SG6 Verwendungszeitraum the
+        // Lokation belongs to; DE 1131 and 3055 stay empty.
+        if let Some(z) = zeitraum {
+            emit_comp!(w, "LOC", [loc_q], [loc_id, "", "", z]);
+        } else {
+            emit_comp!(w, "LOC", [loc_q], [loc_id]);
+        }
     }
     emit_sg6(w, pid_str, tx, carries_pid)?;
     emit_sg8(w, tx, ranks)?;
@@ -793,6 +805,7 @@ fn emit_sg8<W: std::io::Write>(
     let mut blocks: Vec<(usize, usize, Sg8Block)> = Vec::new();
     let mut z01 = Sg8Block {
         seq: crate::utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION.to_owned(),
+        zeitraum: None,
         items: Vec::new(),
     };
     for (klassentyp, wert) in &tx.merkmale {
@@ -1048,7 +1061,24 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     pub fn location(mut self, lokationstyp: Lokationstyp, id: impl Into<String>) -> Self {
         self.spec
             .locations
-            .push((lokationstyp.qualifier_code().to_owned(), id.into()));
+            .push((lokationstyp.qualifier_code().to_owned(), id.into(), None));
+        self
+    }
+
+    /// `SG5 LOC+<qualifier>+<id>:::<zeitraum_id>` — a Lokation of the
+    /// Verwendungszeitraum `zeitraum_id` (C517 DE 3224), as a change of the
+    /// Lokationsbündelstruktur names every object per Zeitraum.
+    pub fn location_im_zeitraum(
+        mut self,
+        lokationstyp: Lokationstyp,
+        id: impl Into<String>,
+        zeitraum_id: u32,
+    ) -> Self {
+        self.spec.locations.push((
+            lokationstyp.qualifier_code().to_owned(),
+            id.into(),
+            Some(zeitraum_id.to_string()),
+        ));
         self
     }
 
@@ -1152,6 +1182,26 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
             parent: self,
             block: Sg8Block {
                 seq: seq.into(),
+                zeitraum: None,
+                items: Vec::new(),
+            },
+        }
+    }
+
+    /// `SG8 SEQ+<seq>+<zeitraum_id>` — a block that refers to the
+    /// Verwendungszeitraum `zeitraum_id` (DE 1050), such as `SEQ+Z78` „Referenz
+    /// auf die Lokationsbündelstruktur" and `SEQ+Z58` „Zuordnung Lokation zum
+    /// Objektcode des Lokationsbündels".
+    pub fn stammdaten_im_zeitraum(
+        self,
+        seq: impl Into<String>,
+        zeitraum_id: u32,
+    ) -> Sg8Builder<S, R> {
+        Sg8Builder {
+            parent: self,
+            block: Sg8Block {
+                seq: seq.into(),
+                zeitraum: Some(zeitraum_id.to_string()),
                 items: Vec::new(),
             },
         }

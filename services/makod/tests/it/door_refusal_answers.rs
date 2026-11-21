@@ -59,7 +59,7 @@ async fn aperaks(store: &SlateDbStore) -> Vec<mako_engine::payload::AperakPayloa
 /// `POST /edifact` with a router that takes no Prüfidentifikator at all.
 async fn post_unrouted(edifact: String) -> (SlateDbStore, serde_json::Value) {
     let store = SlateDbStore::open_in_memory().await.expect("store");
-    let tenant = TenantId::from_party_id(OWN);
+    let tenant = TenantId::from_tenant(OWN);
     let state = Arc::new(makod::edifact_api::EdifactApiState {
         platform: Arc::new(edi_energy::Platform::with_all_profiles()),
         pid_router: mako_engine::pid_router::PidRouter::new(),
@@ -179,7 +179,7 @@ async fn an_ahb_fehler_is_answered_z29() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     );
     let outcome = d
         .dispatch(
@@ -230,7 +230,7 @@ async fn a_gas_ahb_fehler_is_answered_and_watched() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     );
     let received = time::macros::datetime!(2026-07-07 10:00 UTC);
     d.dispatch(&msg, "geli-gas-mscons", 13008, received)
@@ -282,7 +282,7 @@ async fn every_ahb_fehler_gets_its_own_erc_group() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     );
     d.dispatch(
         &msg,
@@ -323,7 +323,7 @@ async fn an_orphan_follow_up_is_answered_z33() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     );
     let outcome = d
         .dispatch(
@@ -374,7 +374,7 @@ async fn a_held_orphan_follow_up_is_dead_lettered_not_refused() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     )
     .with_unbekannter_vorgang(UnbekannterVorgang::ZurPruefung);
     d.dispatch(

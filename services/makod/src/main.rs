@@ -821,6 +821,10 @@ struct Cli {
     #[arg(skip)]
     rollen: Vec<deployment::Rolle>,
 
+    /// `[deployment] tenant` loaded from `makod.toml`. Empty refuses startup.
+    #[arg(skip)]
+    tenant: String,
+
     /// `[as4]` loaded from `makod.toml`: the trust anchor, the CRL signer, the
     /// message-id domain and the `[[as4.partner]]` table. Key material is
     /// `[party.as4]`; there is no flag for either.
@@ -1020,7 +1024,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             Err(e) => (None, Some(format!("{e:#}"))),
         };
     let preflight_input = registry.as_ref().map(|r| preflight::PreflightInput {
-        primary_mp_id: r.primary_mp_id(),
+        tenant: &cli.tenant,
         parties: &cli.parties,
         registry: r,
         as4: &cli.as4,
@@ -1070,6 +1074,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     let pruefung = einrichtung::pruefe(&einrichtung::Eingabe {
         parties: &cli.parties,
         rollen: &cli.rollen,
+        tenant: &cli.tenant,
         preflight: preflight_input.as_ref(),
         cedar_policy_dir_fehler,
         as4: &cli.as4,
@@ -1130,10 +1135,11 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             .expect("no finding blocks, so the [[party]] table built a registry"),
     );
 
-    // makod is single-tenant: the primary Marktpartner-ID *is* the tenant, and
-    // this UUID scopes every event stream, outbox entry and cache key. Derived
-    // once here, never re-derived at the call sites.
-    let tenant_id = mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id());
+    // makod is single-tenant: `[deployment] tenant` scopes every event stream,
+    // outbox entry and cache key. Derived once here, never re-derived at the
+    // call sites.
+    let tenant: Arc<str> = Arc::from(cli.tenant.as_str());
+    let tenant_id = mako_engine::ids::TenantId::from_tenant(&tenant);
 
     info!(
         primary_mp_id  = %mp_id_registry.primary_mp_id(),
@@ -1356,7 +1362,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             Arc::new(store.clone()),
             store.as_snapshot_store(),
             cli.snapshot_interval,
-            mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
+            tenant_id,
         )
         .with_marktd_client(marktd_client.clone())
         .with_mp_id_registry(Arc::clone(&mp_id_registry))
@@ -1469,9 +1475,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             std::mem::take(&mut checked.auth_keys),
             checked.cedar_policies.clone(),
             oidc,
-            // makod is single-tenant: the primary MP-ID *is* the tenant
-            // (see the API states below, which key on the same value).
-            Some(mp_id_registry.primary_mp_id().to_owned()),
+            // makod is single-tenant: `[deployment] tenant` (see the API
+            // states below, which key on the same value).
+            Some(tenant.to_string()),
             checked.cedar_default_policy,
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?,
@@ -1490,6 +1496,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         store: store.clone(),
         pid_router: ctx.pid_router().clone(),
         mp_id_registry: Arc::clone(&mp_id_registry),
+        tenant: Arc::clone(&tenant),
         tenant_id,
         cedar: Arc::clone(&cedar),
         platform: Arc::clone(&platform),
@@ -1615,6 +1622,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         malo_cache: Arc::clone(&malo_cache),
         shutdown_token: shutdown_token.clone(),
         mp_id_registry: Arc::clone(&mp_id_registry),
+        tenant: Arc::clone(&tenant),
+        tenant_id,
         checked,
         dead_letter_sink: dl_sink_workers,
         erp_webhook_url: cli.erp_webhook_url.clone(),
@@ -2152,6 +2161,7 @@ fn apply_config_file(
     // ── [deployment] — the roles this instance plays ─────────────────────────
     if let Some(deployment) = cfg.deployment {
         cli.rollen = deployment.rollen;
+        cli.tenant = deployment.tenant;
     }
 
     Ok(())

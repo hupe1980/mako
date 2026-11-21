@@ -73,6 +73,7 @@ per PID). Saturdays, Sundays and public holidays are not Werktage; 24.12. and
 | **GPKE Kündigung** | ⚡ | `mako-gpke` `gpke-kuendigung` | UTILMD 55016 → 55017/55018 | Ablauf des **1. WT** nach dem ÜT | BK6-24-174 Teil 2 |
 | **GPKE Stornierung** | ⚡ | `mako-gpke` `gpke-stornierung` | UTILMD 55022 → 55023/55024 | — **keine Festlegung nennt ein Antwortfenster** | GPKE Teil 4 Kap. 5 |
 | **GPKE Stammdatenänderung** | ⚡ | `mako-gpke` `gpke-stammdatenaenderung` | UTILMD 55615–55694, 55109/55110 → 55137 | **2 WT** Rückmeldung · **10 WT** Bestellung | BK6-22-024 Anlage 1d (GPKE Teil 4) |
+| **Berechnungsformel** | ⚡ | `mako-gpke` `gpke-berechnungsformel` | UTILTS 25001 → 25010 | NB sends by the **3. WT** · MSB answers by the **5. WT**, silence is Zustimmung | WiM Strom Teil 2 Kap. 2.3.2 |
 | **GPKE Abrechnungsdaten** | ⚡ | `mako-gpke` `gpke-abrechnungsdaten` | UTILMD 55156/55220/55673 (LF, `E_0595`) · 55614/55675 (ÜNB, `E_0618` / `E_0613`) → IFTSTA 21047 | **2 WT** | BK6-24-174 Teil 2 Kap. 3.1 |
 | **GPKE Zuordnungs-Meldungen** | ⚡ | `mako-gpke` `gpke-zuordnungsmeldung` | UTILMD 55036/55037/55038 | — Meldepflicht, **keine Antwortnachricht** (Sendefrist in `mako_fristen::meldung`) | BK6-24-174 Teil 2 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |

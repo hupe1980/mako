@@ -90,7 +90,7 @@ async fn store_and_dispatcher() -> (SlateDbStore, EdifactIngestDispatcher) {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN_MP),
+        TenantId::from_tenant(OWN_MP),
     );
     (store, dispatcher)
 }
@@ -160,7 +160,7 @@ fn an_lf_gas_deployment_routes_the_allokationsliste_gas() {
 #[tokio::test]
 async fn a_55194_resumes_the_msb_gas_anfrage_it_answers() {
     let (store, dispatcher) = store_and_dispatcher().await;
-    let tenant = TenantId::from_party_id(OWN_MP);
+    let tenant = TenantId::from_tenant(OWN_MP);
     let key = mako_geli_gas::datenabruf::anfrage_key("GDA-17104-1");
     let process = Process::<mako_geli_gas::GeliGasDatenabrufWorkflow, _>::new(
         Arc::new(store.clone()),
@@ -223,8 +223,9 @@ fn commands_state(
         malo_cache::{MaloIdentResultCache, SlateDbMaloCache},
     };
     CommandsApiState {
-        tenant_id: TenantId::from_party_id(own),
-        sender_party_id: own.to_owned(),
+        tenant_id: TenantId::from_tenant(own),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(own),
         configured_marktrollen: vec![rolle.to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -235,7 +236,7 @@ fn commands_state(
         snapshot_store: store.as_snapshot_store(),
         malo_cache: Arc::new(SlateDbMaloCache::new(
             store.clone(),
-            TenantId::from_party_id(own),
+            TenantId::from_tenant(own),
         )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store.clone()),
@@ -262,7 +263,7 @@ async fn an_nb_gas_deployment_receives_the_anforderung_allokationsliste() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(GNB_MP),
+        TenantId::from_tenant(GNB_MP),
     );
     let wire = set_element(
         &skeleton_between(17_110, LF_GAS_MP, GNB_MP),
@@ -289,7 +290,7 @@ async fn an_nb_gas_deployment_receives_the_anforderung_allokationsliste() {
         use mako_engine::registry::ProcessRegistry as _;
         store
             .as_process_registry()
-            .lookup_correlated(TenantId::from_party_id(GNB_MP), &key)
+            .lookup_correlated(TenantId::from_tenant(GNB_MP), &key)
             .await
             .expect("lookup")
     };
@@ -416,7 +417,7 @@ async fn the_gas_anfragen_an_msb_reach_their_receivers() {
             Arc::new(store.clone()),
             store.as_snapshot_store(),
             100,
-            TenantId::from_party_id(receiver),
+            TenantId::from_tenant(receiver),
         );
         let msg =
             edi_energy::parse(skeleton_between(pid, sender, receiver).as_bytes()).expect("parses");

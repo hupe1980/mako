@@ -93,7 +93,7 @@ impl MockGnb {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(GNB_ID),
+                TenantId::from_tenant(GNB_ID),
                 WorkflowId::new("geli-gas-supplier-change", FV),
             ),
             platform: Platform::with_all_profiles(),

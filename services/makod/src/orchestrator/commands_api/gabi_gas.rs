@@ -210,7 +210,8 @@ pub(super) async fn dispatch_gabi_nominierung_senden(
             )
         })?
         .to_owned();
-    let sender_eic = state.sender_party_id.clone();
+    // The Transportkunde nominates — in the Rollenmodell the BKV.
+    let sender_eic = state.own_mp_id(&["BKV"], "")?;
     let corrects = match payload.get("korrigiert") {
         None => None,
         Some(c) => {
@@ -379,7 +380,7 @@ pub(super) async fn dispatch_gabi_mehrmindermengen_melden(
             mako_gabi_gas::MmmVerfahren::Slp => 70_095,
             mako_gabi_gas::MmmVerfahren::Rlm => 70_096,
         },
-        netzbetreiber: state.sender_party_id.clone(),
+        netzbetreiber: state.own_mp_id(&["GNB"], "")?,
         marktgebietsverantwortlicher: str_field("marktgebietsverantwortlicher")?,
         netzkonto: str_field("netzkonto")?,
         zeitraum_von: date("zeitraum_von")?,

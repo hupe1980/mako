@@ -354,6 +354,110 @@ impl OutboundPayload for UtilmdPayload {
     const MESSAGE_TYPE: &'static str = "UTILMD";
 }
 
+// ── UTILTS ────────────────────────────────────────────────────────────────────
+
+/// A UTILTS Vorgang: the NB's Berechnungsformel (25001) or the MSB's Antwort
+/// auf Berechnungsformel (25010), UTILTS AHB 1.1.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UtiltsPayload {
+    /// Prüfidentifikator → `SG6 RFF+Z13`.
+    pub pid: u32,
+    /// Sender MP-ID; the deployment's own when absent.
+    #[serde(default)]
+    pub sender: Option<String>,
+    /// Receiver MP-ID; the outbox recipient when absent.
+    #[serde(default)]
+    pub receiver: Option<String>,
+    /// `UNH` DE 0062.
+    #[serde(default)]
+    pub message_ref: Option<String>,
+    /// `IDE+24` DE 7402 — the Vorgangsnummer a 25010 names in `RFF+TN`.
+    pub vorgangsnummer: String,
+    /// `LOC+172` — the Markt- or Netzlokation the formula computes (25001).
+    #[serde(default)]
+    pub lokation: Option<String>,
+    /// The Verwendungszeiträume (25001), each with its formula's status.
+    #[serde(default)]
+    pub zeitraeume: Vec<UtiltsZeitraum>,
+    /// Every `SEQ+Z37` Bestandteil eines Rechenschritts (25001).
+    #[serde(default)]
+    pub bestandteile: Vec<UtiltsBestandteil>,
+    /// `RFF+TN` — the answered 25001's Vorgangsnummer (25010).
+    #[serde(default)]
+    pub referenz: Option<String>,
+    /// One `STS+E01` per Zeitraum out of `E_0218` (25010).
+    #[serde(default)]
+    pub antworten: Vec<UtiltsAntwort>,
+    /// `FTX+ACB` beside an `A99` (25010).
+    #[serde(default)]
+    pub freitext: Option<String>,
+}
+
+impl OutboundPayload for UtiltsPayload {
+    const MESSAGE_TYPE: &'static str = "UTILTS";
+}
+
+/// One `SG6 RFF+Z49` Verwendungszeitraum of a Berechnungsformel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UtiltsZeitraum {
+    /// DE 1156 — the Zeitraum-ID.
+    pub id: u32,
+    /// `DTM+Z25` — the UTC instant the Zeitraum begins (`CCYYMMDDHHMM`).
+    pub ab: String,
+    /// `DTM+Z26` — the UTC instant it ends, where it ends.
+    #[serde(default)]
+    pub bis: Option<String>,
+    /// `STS+Z23` DE 4405 — `Z33` Berechnungsformel angefügt, `Z40` keine
+    /// Rechenoperation, …
+    pub status: String,
+    /// `SEQ+Z36 RFF+Z23` — the Rechenschritt yielding the Energiemenge, where
+    /// the formula is attached.
+    #[serde(default)]
+    pub ergebnis_schritt: Option<u32>,
+}
+
+/// One `SEQ+Z37` Bestandteil des Rechenschritts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UtiltsBestandteil {
+    /// `SEQ+Z37` DE 1050 — the Rechenschrittidentifikator.
+    pub schritt: u32,
+    /// `RFF+Z46` — the Zeitraum-ID.
+    pub zeitraum_id: u32,
+    /// `CAV` under `CCI+++Z86` — `Z69` … `Z83`.
+    pub operator: String,
+    /// `RFF+Z19` — the Messlokation it reads.
+    #[serde(default)]
+    pub messlokation: Option<String>,
+    /// `RFF+Z23` — the Rechenschritt it reads.
+    #[serde(default)]
+    pub schritt_ref: Option<u32>,
+    /// `CAV` under `CCI+++Z87` — `Z71` Verbrauch, `Z72` Erzeugung.
+    #[serde(default)]
+    pub richtung: Option<String>,
+    /// `CCI+++Z16` Verlustfaktor Trafo.
+    #[serde(default)]
+    pub verlust_trafo: Option<String>,
+    /// `CCI+++ZB2` Verlustfaktor Leitung.
+    #[serde(default)]
+    pub verlust_leitung: Option<String>,
+    /// `CCI+++ZG6` Aufteilungsfaktor Energiemenge.
+    #[serde(default)]
+    pub aufteilung: Option<String>,
+}
+
+/// One `STS+E01` of an Antwort auf Berechnungsformel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UtiltsAntwort {
+    /// DE 9013 — an `E_0218` code.
+    pub code: String,
+    /// DE 9012 — the Zeitraum-ID it answers.
+    pub zeitraum_id: u32,
+}
+
 /// Stammdaten a Vorgang carries whole: every `SG5 LOC`, `SG6` segment, `SG8`
 /// block and `SG12` segment, as the sender holds them.
 ///
@@ -399,6 +503,10 @@ pub struct StammdatenLokation {
     pub qualifier: String,
     /// DE 3225 — the Lokations-ID.
     pub id: String,
+    /// C517 DE 3224 — the Zeitraum-ID of the Verwendungszeitraum the Lokation
+    /// belongs to, where the Anwendungsfall names one per Zeitraum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zeitraum_id: Option<u32>,
 }
 
 /// One `SG8` block: its `SEQ` DE 1229 and the segments under it.
@@ -407,6 +515,10 @@ pub struct StammdatenLokation {
 pub struct StammdatenBlock {
     /// `SEQ` DE 1229 — `ZD5`, `Z98`, `ZE1`, …
     pub seq: String,
+    /// `SEQ` DE 1050 — the Zeitraum-ID the block refers to, where it has one
+    /// (`SEQ+Z78`, `SEQ+Z58`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zeitraum_id: Option<u32>,
     /// The block's `RFF`, `PIA`, `SG9 QTY`, `SG10 CCI`/`CAV`, in order.
     #[serde(default)]
     pub segmente: Vec<StammdatenSegment>,
@@ -710,7 +822,7 @@ pub struct ReqotePayload {
     /// Prüfidentifikator → `SG1 RFF+Z13`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    /// Sender MP-ID; absent, only a single-party deployment's MP-ID stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
     /// Receiver MP-ID; absent means the outbox entry's recipient.
@@ -785,7 +897,7 @@ pub struct OrdchgPayload {
     /// Prüfidentifikator → `SG1 RFF+Z13`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    /// Sender MP-ID; absent, only a single-party deployment's MP-ID stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
     /// `UNH` DE 0062 source.
@@ -797,6 +909,10 @@ pub struct OrdchgPayload {
     /// `SG1 RFF+ON` — the ORDERS changed or cancelled. Muss.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_reference: Option<String>,
+    /// The Sparte, which names the sending Marktrolle of a 39000 (the LF's
+    /// Stornierung of its Sperrauftrag: `LF` in Strom, `LFG` in Gas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sparte: Option<crate::types::Sparte>,
 }
 
 impl OutboundPayload for OrdchgPayload {
@@ -812,7 +928,7 @@ pub struct OrdrspPayload {
     /// Prüfidentifikator → `SG1 RFF+Z13`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    /// Sender MP-ID; absent, only a single-party deployment's MP-ID stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
     /// Receiver MP-ID; absent means the outbox entry's recipient.
@@ -910,7 +1026,7 @@ pub struct QuotesPayload {
     /// Prüfidentifikator → `SG1 RFF+Z13`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    /// Sender MP-ID; absent, only a single-party deployment's MP-ID stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
     /// Receiver MP-ID; absent means the outbox entry's recipient.
@@ -991,7 +1107,7 @@ pub struct IftstaPayload {
     /// Prüfidentifikator → `SG15 RFF+Z13`; one with no renderer arm is
     /// refused.
     pub pid: u32,
-    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    /// Sender MP-ID; absent, only a single-party deployment's MP-ID stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
     /// Receiver MP-ID; absent means the outbox entry's recipient.
@@ -1062,7 +1178,7 @@ pub struct InsrptPayload {
     pub pid: u32,
     /// `SG8 LOC+172` — the Messlokation.
     pub melo: String,
-    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    /// Sender MP-ID; absent, only a single-party deployment's MP-ID stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
     /// Receiver MP-ID; absent means the outbox entry's recipient.
@@ -1123,7 +1239,7 @@ pub struct RemadvPayload {
     /// Prüfidentifikator → `RFF+Z13`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    /// Sender MP-ID; absent, only a single-party deployment's MP-ID stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
     /// Receiver MP-ID; absent means the outbox entry's recipient.
@@ -1209,7 +1325,7 @@ pub struct MsconsPayload {
     /// Prüfidentifikator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Sender MP-ID; absent means the deployment's primary MP-ID.
+    /// Sender MP-ID; absent, only a single-party deployment's MP-ID stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_mp_id: Option<String>,
     /// Receiver MP-ID; absent means the outbox entry's recipient.

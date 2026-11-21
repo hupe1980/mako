@@ -1,6 +1,15 @@
-{#- The four validator pages as one tool: a message, a code, a deadline, an ID. -#}
-<nav class="vt-tabs" aria-label="{{ trans(key='vt_label', lang=lang) }}">
-  {%- for t in [["@/validator.md", "vt_check"], ["@/validator-codes.md", "vt_codes"], ["@/validator-fristen.md", "vt_fristen"], ["@/validator-ids.md", "vt_ids"]] %}
+{#- The tools in two families, each one tool: the validator's four for
+    market communication, and the calculators. -#}
+{%- set family = page.extra.family | default(value="validator") -%}
+{%- if family == "rechner" -%}
+{%- set label = "rt_label" -%}
+{%- set tabs = [["@/rechner-pog.md", "rt_pog"], ["@/rechner-eeg.md", "rt_eeg"], ["@/rechner-preise.md", "rt_preise"], ["@/rechner-14a.md", "rt_14a"]] -%}
+{%- else -%}
+{%- set label = "vt_label" -%}
+{%- set tabs = [["@/validator.md", "vt_check"], ["@/validator-codes.md", "vt_codes"], ["@/validator-fristen.md", "vt_fristen"], ["@/validator-ids.md", "vt_ids"]] -%}
+{%- endif %}
+<nav class="vt-tabs" aria-label="{{ trans(key=label, lang=lang) }}">
+  {%- for t in tabs %}
   {%- set href = get_url(path=t[0], lang=lang) %}
   <a href="{{ href | safe }}"{% if current_url is defined and current_url == href %} aria-current="page"{% endif %}>{{ trans(key=t[1], lang=lang) }}</a>
   {%- endfor %}

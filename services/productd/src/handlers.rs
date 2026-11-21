@@ -45,6 +45,19 @@ pub(crate) type Authz = Extension<std::sync::Arc<CedarEnforcer>>;
 /// # Errors
 ///
 /// [`ApiError::Forbidden`] when the policy does not permit the action.
+/// A write to a catalogue other than the configured Lieferant's is `403
+/// foreign_catalogue`: productd sells under `lf_mp_id` alone, and the tenant
+/// is an isolation key that no catalogue is filed under.
+fn foreign_catalogue(cfg: &ProductdConfig, lf_mp_id: &str) -> Option<ApiError> {
+    (lf_mp_id != cfg.lf_mp_id()).then(|| {
+        ApiError::forbidden(format!(
+            "cannot manage the catalogue of {lf_mp_id:?}: productd sells under {:?}",
+            cfg.lf_mp_id()
+        ))
+        .with_code("foreign_catalogue")
+    })
+}
+
 pub(crate) fn authorize(
     enforcer: &CedarEnforcer,
     claims: &Claims,
@@ -416,13 +429,8 @@ pub async fn put_product(
     if let Err(e) = authorize(&cedar, &claims, "write-product", &cfg.tenant) {
         return e.into_response();
     }
-    // Tenant isolation: each LF operator can only manage their own products.
-    if lf_mp_id != claims.tenant() {
-        return ApiError::forbidden(format!(
-            "cannot manage products for {lf_mp_id:?}: token tenant is {:?}",
-            claims.tenant()
-        ))
-        .into_response();
+    if let Some(refused) = foreign_catalogue(&cfg, &lf_mp_id) {
+        return refused.into_response();
     }
     // dyn_source is validated by the DB CHECK constraint, but we surface a
     // clear 422 here before hitting the DB.
@@ -621,12 +629,8 @@ pub async fn delete_product(
     if let Err(e) = authorize(&cedar, &claims, "write-product", &cfg.tenant) {
         return e.into_response();
     }
-    if lf_mp_id != claims.tenant() {
-        return ApiError::forbidden(format!(
-            "cannot delete products for {lf_mp_id:?}: token tenant is {:?}",
-            claims.tenant()
-        ))
-        .into_response();
+    if let Some(refused) = foreign_catalogue(&cfg, &lf_mp_id) {
+        return refused.into_response();
     }
     match soft_delete_product(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -996,12 +1000,8 @@ pub async fn put_energiemix(
     if let Err(e) = authorize(&cedar, &claims, "write-product", &cfg.tenant) {
         return e.into_response();
     }
-    if lf_mp_id != claims.tenant() {
-        return ApiError::forbidden(format!(
-            "cannot update energiemix for {lf_mp_id:?}: token tenant is {:?}",
-            claims.tenant()
-        ))
-        .into_response();
+    if let Some(refused) = foreign_catalogue(&cfg, &lf_mp_id) {
+        return refused.into_response();
     }
     if let Err(e) = check_energiemix_completeness(&req.energiemix) {
         return e.into_response();
@@ -1089,12 +1089,8 @@ pub async fn delete_energiemix_handler(
     if let Err(e) = authorize(&cedar, &claims, "write-product", &cfg.tenant) {
         return e.into_response();
     }
-    if lf_mp_id != claims.tenant() {
-        return ApiError::forbidden(format!(
-            "cannot delete energiemix for {lf_mp_id:?}: token tenant is {:?}",
-            claims.tenant()
-        ))
-        .into_response();
+    if let Some(refused) = foreign_catalogue(&cfg, &lf_mp_id) {
+        return refused.into_response();
     }
     match delete_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
@@ -1969,7 +1965,7 @@ pub async fn post_angebot(
     if let Err(e) = authorize(&cedar, &claims, "write-angebot", &cfg.tenant) {
         return e.into_response();
     }
-    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(cfg.lf_mp_id());
 
     // Validate that at least one of kunden_id or interessent_name is set.
     if req.kunden_id.is_none()
@@ -2198,7 +2194,7 @@ pub async fn list_angebote_handler(
     }
     match list_angebote(
         &pool,
-        &cfg.tenant,
+        cfg.lf_mp_id(),
         &cfg.tenant,
         q.status.as_deref(),
         q.limit.unwrap_or(50).min(200),
@@ -3437,7 +3433,7 @@ pub async fn get_comparison_feed_bo4e(
 ) -> impl IntoResponse {
     use time::format_description::well_known::Rfc3339;
 
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(cfg.lf_mp_id()).to_owned();
     let limit = q.limit.unwrap_or(100).clamp(1, 500) as usize;
 
     let mut rows = match crate::pg::fetch_comparison_feed(&pool, &cfg.tenant, &lf_mp_id, &q).await {
@@ -3587,7 +3583,7 @@ pub async fn get_comparison_feed(
     use rust_decimal::dec;
     use time::format_description::well_known::Rfc3339;
 
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(cfg.lf_mp_id()).to_owned();
     let verbrauch_kwh = q.verbrauch_kwh.unwrap_or(dec!(3500));
     let limit = q.limit.unwrap_or(100).clamp(1, 500) as usize;
 

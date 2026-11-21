@@ -91,7 +91,7 @@ async fn store_and_dispatcher() -> (SlateDbStore, EdifactIngestDispatcher) {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN_MP),
+        TenantId::from_tenant(OWN_MP),
     );
     (store, dispatcher)
 }
@@ -99,7 +99,7 @@ async fn store_and_dispatcher() -> (SlateDbStore, EdifactIngestDispatcher) {
 async fn state_on(store: &SlateDbStore, key: &str) -> GdaState {
     let identity = store
         .as_process_registry()
-        .lookup_correlated(TenantId::from_party_id(OWN_MP), key)
+        .lookup_correlated(TenantId::from_tenant(OWN_MP), key)
         .await
         .expect("lookup")
         .into_iter()
@@ -239,11 +239,11 @@ async fn an_lf_and_nb_deployment_receives_its_own_anfrage_as_a_second_process() 
 async fn seed_anfrage(store: &SlateDbStore, anfrage_nummer: &str) {
     let process = Process::<GpkeGeschaeftsdatenanfrageWorkflow, _>::new(
         Arc::new(store.clone()),
-        TenantId::from_party_id(OWN_MP),
+        TenantId::from_tenant(OWN_MP),
         WorkflowId::new(GDA_WORKFLOW_NAME, FV),
     );
     let key = CorrelationEntry {
-        tenant_id: TenantId::from_party_id(OWN_MP),
+        tenant_id: TenantId::from_tenant(OWN_MP),
         tag: anfragender_key(anfrage_nummer),
         process_id: process.process_id(),
         identity: process.identity(),

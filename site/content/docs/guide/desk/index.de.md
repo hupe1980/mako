@@ -5,7 +5,7 @@ weight = 3
 
 [extra]
 translated_from = "content/docs/guide/desk/index.md"
-source_sha256 = "09c41c701222bed33f78a3b8304cd7f9858283fdf4b30ac71c28071e370c5aa1"
+source_sha256 = "8758e5fa40dcbe9579be9c7acefebd7dd74895ac1381eb2d7c008fac2bcd9887"
 
 +++
 **mako Desk** ist deine Arbeitsoberfläche im Betrieb. Er liest die MCP-Tools
@@ -677,7 +677,8 @@ erneut; jede Farbe und das Ergebnis oben stammen vom Dienst.
 ## Die Konfiguration vorschlagen lassen
 
 Unter der Checkliste fragt **Vorschlag**, was die Konfiguration braucht, und
-sonst nichts: die Rollen, die das Deployment spielt, und die MP-ID jeder Rolle,
+sonst nichts: den Tenant, die Rollen, die das Deployment spielt, und die MP-ID
+jeder Rolle,
 die primäre MP-ID, wo es mehrere gibt, die Bilanzkreise eines Lieferanten je
 Sparte, die verbundenen Lieferanten, das AS4-Schlüsselmaterial als Dateipfade
 und wo die anderen Dienste laufen. Er beginnt bei dem, womit das Deployment

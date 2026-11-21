@@ -27,6 +27,9 @@ struct AnfrageBody {
     /// The Anfrage-Nummer (`BGM` DE 1004, `an..35`); generated when absent.
     #[serde(default)]
     anfrage_nummer: Option<String>,
+    /// `LF` or `MSB` — the role asking; needed when the deployment plays both.
+    #[serde(default)]
+    anfragender: Option<String>,
 }
 
 /// Body of `gpke.geschaeftsdatenanfrage.beantworten`. The Stammdaten are
@@ -134,6 +137,19 @@ pub(super) fn cmd_gpke_geschaeftsdatenanfrage_ablehnen<'a>(
     Box::pin(dispatch_ablehnung(s, p))
 }
 
+/// The roles an Anfrage may come from — LF or MSB (GPKE Teil 4 Kap. 3.2) —
+/// narrowed to the one the caller names.
+fn anfragende_rollen(anfragender: Option<&str>) -> Result<Vec<&'static str>, DispatchError> {
+    match anfragender.map(|a| a.trim().to_uppercase()) {
+        None => Ok(vec!["LF", "MSB"]),
+        Some(a) if a == "LF" => Ok(vec!["LF"]),
+        Some(a) if a == "MSB" => Ok(vec!["MSB"]),
+        Some(other) => Err(DispatchError::InvalidPayload(format!(
+            "\"anfragender\" must be LF or MSB; got {other:?}"
+        ))),
+    }
+}
+
 /// The LF or MSB sends ORDERS 17132 to the NB and opens the process the NB's
 /// UTILMD or ORDRSP 19101 resumes.
 ///
@@ -165,7 +181,10 @@ async fn dispatch_anfrage(
 
     let command = GdaCommand::SendAnfrage {
         anfrage: GdaAnfrage {
-            anfragender: MarktpartnerCode::new(state.sender_party_id.clone()),
+            anfragender: MarktpartnerCode::new(state.own_mp_id(
+                &anfragende_rollen(body.anfragender.as_deref())?,
+                "anfragender",
+            )?),
             netzbetreiber: MarktpartnerCode::new(nb),
             lokation_id,
             anfrage_nummer: MessageRef::new(nummer),

@@ -365,3 +365,8 @@ pub fn geli_eog_anmeldung(malo: &str, gv_mp_id: &str) -> serde_json::Value {
         "transaktionsgrund": "Z36",
     })
 }
+
+/// [`registry`] as the commands API holds it.
+pub fn single_party(mp_id: &str) -> std::sync::Arc<MpIdRegistry> {
+    std::sync::Arc::new(registry(mp_id))
+}

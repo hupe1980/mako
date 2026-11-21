@@ -33,6 +33,8 @@ const BILDUNGSVORSCHRIFT: &str = "BDEW-AWH Identifikatoren V1.2, Kap. 2.2 (S. 5)
 pub struct Eingabe<'a> {
     /// `[[party]]`.
     pub parties: &'a [PartyConfig],
+    /// `[deployment] tenant`.
+    pub tenant: &'a str,
     /// `[deployment] rollen`.
     pub rollen: &'a [Rolle],
     /// The preflight input, when the `[[party]]` table built a registry.
@@ -81,6 +83,17 @@ pub fn pruefe(e: &Eingabe<'_>) -> Pruefung {
     befunde.extend(codenummer_befunde(e.parties));
     let (rollen, b) = crate::deployment::pruefe_rollen(e.rollen, e.parties);
     befunde.extend(b);
+    if e.tenant.trim().is_empty() {
+        befunde.push(
+            Befund::blockiert(
+                "deployment.tenant",
+                "makod.toml requires `[deployment] tenant` — the data-isolation key of every \
+                 event stream, outbox entry and cache key, any stable unique string \
+                 (e.g. \"stadtwerke-musterstadt\")",
+            )
+            .bereich(Bereich::Identitaeten),
+        );
+    }
     befunde.extend(crate::startup::adapter_befunde());
     if let Some(grund) = &e.cedar_policy_dir_fehler {
         befunde.push(
@@ -112,7 +125,7 @@ pub fn pruefe(e: &Eingabe<'_>) -> Pruefung {
         einrichtung: Einrichtung::neu(
             DIENST,
             befunde,
-            policy_bericht(e.policy, &rollen, e.posture),
+            policy_bericht(e.policy, e.tenant, &rollen, e.posture),
             parteien(e.parties),
         ),
         preflight,
@@ -193,15 +206,27 @@ pub fn dienste(cfg: &crate::config::EinrichtungConfig) -> (Vec<Dienst>, Vec<Befu
     (out, befunde)
 }
 
-/// The policy and posture makod runs under: `[policy]`, the declared
-/// `rollen`, and every `allow_*` posture.
+/// The policy and posture makod runs under: `[policy]`, the tenant, the
+/// declared `rollen`, and every `allow_*` posture.
 #[must_use]
 pub fn policy_bericht(
     policy: &MakodPolicy,
+    tenant: &str,
     rollen: &BTreeSet<Rolle>,
     posture: &[(&'static str, bool)],
 ) -> PolicyReport {
     let mut report = policy.report();
+    report.entries.push(PolicyEntry {
+        key: "deployment.tenant".to_owned(),
+        value: tenant.to_owned(),
+        origin: Origin::Explicit,
+        class: PolicyClass::Posture,
+        quelle: None,
+        doc: None,
+        insecure: false,
+        review_by: None,
+        review_grund: None,
+    });
     report.entries.push(PolicyEntry {
         key: "deployment.rollen".to_owned(),
         value: rollen
@@ -645,6 +670,7 @@ mod tests {
         policy: &'a MakodPolicy,
     ) -> Eingabe<'a> {
         Eingabe {
+            tenant: "stadtwerke-test",
             parties,
             rollen,
             preflight: None,
@@ -706,6 +732,7 @@ mod tests {
         let as4 = As4Config::default();
         let policy = MakodPolicy::default();
         let e = Eingabe {
+            tenant: "stadtwerke-test",
             marktd_url: Some("http://marktd:8180"),
             http_enabled: false,
             ..eingabe(&parties, &[Rolle::NbGas], &as4, &policy)

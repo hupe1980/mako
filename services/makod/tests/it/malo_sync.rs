@@ -104,7 +104,7 @@ async fn harness() -> Harness {
     let marktd: Shared = Arc::default();
     let url = spawn_marktd(Arc::clone(&marktd)).await;
     let store = SlateDbStore::open_in_memory().await.expect("store");
-    let cache = SlateDbMaloCache::new(store, mako_engine::ids::TenantId::from_party_id(TENANT));
+    let cache = SlateDbMaloCache::new(store, mako_engine::ids::TenantId::from_tenant(TENANT));
     let registry = Arc::new(
         MpIdRegistry::from_config(&[PartyConfig {
             mp_id: TENANT.to_owned(),

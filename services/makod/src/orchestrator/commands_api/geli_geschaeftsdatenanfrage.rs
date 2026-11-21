@@ -142,10 +142,17 @@ async fn dispatch_anfrage(
         });
     }
 
+    let anfragender = state.own_mp_id(
+        &[match rolle {
+            Anfragender::Lf => "LFG",
+            Anfragender::Msb => "GMSB",
+        }],
+        "anfragender",
+    )?;
     let command = GdaGasCommand::SendAnfrage {
         anfrage: GdaGasAnfrage {
             anfragender_rolle: rolle,
-            anfragender: MarktpartnerCode::new(state.sender_party_id.clone()),
+            anfragender: MarktpartnerCode::new(anfragender),
             netzbetreiber: MarktpartnerCode::new(nb),
             lokation_id,
             anfrage_nummer: MessageRef::new(nummer),

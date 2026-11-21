@@ -269,7 +269,8 @@ fn aktivierung(
 fn command_state(store: &Arc<SlateDbStore>, tenant: TenantId) -> CommandsApiState {
     CommandsApiState {
         tenant_id: tenant,
-        sender_party_id: EIV_MP_ID.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(EIV_MP_ID),
         configured_marktrollen: vec!["EIV".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -320,8 +321,8 @@ impl WorkflowName for eiv::AbrufWorkflow {
 #[tokio::test]
 async fn mako_as_eiv_against_mako_as_anb() {
     let store = Arc::new(SlateDbStore::open_in_memory().await.expect("store"));
-    let tenant_eiv = TenantId::from_party_id(EIV_MP_ID);
-    let tenant_anb = TenantId::from_party_id(ANB_MP_ID);
+    let tenant_eiv = TenantId::from_tenant(EIV_MP_ID);
+    let tenant_anb = TenantId::from_tenant(ANB_MP_ID);
     let eiv_state = command_state(&store, tenant_eiv);
     let eiv_ingest = EdifactIngestDispatcher::new(
         Arc::clone(&store),

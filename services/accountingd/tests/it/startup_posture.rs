@@ -12,7 +12,7 @@
 use accountingd::config::AccountingdConfig;
 
 fn config(extra: serde_json::Value) -> AccountingdConfig {
-    let mut cfg = serde_json::json!({"database": {"url": "postgres://localhost/accountingd"}, "tenant": "9900357000004"});
+    let mut cfg = serde_json::json!({"database": {"url": "postgres://localhost/accountingd"}, "tenant": "stadtwerke-musterstadt", "lf_mp_id": "9900357000028", "creditor_name": "Stadtwerke Musterstadt GmbH"});
     let (Some(base), Some(extra)) = (cfg.as_object_mut(), extra.as_object()) else {
         panic!("both must be JSON objects");
     };
@@ -173,5 +173,49 @@ fn auto_dunning_without_its_zahlungsfristen_or_fees_is_refused() {
         })
         .is_empty(),
         "without automatic dunning nothing is required"
+    );
+}
+
+/// The ledger's Lieferant is a setting of its own: the tenant is an isolation
+/// key, so a value that is no MP-ID refuses the start at `lf_mp_id`.
+#[test]
+fn an_lf_mp_id_that_is_no_mp_id_is_refused() {
+    use mako_service::Daemon as _;
+    let pfade = |cfg: serde_json::Value| -> Vec<(String, bool)> {
+        accountingd::Accountingd::validate(&config(cfg))
+            .into_iter()
+            .map(|b| (b.pfad.clone(), b.ist_blockiert()))
+            .collect()
+    };
+    let open = serde_json::json!({ "allow_insecure_no_auth": true });
+    assert!(pfade(open.clone()).is_empty());
+    let mut tenant_as_lf = open.clone();
+    tenant_as_lf["lf_mp_id"] = "stadtwerke-musterstadt".into();
+    assert_eq!(pfade(tenant_as_lf), [("lf_mp_id".to_owned(), true)]);
+}
+
+/// Every pain.008, EEG pain.001 and Mahnung names the Lieferant by
+/// `creditor_name`; without it each is refused, never filled with the tenant.
+/// The start is refused only where a payout must leave unattended.
+#[test]
+fn a_missing_creditor_name_is_named() {
+    use mako_service::Daemon as _;
+    let pfade = |cfg: serde_json::Value| -> Vec<(String, bool)> {
+        accountingd::Accountingd::validate(&config(cfg))
+            .into_iter()
+            .map(|b| (b.pfad.clone(), b.ist_blockiert()))
+            .collect()
+    };
+    assert_eq!(
+        pfade(serde_json::json!({ "allow_insecure_no_auth": true, "creditor_name": null })),
+        [("creditor_name".to_owned(), false)]
+    );
+    assert_eq!(
+        pfade(serde_json::json!({
+            "allow_insecure_no_auth": true,
+            "creditor_name": "  ",
+            "eeg": { "auto_payout": true, "debtor_iban": "DE89370400440532013000" },
+        })),
+        [("creditor_name".to_owned(), true)]
     );
 }

@@ -23,6 +23,7 @@ from makotest import (
     build_orders,
     build_ordrsp,
     build_quotes,
+    build_utilts,
     validate_edifact,
 )
 from makotest.plugin import LF_ID, NB_ID
@@ -205,6 +206,7 @@ class TestCoverage:
             "ORDERS",
             "IFTSTA",
             "QUOTES",
+            "UTILTS",
             "APERAK",
             "CONTRL",
         }
@@ -216,3 +218,24 @@ class TestCoverage:
         assert unanswerable == [], (
             f"an answer PID resolves to no buildable message type: {unanswerable}"
         )
+
+
+class TestBerechnungsformel:
+    def test_an_antwort_auf_berechnungsformel_validates(self):
+        """UTILTS 25010: an `A99` per Zeitraum, its `FTX+ACB`, and the 25001's
+        Vorgangsnummer in `RFF+TN` (UTILTS AHB [533], [534], [2005])."""
+        wire = wrap(
+            build_utilts(
+                25010,
+                NB_ID,
+                LF_ID,
+                on=ON,
+                vorgangsnummer="ANTWORT0001",
+                referenz="VORGANG0001",
+                antworten=[("A99", 1)],
+                freitext="Die Messlokation fehlt im Lokationsbündel.",
+            ),
+            dar="UT",
+        )
+        assert_edifact_valid(wire, on=ON)
+        assert b"STS+E01++A99:E_0218::1'" in wire

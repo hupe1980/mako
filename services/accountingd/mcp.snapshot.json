@@ -38,7 +38,7 @@
           "type": "string"
         },
         "lf_mp_id": {
-          "description": "The LF MP-ID the account is held under. Defaults to the tenant, as on\nthe REST route.",
+          "description": "The LF MP-ID the account is held under. Defaults to the configured\n`lf_mp_id`, as on the REST route.",
           "type": [
             "string",
             "null"
@@ -234,7 +234,7 @@
           "type": "string"
         },
         "lf_mp_id": {
-          "description": "The LF MP-ID the account is held under. Defaults to the tenant, as on\nthe REST route.",
+          "description": "The LF MP-ID the account is held under. Defaults to the configured\n`lf_mp_id`, as on the REST route.",
           "type": [
             "string",
             "null"
@@ -765,7 +765,7 @@
           "type": "string"
         },
         "lf_mp_id": {
-          "description": "The LF MP-ID the account is held under. Defaults to the tenant.",
+          "description": "The LF MP-ID the account is held under. Defaults to the configured\n`lf_mp_id`.",
           "type": [
             "string",
             "null"

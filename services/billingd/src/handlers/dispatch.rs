@@ -532,11 +532,7 @@ async fn dispatch_invoice(
         // the statutory Schlichtungsstelle/BNetzA/Beratung hints come from
         // the engine defaults.
         verbraucherinformationen: Some(energy_billing::Verbraucherinformationen {
-            lieferant_name: Some(
-                cfg.seller_name
-                    .clone()
-                    .unwrap_or_else(|| cfg.tenant.clone()),
-            ),
+            lieferant_name: cfg.seller_name().map(str::to_owned),
             lieferant_anschrift: cfg
                 .seller
                 .as_ref()

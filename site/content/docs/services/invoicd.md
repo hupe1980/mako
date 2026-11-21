@@ -128,6 +128,11 @@ a document that will not **type** (wrong `_typ`, out-of-schema `rechnungstyp`) i
 dead-lettered; one that types but breaks a BO4E rule (a `gesamtbrutto` that is
 not net plus tax) is **disputable** and answered by a REMADV from check stage 7.
 
+The announcement names the invoice's receiver (`receiver_gln`, the INVOIC's
+NAD+MR): it decides the Sparte the invoice is checked under and, on PID 31009,
+the ESA whose accepted offer is looked up. An announcement without it is
+dead-lettered — the tenant is an isolation key and never stands in for it.
+
 ---
 
 ## Handled PIDs
@@ -484,7 +489,7 @@ url       = "env:DATABASE_URL"   # required; use env: for secrets
 pool_size = 10                   # default
 
 [identity]
-tenant     = "9900357000004"           # required — data-isolation key, typically the operator's MP-ID
+tenant     = "stadtwerke-musterstadt"  # required — data-isolation key, never an MP-ID
 marktrolle = "lieferant"               # lieferant (default) | netzbetreiber | esa
 
 [makod]

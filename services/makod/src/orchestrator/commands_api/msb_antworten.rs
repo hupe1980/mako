@@ -449,6 +449,10 @@ struct DatenabrufAnforderungBody {
     /// RFF+ON`; generated when absent.
     #[serde(default)]
     dokumentennummer: Option<String>,
+    /// `LF`, `NB` or `MSB` — the role asking; needed when the deployment
+    /// plays more than one.
+    #[serde(default)]
+    anfragender: Option<String>,
 }
 
 pub(super) fn cmd_gpke_datenabruf_anfordern<'a>(
@@ -492,7 +496,20 @@ async fn dispatch_gpke_datenabruf_anforderung(
         malo: Some(MaLo::new(required(&body.lokation_id, "lokation_id")?)),
         message_ref: MessageRef::new(nummer.clone()),
         payload: serde_json::json!({
-            "sender": state.sender_party_id,
+            "sender": state.own_mp_id(
+                &match body.anfragender.as_deref().map(|a| a.trim().to_uppercase()) {
+                    None => vec!["LF", "NB", "MSB"],
+                    Some(a) if a == "LF" => vec!["LF"],
+                    Some(a) if a == "NB" => vec!["NB"],
+                    Some(a) if a == "MSB" => vec!["MSB"],
+                    Some(other) => {
+                        return Err(DispatchError::InvalidPayload(format!(
+                            "\"anfragender\" must be LF, NB or MSB; got {other:?}"
+                        )));
+                    }
+                },
+                "anfragender",
+            )?,
             "grund": grund,
             "wertzeitpunkt": required(&body.wertzeitpunkt, "wertzeitpunkt")?,
         }),
@@ -632,7 +649,7 @@ async fn dispatch_wim_technik_aenderung_bestellung(
         location_id: Some(required(&body.melo_id, "melo_id")?.to_owned()),
         message_ref: MessageRef::new(nummer.clone()),
         payload: serde_json::to_value(mako_engine::payload::OrdersPayload {
-            sender: Some(state.sender_party_id.clone()),
+            sender: Some(state.own_mp_id(&[body.besteller.as_str()], "besteller")?),
             sparte: Some(mako_engine::types::Sparte::Strom),
             ausfuehrungsdatum: Some(
                 required(&body.ausfuehrungsdatum, "ausfuehrungsdatum")?.to_owned(),
@@ -823,7 +840,7 @@ async fn send_msbn_auftrag(
         auftrag: MsbnAuftrag {
             pid: Pruefidentifikator::new(pid)
                 .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?,
-            msbn: MarktpartnerCode::new(state.sender_party_id.clone()),
+            msbn: MarktpartnerCode::new(state.own_mp_id(&["MSB"], "")?),
             msba: MarktpartnerCode::new(required(msba, "msba_mp_id")?),
             dokumentennummer: nummer.clone(),
         },

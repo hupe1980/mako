@@ -656,6 +656,7 @@ impl Workflow for GpkeSperrungLfWorkflow {
                     nb_mp_id.as_str(),
                     &mako_engine::payload::OrdchgPayload {
                         pid: Some(pid),
+                        sparte: Some(mako_engine::types::Sparte::Strom),
                         message_ref: Some(message_ref.as_str().to_owned()),
                         order_reference: auftrag.map(|d| d.message_ref.as_str().to_owned()),
                         ..Default::default()

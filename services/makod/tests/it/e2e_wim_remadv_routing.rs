@@ -57,7 +57,7 @@ async fn make_dispatcher() -> (SlateDbStore, TenantId, EdifactIngestDispatcher) 
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant = TenantId::from_party_id(OWN_MP);
+    let tenant = TenantId::from_tenant(OWN_MP);
     let dispatcher = EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),

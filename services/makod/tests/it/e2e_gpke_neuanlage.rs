@@ -106,7 +106,7 @@ impl MockNb {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(NB_ID),
+                TenantId::from_tenant(NB_ID),
                 WorkflowId::new("gpke-neuanlage", FV),
             ),
             platform: Platform::with_all_profiles(),
@@ -410,7 +410,7 @@ impl NeuanlageDoor {
         use mako_engine::store_slatedb::SlateDbStore;
         use std::sync::Arc;
         let store = Arc::new(SlateDbStore::open_in_memory().await.expect("store"));
-        let tenant_id = TenantId::from_party_id(NB_ID);
+        let tenant_id = TenantId::from_tenant(NB_ID);
         let msg = edi_energy::parse(anmeldung).expect("the Anmeldung parses");
         let pid = msg
             .detect_pruefidentifikator()
@@ -430,7 +430,8 @@ impl NeuanlageDoor {
         };
         let state = makod::commands_api::CommandsApiState {
             tenant_id,
-            sender_party_id: NB_ID.to_owned(),
+            tenant: "stadtwerke-test".to_owned(),
+            parties: crate::support::single_party(NB_ID),
             configured_marktrollen: vec!["NB".to_owned()],
             max_body_bytes: 1_048_576,
             snapshot_interval: 100,
@@ -625,8 +626,9 @@ impl LfNeuanlage {
         use std::sync::Arc;
         let store = Arc::new(SlateDbStore::open_in_memory().await.expect("store"));
         let state = makod::commands_api::CommandsApiState {
-            tenant_id: TenantId::from_party_id(LF_ID),
-            sender_party_id: LF_ID.to_owned(),
+            tenant_id: TenantId::from_tenant(LF_ID),
+            tenant: "stadtwerke-test".to_owned(),
+            parties: crate::support::single_party(LF_ID),
             configured_marktrollen: vec!["LF".to_owned()],
             max_body_bytes: 1_048_576,
             snapshot_interval: 100,
@@ -636,7 +638,7 @@ impl LfNeuanlage {
             snapshot_store: store.as_snapshot_store(),
             malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
                 (*store).clone(),
-                TenantId::from_party_id(LF_ID),
+                TenantId::from_tenant(LF_ID),
             )),
             maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((*store).clone()),
             store: Arc::clone(&store),

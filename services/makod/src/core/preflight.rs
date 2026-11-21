@@ -76,8 +76,8 @@ pub fn is_insecure_delivery_channel(qualifier: &str, address: &str) -> bool {
 /// rather than `&Cli` because `Cli` belongs to the binary target and this module
 /// is compiled into the library target as well.
 pub struct PreflightInput<'a> {
-    /// Primary Marktpartner-ID — the tenant key.
-    pub primary_mp_id: &'a str,
+    /// `[deployment] tenant`.
+    pub tenant: &'a str,
     /// `[[party]]`, whose `[party.as4]` carry the AS4 key material.
     pub parties: &'a [crate::config::PartyConfig],
     /// The registry built from `parties` (agency per MP-ID).
@@ -328,7 +328,7 @@ pub fn pruefe(input: &PreflightInput<'_>) -> Result<Preflight, Vec<Befund>> {
             keys,
             input.cedar_policies.clone(),
             None,
-            Some(input.primary_mp_id.to_owned()),
+            Some(input.tenant.to_owned()),
             cedar_default_policy,
         )
     {
@@ -841,7 +841,7 @@ mod tests {
     fn base<'a>() -> PreflightInput<'a> {
         let f: &'static Fixture = &FIXTURE;
         PreflightInput {
-            primary_mp_id: "9900001000001",
+            tenant: "stadtwerke-test",
             parties: &f.parties,
             registry: &f.registry,
             as4: &f.as4,

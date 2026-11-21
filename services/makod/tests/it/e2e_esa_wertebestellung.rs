@@ -41,7 +41,8 @@ fn command_state(
 ) -> CommandsApiState {
     CommandsApiState {
         tenant_id: tenant,
-        sender_party_id: sender_mp_id.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(sender_mp_id),
         configured_marktrollen: vec![marktrolle.to_uppercase()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -156,8 +157,8 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
             .await
             .expect("in-memory store"),
     );
-    let tenant_esa = TenantId::from_party_id(ESA_MP_ID);
-    let tenant_msb = TenantId::from_party_id(MSB_MP_ID);
+    let tenant_esa = TenantId::from_tenant(ESA_MP_ID);
+    let tenant_msb = TenantId::from_tenant(MSB_MP_ID);
 
     let esa = command_state(&store, tenant_esa, ESA_MP_ID, "ESA");
     let msb = command_state(&store, tenant_msb, MSB_MP_ID, "MSB");
@@ -412,8 +413,8 @@ async fn a_widerruf_stops_every_subscription_at_the_location() {
             .await
             .expect("in-memory store"),
     );
-    let tenant_esa = TenantId::from_party_id(ESA_MP_ID);
-    let tenant_msb = TenantId::from_party_id(MSB_MP_ID);
+    let tenant_esa = TenantId::from_tenant(ESA_MP_ID);
+    let tenant_msb = TenantId::from_tenant(MSB_MP_ID);
     let esa = command_state(&store, tenant_esa, ESA_MP_ID, "ESA");
     let msb = command_state(&store, tenant_msb, MSB_MP_ID, "MSB");
     let dispatcher_esa = EdifactIngestDispatcher::new(

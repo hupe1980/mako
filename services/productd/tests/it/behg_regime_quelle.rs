@@ -17,7 +17,8 @@ use time::macros::date;
 fn a_productd_behg_regime_key_is_refused() {
     let cfg: productd::config::ProductdConfig = toml::from_str(
         r#"
-        tenant = "9900357000004"
+        tenant = "stadtwerke-musterstadt"
+        lf_mp_id = "9900357000028"
         allow_insecure_no_auth = true
         behg_regime = "korridor"
         [database]
@@ -40,7 +41,8 @@ fn two_defects_are_both_reported() {
     use mako_service::Daemon as _;
     let cfg: productd::config::ProductdConfig = toml::from_str(
         r#"
-        tenant = "9900357000004"
+        tenant = "stadtwerke-musterstadt"
+        lf_mp_id = "9900357000028"
         behg_regime = "korridor"
         [database]
         url = "env:DATABASE_URL"

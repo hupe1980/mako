@@ -94,6 +94,25 @@ impl Daemon for Accountingd {
         if let Err(e) = cfg.check_auth_posture() {
             out.push(Befund::aus_fehler("oidc", e).bereich(Bereich::Zugriff));
         }
+        if let Err(e) = rubo4e::identifiers::MarktpartnerId::new(cfg.lf_mp_id.trim()) {
+            out.push(Befund::blockiert(
+                "lf_mp_id",
+                format!(
+                    "lf_mp_id {:?} is not an MP-ID ({e}) — set the Lieferant's 13-digit \
+                     BDEW- or DVGW-Codenummer",
+                    cfg.lf_mp_id
+                ),
+            ));
+        }
+        if cfg.creditor_name().is_none() {
+            let text = "creditor_name is not set — every pain.008, EEG pain.001 and Mahnung \
+                        names the Lieferant by it and is refused without it";
+            out.push(if cfg.eeg.auto_payout {
+                Befund::blockiert("creditor_name", text)
+            } else {
+                Befund::warnung("creditor_name", text)
+            });
+        }
         if let Err(e) = crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
             out.push(Befund::aus_fehler(
                 "pain001_schema",
@@ -290,6 +309,7 @@ impl Daemon for Accountingd {
             pool: pool.clone(),
             ledger: Arc::clone(&ledger),
             tenant: cfg.tenant.clone(),
+            lf_mp_id: cfg.lf_mp_id.clone(),
             auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
                 &cfg.mcp,
                 oidc,
@@ -297,7 +317,7 @@ impl Daemon for Accountingd {
                 &cfg.tenant,
             ),
             creditor_iban: cfg.creditor_iban.clone(),
-            creditor_name: cfg.creditor_name.clone(),
+            creditor_name: cfg.creditor_name().map(str::to_owned),
             creditor_id: cfg.creditor_id.clone(),
             creditor_address: cfg.creditor_address.clone(),
             iban_key: iban_hash_key,
@@ -508,11 +528,17 @@ impl Daemon for Accountingd {
                                     continue;
                                 }
                             };
-                            // Creditor name defaults to tenant if not configured separately
-                            let creditor_name = cfg_sepa
-                                .creditor_name
-                                .as_deref()
-                                .unwrap_or(&cfg_sepa.tenant);
+                            let Some(creditor_name) = cfg_sepa.creditor_name() else {
+                                tracing::error!(
+                                    "accountingd: SEPA N-5 — {}; pain.008 generation BLOCKED.",
+                                    crate::config::CREDITOR_NAME_FEHLT
+                                );
+                                crate::pg::release_worker_lock(&mut wlock, crate::pg::LOCK_SEPA_N5)
+                                    .await;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600))
+                                    .await;
+                                continue;
+                            };
                             let Some(creditor_id) =
                                 cfg_sepa.creditor_id.as_deref().filter(|s| !s.is_empty())
                             else {

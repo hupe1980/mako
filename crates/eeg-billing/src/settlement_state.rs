@@ -249,6 +249,7 @@ pub struct SettlementStateFacts {
 ///     mastr_registriert: true,
 ///     sect9_anlage: Sect9Anlage {
 ///         leistung_kwp: dec!(50),
+///         inbetriebnahme: time::macros::date!(2025 - 06 - 01),
 ///         erzeugungsart: None,
 ///         einspeiseverguetung_oder_mieterstrom: true,
 ///         ist_kwk_anlage: false,
@@ -373,6 +374,7 @@ mod tests {
             mastr_registriert: true,
             sect9_anlage: Sect9Anlage {
                 leistung_kwp: dec!(50),
+                inbetriebnahme: time::macros::date!(2025 - 06 - 01),
                 erzeugungsart: None,
                 einspeiseverguetung_oder_mieterstrom: true,
                 ist_kwk_anlage: false,
@@ -388,6 +390,7 @@ mod tests {
     fn mit_leistung(kwp: rust_decimal::Decimal) -> Sect9Anlage {
         Sect9Anlage {
             leistung_kwp: kwp,
+            inbetriebnahme: time::macros::date!(2025 - 06 - 01),
             ..gesund().sect9_anlage
         }
     }
@@ -564,6 +567,9 @@ impl Sect9Erfuellung {
 pub struct Sect9Anlage {
     /// Installed capacity in kW — the Nr. 1 / Nr. 2 / Nr. 3 staging.
     pub leistung_kwp: Decimal,
+    /// Inbetriebnahme — § 100 Abs. 3b lifts the 60 % cap for a plant
+    /// commissioned in 2023 or before 25 February 2025.
+    pub inbetriebnahme: time::Date,
     /// Technology, for the Steckersolar carve-out.
     pub erzeugungsart: Option<ErzeugungsArt>,
     /// The plant is settled under § 19 Abs. 1 Nr. 2 (Einspeisevergütung, in any
@@ -627,6 +633,7 @@ pub const STECKERSOLAR_WECHSELRICHTER_VA: Decimal = dec!(800);
 ///
 /// let gefoerdert = |kwp| Sect9Anlage {
 ///     leistung_kwp: kwp,
+///     inbetriebnahme: time::macros::date!(2025 - 06 - 01),
 ///     erzeugungsart: None,
 ///     einspeiseverguetung_oder_mieterstrom: true,
 ///     ist_kwk_anlage: false,
@@ -654,6 +661,7 @@ pub const STECKERSOLAR_WECHSELRICHTER_VA: Decimal = dec!(800);
 pub fn sect9_pflicht(anlage: Sect9Anlage) -> Sect9Pflicht {
     let Sect9Anlage {
         leistung_kwp,
+        inbetriebnahme,
         erzeugungsart,
         einspeiseverguetung_oder_mieterstrom,
         ist_kwk_anlage,
@@ -669,9 +677,16 @@ pub fn sect9_pflicht(anlage: Sect9Anlage) -> Sect9Pflicht {
         && leistung_kwp <= STECKERSOLAR_LEISTUNG_KW
         && wechselrichterleistung_va.is_some_and(|va| va <= STECKERSOLAR_WECHSELRICHTER_VA);
 
+    // § 100 Abs. 3b: „§ 9 Absatz 2 Satz 1 Nummer 2 Buchstabe b und Nummer 3 ist
+    // nicht anzuwenden auf Anlagen, die nach dem Ablauf des 31. Dezember 2022
+    // und vor dem 25. Februar 2025 in Betrieb genommen wurden." Both cap routes,
+    // the KWK-Anlage's included.
+    let cap_ausgenommen = inbetriebnahme > time::macros::date!(2022 - 12 - 31)
+        && inbetriebnahme < time::macros::date!(2025 - 02 - 25);
+
     // The 60 % cap is owed by geförderte Anlagen throughout, and below 25 kW by
     // every KWK-Anlage as well.
-    let cap_adressat = einspeiseverguetung_oder_mieterstrom;
+    let cap_adressat = einspeiseverguetung_oder_mieterstrom && !cap_ausgenommen;
 
     if leistung_kwp >= dec!(100) {
         // Nr. 1 — „mindestens 100 Kilowatt": Ist-Einspeisung abrufen und
@@ -692,7 +707,9 @@ pub fn sect9_pflicht(anlage: Sect9Anlage) -> Sect9Pflicht {
         // geförderte Anlage or a KWK-Anlage.
         Sect9Pflicht {
             fernsteuerbarkeit: false,
-            begrenzung_60: (cap_adressat || ist_kwk_anlage) && !steckersolar_ausgenommen,
+            begrenzung_60: (cap_adressat || ist_kwk_anlage)
+                && !steckersolar_ausgenommen
+                && !cap_ausgenommen,
         }
     }
 }
@@ -713,6 +730,7 @@ pub fn sect9_pflicht(anlage: Sect9Anlage) -> Sect9Pflicht {
 ///
 /// let anlage = Sect9Anlage {
 ///     leistung_kwp: dec!(50),
+///     inbetriebnahme: time::macros::date!(2025 - 06 - 01),
 ///     erzeugungsart: None,
 ///     einspeiseverguetung_oder_mieterstrom: true,
 ///     ist_kwk_anlage: false,
@@ -739,10 +757,61 @@ mod sect9_tests {
     fn anlage(kwp: Decimal) -> Sect9Anlage {
         Sect9Anlage {
             leistung_kwp: kwp,
+            inbetriebnahme: time::macros::date!(2025 - 06 - 01),
             erzeugungsart: None,
             einspeiseverguetung_oder_mieterstrom: true,
             ist_kwk_anlage: false,
             wechselrichterleistung_va: None,
+        }
+    }
+
+    /// § 100 Abs. 3b lifts the 60 % cap — Nr. 2 lit. b and Nr. 3 — for a plant
+    /// commissioned after 31.12.2022 and before 25.02.2025, and nothing else:
+    /// lit. a still binds. Demanding the cap there reports a § 52 Abs. 1 Nr. 1
+    /// breach that does not exist and deducts 10 EUR/kW a month.
+    #[test]
+    fn plants_commissioned_from_2023_to_24_february_2025_owe_no_cap() {
+        use time::macros::date;
+        let am = |tag, kwp| Sect9Anlage {
+            inbetriebnahme: tag,
+            ..anlage(kwp)
+        };
+        let kwk = |tag| Sect9Anlage {
+            einspeiseverguetung_oder_mieterstrom: false,
+            ist_kwk_anlage: true,
+            ..am(tag, dec!(10))
+        };
+        for tag in [
+            date!(2023 - 01 - 01),
+            date!(2024 - 06 - 01),
+            date!(2025 - 02 - 24),
+        ] {
+            assert_eq!(
+                sect9_pflicht(am(tag, dec!(50))),
+                Sect9Pflicht {
+                    fernsteuerbarkeit: true,
+                    begrenzung_60: false
+                },
+                "{tag}: lit. a still binds, lit. b is lifted"
+            );
+            assert!(
+                sect9_pflicht(am(tag, dec!(10))).ist_leer(),
+                "{tag}: Nr. 3 lifted"
+            );
+            assert!(
+                sect9_pflicht(kwk(tag)).ist_leer(),
+                "{tag}: Nr. 3 lifted for KWK too"
+            );
+        }
+        for tag in [date!(2022 - 12 - 31), date!(2025 - 02 - 25)] {
+            assert!(
+                sect9_pflicht(am(tag, dec!(50))).begrenzung_60,
+                "{tag} is outside the window"
+            );
+            assert!(
+                sect9_pflicht(am(tag, dec!(10))).begrenzung_60,
+                "{tag} is outside the window"
+            );
         }
     }
 

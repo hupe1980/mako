@@ -32,7 +32,10 @@ fn config(intervall: Option<u8>) -> LfModuleConfig {
         marktd_api_key: SecretString::from(String::new()),
         vertragd_url: None,
         vertragd_api_key: None,
-        own_mp_id: "9900357000004".to_owned(),
+        identitaet: processd::config::Identitaet {
+            lf: vec!["9900357000028".to_owned()],
+            ..Default::default()
+        },
         tenant: "t".to_owned(),
         auto_respond: true,
         bilanzkreise: vec![

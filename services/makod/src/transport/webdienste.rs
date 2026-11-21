@@ -167,8 +167,8 @@ fn missing_caller_error() -> energy_api::Error {
 ///
 /// - `store`          — shared SlateDB instance for inbox idempotency, outbox
 ///   persistence, and event-sourced workflow dispatch.
-/// - `tenant_id`      — the operator's [`TenantId`], derived from their BDEW
-///   code / MP-ID via [`TenantId::from_party_id`].
+/// - `tenant_id`      — the deployment's [`TenantId`], derived from
+///   `[deployment] tenant` via [`TenantId::from_tenant`].
 ///
 /// The calling market participant's Marktpartner-ID is **not** state: it
 /// arrives per request in [`CLIENT_MP_ID_HEADER`], set by the mTLS-terminating
@@ -1080,7 +1080,7 @@ fn subject_public_key_info(der: &[u8]) -> Option<&[u8]> {
 pub struct WebdiensteAuthState {
     /// Cedar-based authenticator/authorizer.
     pub cedar: Arc<crate::cedar_authz::CedarAuthorizer>,
-    /// Operator tenant (MP-ID) — the Cedar resource scope.
+    /// Operator tenant (`[deployment] tenant`) — the Cedar resource scope.
     pub tenant: Arc<str>,
 }
 
@@ -1212,7 +1212,7 @@ mod retry_tests {
     fn handler(store: SlateDbStore) -> MakodApiHandler {
         MakodApiHandler {
             store,
-            tenant_id: TenantId::from_party_id(TENANT),
+            tenant_id: TenantId::from_tenant(TENANT),
         }
     }
 
@@ -1225,7 +1225,7 @@ mod retry_tests {
     async fn processes_under(store: &SlateDbStore, key: &str) -> usize {
         store
             .as_process_registry()
-            .lookup_correlated(TenantId::from_party_id(TENANT), key)
+            .lookup_correlated(TenantId::from_tenant(TENANT), key)
             .await
             .expect("lookup")
             .len()

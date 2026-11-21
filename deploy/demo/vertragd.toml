@@ -10,8 +10,8 @@
 
 allow_insecure_no_auth = true
 
-tenant   = "9900357000004"
-lf_mp_id = "9900357000004"
+tenant   = "stadtwerke-musterstadt"
+lf_mp_id = "9900357000028"
 
 processd_url    = "http://processd:8580"
 accountingd_url = "http://accountingd:9380"

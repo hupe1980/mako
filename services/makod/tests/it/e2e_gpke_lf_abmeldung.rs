@@ -90,7 +90,7 @@ impl MockLf {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(LF_ID),
+                TenantId::from_tenant(LF_ID),
                 WorkflowId::new("gpke-lf-abmeldung", FV),
             ),
             platform: Platform::with_all_profiles(),

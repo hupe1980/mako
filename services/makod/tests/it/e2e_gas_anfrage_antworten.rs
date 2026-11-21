@@ -53,7 +53,7 @@ async fn deployment(
             .await
             .expect("in-memory store"),
     );
-    let tenant_id = TenantId::from_party_id(own);
+    let tenant_id = TenantId::from_tenant(own);
     let dispatcher = EdifactIngestDispatcher::new(
         Arc::clone(&store),
         store.as_snapshot_store(),
@@ -62,7 +62,8 @@ async fn deployment(
     );
     let state = CommandsApiState {
         tenant_id,
-        sender_party_id: own.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(own),
         configured_marktrollen: vec![if lf { "LF" } else { "GNB" }.to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,

@@ -244,8 +244,10 @@ a cutover.
 - Timestamps use `time::OffsetDateTime` — **not** `chrono::DateTime<Utc>`.
 - EDIFACT payloads and event payloads use `serde_json::Value` — **not** `Vec<u8>` or `Bytes`.
 - **`tenant: String`** is a **data-isolation key** written to every database row — it is NOT
-  the BDEW-Codenummer. In demos it happens to equal the operator's BDEW-Codenummer for convenience,
-  but it can be any stable unique string (e.g. a UUID, a slug). The BDEW-/DVGW-Codenummer belongs
+  the BDEW-Codenummer, and nothing falls back from an MP-ID to it (`check-tenant-not-mp-id`).
+  Any stable unique string (a UUID, a slug); the demo's is `stadtwerke-musterstadt`, and makod
+  reads it from `[deployment] tenant`. Each Marktrolle has its own MP-ID (Allgemeine
+  Festlegungen 6.1d Kap. 2.13), so one `[[party]]` names one role. The BDEW-/DVGW-Codenummer belongs
   in `lf_mp_id`, `nb_mp_id`, `own_mp_id`, or `MarktpartnerId` fields — not in `tenant`.
   Document `tenant` as: `"Tenant identifier — data-isolation key written to every database row.
   Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid."`.

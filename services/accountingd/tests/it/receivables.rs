@@ -60,6 +60,7 @@ async fn plan_with(
     pg::create_payment_plan(
         pool,
         TENANT,
+        "LF1",
         pg::CreatePaymentPlanRequest {
             malo_id: malo.to_owned(),
             lf_mp_id: Some("LF1".to_owned()),
@@ -90,6 +91,7 @@ async fn plan_for(pool: &sqlx::PgPool, malo: &str, total_ct: i64, due: &str) -> 
     pg::create_payment_plan(
         pool,
         TENANT,
+        "LF1",
         pg::CreatePaymentPlanRequest {
             malo_id: malo.to_owned(),
             lf_mp_id: Some("LF1".to_owned()),

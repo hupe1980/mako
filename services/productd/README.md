@@ -43,9 +43,13 @@ just test-productd-db
 
 ## Configuration
 
-`tenant`, `lf_mp_id` (defaults to `tenant`), `billingd_url` (without it a Gas
+`tenant` (the isolation key), `lf_mp_id` (required — the Lieferant's MP-ID the
+catalogue sells under; a write to any other `{lf_mp_id}` is `403
+foreign_catalogue`), `billingd_url` (without it a Gas
 position in a year § 10 BEHG fixes no price for is refused `BEHG_PREIS_FEHLT`),
-`marktd_url` (without it the Endkunden-Angebot route answers `503`),
+`marktd_url` (without it the Endkunden-Angebot route answers `503`; the
+Messentgelt is read under the gMSB marktd records for the NB, and an unrecorded
+link refuses `422 eingabe_fehlt`),
 `erp_webhook_url` / `erp_hmac_secret` (the webhook endpoint `default`),
 `[subscriptions]` (`retention_days`, `allow_loopback` for `just dev`),
 `[database]`, `[oidc]`, `[mcp]`.

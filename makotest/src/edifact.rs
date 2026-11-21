@@ -2091,6 +2091,62 @@ pub fn build_quotes(
     complete_to_column(bytes, MessageType::Quotes, &rel, pruefidentifikator)
 }
 
+/// A UTILTS Vorgang — the MSB's Antwort auf Berechnungsformel (25010): one
+/// `antworten` entry `(code, zeitraum_id)` per Zeitraum of the formula, out of
+/// `E_0218`; `referenz` is the 25001's Vorgangsnummer (`RFF+TN`), and
+/// `freitext` the `FTX+ACB` an `A99` needs.
+#[pyfunction]
+#[pyo3(signature = (
+    pruefidentifikator, sender, receiver, *, vorgangsnummer, referenz=None,
+    antworten=None, freitext=None, on=None, release=None, document_id=None,
+    message_ref="1", document_date=None
+))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
+)]
+pub fn build_utilts(
+    pruefidentifikator: u32,
+    sender: &str,
+    receiver: &str,
+    vorgangsnummer: &str,
+    referenz: Option<&str>,
+    antworten: Option<Vec<(String, u32)>>,
+    freitext: Option<&str>,
+    on: Option<&str>,
+    release: Option<&str>,
+    document_id: Option<&str>,
+    message_ref: &str,
+    document_date: Option<&str>,
+) -> PyResult<Vec<u8>> {
+    let rel = resolve_release(MessageType::Utilts, release, on, None)?;
+    let mut vorgang = edi_energy::builders::UtiltsVorgang::new(vorgangsnummer, pruefidentifikator);
+    for (code, zeitraum) in antworten.unwrap_or_default() {
+        vorgang = vorgang.antwort(code, zeitraum);
+    }
+    if let Some(text) = freitext {
+        vorgang = vorgang.antwort_freitext(text);
+    }
+    if let Some(r) = referenz {
+        vorgang = vorgang.ref_transaction(r);
+    }
+    let mut b = edi_energy::builders::UtiltsBuilder::new(rel.clone())
+        .sender(sender)
+        .receiver(receiver)
+        .message_ref(message_ref)
+        .add_vorgang(vorgang);
+    if let Some(id) = document_id {
+        b = b.document_id(id);
+    }
+    if let Some(d) = document_date_for(document_date, on)? {
+        b = b.document_date(d);
+    }
+    let bytes = b
+        .serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("UTILTS serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Utilts, &rel, pruefidentifikator)
+}
+
 /// Wrap one or more messages in a UNB/UNZ interchange envelope.
 ///
 /// A message (`UNH`…`UNT`) is not sendable on its own — the wire unit a market
@@ -2155,6 +2211,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_orders, m)?)?;
     m.add_function(wrap_pyfunction!(build_iftsta, m)?)?;
     m.add_function(wrap_pyfunction!(build_quotes, m)?)?;
+    m.add_function(wrap_pyfunction!(build_utilts, m)?)?;
     m.add_function(wrap_pyfunction!(build_interchange, m)?)?;
     m.add_class::<UtilmdTransaction>()?;
     m.add_class::<Vorgang>()?;

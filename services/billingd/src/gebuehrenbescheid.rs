@@ -178,7 +178,7 @@ pub fn view(
         "datum": ausgestellt.to_string(),
         "bescheidnummer": ctx.rechnungsnummer,
         "absender": party(
-            Some(cfg.seller_name.as_deref().unwrap_or(&cfg.tenant)),
+            cfg.seller_name(),
             seller.and_then(|s| s.street.as_deref()),
             seller.and_then(|s| s.post_code.as_deref()),
             seller.and_then(|s| s.city.as_deref()),

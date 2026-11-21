@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{#- The tools overview: each family a heading and its cards, every word from
+    the page's front matter (`page.extra.families`). -#}
+
+{% block content %}
+<div class="wrap" data-pagefind-body>
+  <header class="ps-head">
+    <p class="ps-eyebrow"><span class="ps-lock" aria-hidden="true">🔒</span> {{ page.extra.privacy }}</p>
+    <h1>{{ page.extra.heading }}</h1>
+    <p class="ps-lede">{{ page.extra.lede | markdown(inline=true) | safe }}</p>
+  </header>
+  {%- for f in page.extra.families %}
+  <section class="tools-family" aria-labelledby="tf-{{ loop.index }}">
+    <h2 id="tf-{{ loop.index }}">{{ f.title }}</h2>
+    <p>{{ f.lede }}</p>
+    <div class="card-grid card-grid-4">
+      {%- for t in f.tools %}
+      <a class="card tool-card" href="{{ get_url(path=t.page, lang=lang) | safe }}">
+        <span class="tool-icon" aria-hidden="true">{{ t.icon }}</span>
+        <h3>{{ t.title }}</h3>
+        <p>{{ t.text }}</p>
+      </a>
+      {%- endfor %}
+    </div>
+  </section>
+  {%- endfor %}
+</div>
+{% endblock content %}

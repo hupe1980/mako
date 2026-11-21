@@ -277,7 +277,7 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
     // Step 6: Execute the command against an in-memory NB process.
     let nb_process: Process<GpkeSupplierChangeWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(NB_ID),
+        TenantId::from_tenant(NB_ID),
         WorkflowId::new("gpke-supplier-change", FV_2026),
     );
 
@@ -465,7 +465,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
     // The GNB receives the nLFN's Lieferbeginn Anfrage.
     let gnb_process: Process<GeliGasSupplierChangeWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(GAS_GNB_ID),
+        TenantId::from_tenant(GAS_GNB_ID),
         WorkflowId::new("geli-gas-supplier-change", GAS_FV_2025),
     );
 
@@ -578,7 +578,7 @@ async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
 
     let nb_process: Process<WimDeviceChangeWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(WIM_GAS_NB_ID),
+        TenantId::from_tenant(WIM_GAS_NB_ID),
         WorkflowId::new("wim-device-change", GAS_FV_2025),
     );
 
@@ -701,7 +701,7 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
     // Step 6: Execute the command against an in-memory NB process.
     let nb_process: Process<GpkeAbrechnungWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(INVOIC_NB_ID),
+        TenantId::from_tenant(INVOIC_NB_ID),
         WorkflowId::new("gpke-abrechnung", INVOIC_FV_2026),
     );
 
@@ -828,7 +828,7 @@ async fn ahb_44022_geli_gas_stornierung_validates_and_dispatches() {
     // GNB (Gasnetzbetreiber) owns the GeLi Gas Stornierung process.
     let gnb_process: Process<GeliGasStornierungWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(STORNO_GNB_ID),
+        TenantId::from_tenant(STORNO_GNB_ID),
         WorkflowId::new("geli-gas-stornierung", GAS_FV_2025),
     );
 
@@ -970,7 +970,7 @@ async fn assert_wim_device_change_dispatches(
 
     let process: Process<WimDeviceChangeWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(expected_receiver),
+        TenantId::from_tenant(expected_receiver),
         WorkflowId::new("wim-device-change", GAS_FV_2025),
     );
     process

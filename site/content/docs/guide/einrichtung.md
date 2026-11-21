@@ -49,8 +49,9 @@ checking the machine for `just dev`.
 
 ## The proposal
 
-The setup interview asks only what changes the configuration: the Rollen and
-the MP-ID each plays under, the primary MP-ID where there are several, a
+The setup interview asks only what changes the configuration: the tenant, the
+Rollen and the MP-ID each plays under — one per Rolle, a second Rolle under the
+same MP-ID is refused (Allgemeine Festlegungen 6.1d Kap. 2.13) — the primary MP-ID where there are several, a
 Lieferant's Bilanzkreise per Sparte, the affiliated Lieferanten, the AS4 key
 material as paths, and where the other daemons run. The Rollen it offers are
 the type makod parses `[deployment] rollen` into

@@ -156,6 +156,7 @@ impl Daemon for Productd {
         let mcp_state = Arc::new(mcp_server::ProductdMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
+            lf_mp_id: cfg.lf_mp_id().to_owned(),
             auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
                 &cfg.mcp,
                 oidc.clone(),

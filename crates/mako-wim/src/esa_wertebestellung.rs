@@ -973,6 +973,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                         message_ref,
                         korrelation_ref,
                         order_reference: None,
+                        sparte: None,
                     },
                 ),
                 _ => PendingOutbox::typed(

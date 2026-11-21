@@ -63,7 +63,7 @@ pub(super) fn render_invoic(
 ///
 /// | Field           | Required | Description                                   |
 /// |-----------------|----------|-----------------------------------------------|
-/// | `sender`        | no       | Sender MP-ID (falls back to `registry.primary_mp_id()`)|
+/// | `sender`        | no       | Sender MP-ID (falls back to a single-party deployment's MP-ID)|
 /// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`)  |
 /// | `document_id`   | no       | BGM document identifier (Avisnummer)          |
 /// | `document_code` | no       | BGM type code (default `"239"`)               |
@@ -97,7 +97,7 @@ pub(super) fn render_remadv(
     let mt = "REMADV";
     let p: mako_engine::payload::RemadvPayload = super::typed_payload(p)?;
 
-    let sender = text(&p.sender).unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(text(&p.sender), registry, mt)?;
     let receiver = text(&p.receiver).unwrap_or(msg.recipient.as_ref());
     let document_id = text(&p.document_id);
     let document_code = text(&p.document_code);

@@ -1575,6 +1575,7 @@ mod tests {
     fn initiator_carries_ergaenzung_and_stammdaten_in_the_typed_payload() {
         let stammdaten = Stammdaten {
             lokationen: vec![mako_engine::payload::StammdatenLokation {
+                zeitraum_id: None,
                 qualifier: "Z17".to_owned(),
                 id: "DE0000000000000000000000000000042".to_owned(),
             }],

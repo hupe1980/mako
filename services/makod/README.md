@@ -5,7 +5,7 @@ declares: it assembles the domain workflow crates into one process engine on a
 durable [SlateDB](https://github.com/slatedb/slatedb) event store, receives and
 sends EDIFACT over AS4, takes ERP commands over REST and serves the BDEW
 API-Webdienste Strom.
-Eight modules register **82 workflows** over 499 Prüfidentifikatoren; which
+Eight modules register **83 workflows** over 499 Prüfidentifikatoren; which
 ones run is decided by `[deployment] rollen`.
 
 | | |

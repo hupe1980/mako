@@ -19,7 +19,6 @@
 //! | 25007 | Übermittlung Leistungskurvendefinitionen     | NB/MSB → LF | GPKE Teil 3   |
 //! | 25008 | Übermittlung ausgerollte Schaltzeitdefinition| NB/MSB → LF | GPKE Teil 3   |
 //! | 25009 | Übermittlung ausgerollte Leistungskurve      | NB/MSB → LF | GPKE Teil 3   |
-//! | 25010 | Übermittlung Zählzeitdefinitionen (combined) | NB/MSB → LF | GPKE Teil 3   |
 //!
 //! ## Regulatory basis
 //!
@@ -51,8 +50,7 @@ pub const WORKFLOW_NAME: &str = "gpke-utilts";
 /// | 25007 | Übersicht Leistungskurvendefinitionen        |
 /// | 25008 | Ausgerollte Schaltzeitdefinition             |
 /// | 25009 | Ausgerollte Leistungskurvendefinition        |
-/// | 25010 | Zählzeitdefinitionen (combined)              |
-pub const UTILTS_PIDS: &[u32] = &[25001, 25004, 25005, 25006, 25007, 25008, 25009, 25010];
+pub const UTILTS_PIDS: &[u32] = &[25001, 25004, 25005, 25006, 25007, 25008, 25009];
 
 // ── Domain data ───────────────────────────────────────────────────────────────
 

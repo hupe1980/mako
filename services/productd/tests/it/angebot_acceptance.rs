@@ -16,7 +16,9 @@ use sqlx::PgPool;
 
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
 
-const TENANT: &str = "9900357000004";
+const TENANT: &str = "stadtwerke-musterstadt";
+/// The Lieferant `deploy/demo/productd.toml` sells under.
+const LF: &str = "9900357000028";
 
 async fn pg() -> Option<(String, PgContainer)> {
     use testcontainers::ImageExt;
@@ -56,7 +58,7 @@ async fn serve(url: &str, pool: &PgPool, webhook: &str) -> String {
 
 async fn priced_angebot(pool: &PgPool) -> uuid::Uuid {
     let req = pg::CreateAngebotRequest {
-        lf_mp_id: Some(TENANT.to_owned()),
+        lf_mp_id: Some(LF.to_owned()),
         kunden_id: None,
         interessent_name: Some("ACME GmbH".to_owned()),
         contact_email: None,
@@ -73,7 +75,7 @@ async fn priced_angebot(pool: &PgPool) -> uuid::Uuid {
     pg::insert_angebot(
         pool,
         TENANT,
-        TENANT,
+        LF,
         "ANG-2026-00042",
         &req,
         &serde_json::json!([]),
@@ -177,8 +179,9 @@ async fn a_contract_price_is_not_offered_in_an_angebot() {
         "INSERT INTO products (lf_mp_id, product_code, category, name, sparte, data, bo4e_version,
                                product_status, tenant, abrechnung)
          VALUES ($1, 'P~0123456789ab', 'STROM', 'P (Vertriebspreis)', 'STROM',
-                 '{\"tarifpreise\": []}', 'v202607.0.0', 'VERTRAG', $1, '{}')",
+                 '{\"tarifpreise\": []}', 'v202607.0.0', 'VERTRAG', $2, '{}')",
     )
+    .bind(LF)
     .bind(TENANT)
     .execute(&pool)
     .await
@@ -187,7 +190,7 @@ async fn a_contract_price_is_not_offered_in_an_angebot() {
     let resp = reqwest::Client::new()
         .post(format!("{base}/api/v1/angebote"))
         .json(&serde_json::json!({
-            "lf_mp_id": TENANT,
+            "lf_mp_id": LF,
             "interessent_name": "ACME GmbH",
             "positionen": [{
                 "product_code": "P~0123456789ab",

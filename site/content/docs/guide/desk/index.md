@@ -609,8 +609,8 @@ the service's.
 ## Propose the configuration
 
 Below the checklist, **Vorschlag** asks what the configuration needs and
-nothing else: the Rollen the deployment plays and the MP-ID of each, the
-primary MP-ID where there are several, a Lieferant's Bilanzkreise per Sparte,
+nothing else: the tenant, the Rollen the deployment plays and the MP-ID of
+each, the primary MP-ID where there are several, a Lieferant's Bilanzkreise per Sparte,
 the affiliated Lieferanten, the AS4 key material as file paths, and where the
 other services run. It starts from what the deployment already runs with.
 Beside it the Marktkommunikation proposes one file per service — `makod.toml`,

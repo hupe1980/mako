@@ -55,8 +55,8 @@ which names the rule applied.
 
 `tenant`, `vertragd_url` / `vertragd_api_key` (required — startup refuses
 without it unless `allow_insecure_no_auth = true`), and each upstream's `_url`
-and `_api_key`. `lf_mp_id` (the MP-ID a self-service SEPA mandate is registered
-under) defaults to `tenant`. No `[policy]`, no `[oidc]`.
+and `_api_key`. `lf_mp_id` (required — the Lieferant's MP-ID a self-service SEPA mandate is
+registered under, the one accountingd is configured with). No `[policy]`, no `[oidc]`.
 
 The [operator guide](https://hupe1980.github.io/mako/docs/services/portald/)
 covers authorization, every endpoint and its failures, the dashboard and

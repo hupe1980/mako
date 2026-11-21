@@ -114,7 +114,8 @@ pub(super) async fn app(vertragd_verdict: StatusCode) -> axum::Router {
     let base = stub_upstreams(vertragd_verdict).await;
     let toml_src = format!(
         r#"
-tenant = "9900357000004"
+tenant = "stadtwerke-musterstadt"
+lf_mp_id = "9900357000028"
 vertragd_url    = "{base}"
 edmd_url        = "{base}"
 billingd_url    = "{base}"
@@ -212,7 +213,8 @@ async fn an_unreachable_vertragd_fails_closed() {
 #[tokio::test]
 async fn a_deployment_without_an_authorization_authority_refuses_to_start() {
     let cfg: portald::config::PortaldConfig =
-        toml::from_str("tenant = \"9900357000004\"\n").expect("config parses");
+        toml::from_str("tenant = \"stadtwerke-musterstadt\"\nlf_mp_id = \"9900357000028\"\n")
+            .expect("config parses");
     let err = mako_service::build_for_test::<portald::server::Portald>(cfg)
         .await
         .expect_err("must refuse to start");
@@ -222,6 +224,28 @@ async fn a_deployment_without_an_authorization_authority_refuses_to_start() {
         msg.contains("allow_insecure_no_auth"),
         "the refusal must name the way to opt out deliberately: {msg}"
     );
+}
+
+/// A self-service SEPA mandate is registered under the Lieferant's own MP-ID:
+/// the key is required, and the tenant in its place refuses the start.
+#[test]
+fn the_lf_mp_id_is_required_and_never_the_tenant() {
+    use mako_service::Daemon as _;
+    assert!(
+        toml::from_str::<portald::config::PortaldConfig>("tenant = \"stadtwerke-musterstadt\"\n")
+            .is_err(),
+        "a config without lf_mp_id does not parse"
+    );
+    let cfg: portald::config::PortaldConfig = toml::from_str(
+        "tenant = \"stadtwerke-musterstadt\"\nlf_mp_id = \"stadtwerke-musterstadt\"\n\
+         allow_insecure_no_auth = true\n",
+    )
+    .expect("config parses");
+    let pfade: Vec<String> = portald::server::Portald::validate(&cfg)
+        .into_iter()
+        .map(|b| b.pfad)
+        .collect();
+    assert_eq!(pfade, ["lf_mp_id"]);
 }
 
 /// `portald` serves no MCP.

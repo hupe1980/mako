@@ -91,7 +91,7 @@ impl MockMsba {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(MSBA_ID),
+                TenantId::from_tenant(MSBA_ID),
                 WorkflowId::new("wim-geraeteubernahme", FV),
             ),
             platform: Platform::with_all_profiles(),
@@ -375,7 +375,7 @@ async fn an_inbound_geraetewechselabsicht_answer_is_recorded_as_not_received() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(MSBN_ID),
+        TenantId::from_tenant(MSBN_ID),
     );
     for pid in [19_001_u32, 19_002, 19_015, 19_016] {
         let code = edi_energy::Pruefidentifikator::new(pid).expect("a Prüfidentifikator");

@@ -129,6 +129,7 @@ schema `CHECK` and `einsd::models::ALL` are pinned equal by
 |---|---|---|---|
 | `VERGUETUNG` | § 21 Abs. 1 EEG 2023 | `kwh × verguetungssatz_ct / 100` | `de.mako.eeg.verguetung.berechnet` |
 | `AUSFALLVERGUETUNG` | § 21 Abs. 1 Satz 1 Nr. 3 | same, reduced 20 % (§ 53 Abs. 3) | `de.mako.eeg.verguetung.berechnet` |
+| `UNENTGELTLICHE_ABNAHME` | § 21 Abs. 1 Satz 1 Nr. 2 | EUR 0 — the claim „verringert sich … auf null“ | `de.mako.eeg.verguetung.berechnet` |
 | `MIETERSTROM` | § 21 Abs. 3 | `kwh × (verguetung + mieter_zuschlag) / 100` | `de.mako.eeg.verguetung.berechnet` |
 | `GGV` | § 42b EnWG | § 21 rate on the grid feed-in at the GGV MaLo | `de.mako.eeg.verguetung.berechnet` |
 | `DIREKTVERMARKTUNG` | § 20 | Anlage 1 gleitende Marktprämie | `de.mako.eeg.marktpraemie.berechnet` |
@@ -260,6 +261,24 @@ The gate answers each supply period with one of four states
 
 No extension of the EEG 2023 approval is published. A recorded one settles
 the periods it covers under the EEG 2023 rather than a statute not in force.
+
+### `[policy] sect21c_ohne_zuordnung` {#policy-sect21c-ohne-zuordnung}
+
+A plant registered without a `settlement_model` has its Veräußerungsform
+decided by this reading. § 21c Abs. 1 Satz 3 EEG 2023 deems a plant below
+200 kW „für die der Anlagenbetreiber keine andere Zuordnung getroffen hat"
+assigned to the unentgeltliche Abnahme, whose claim „verringert sich … auf
+null" (§ 21 Abs. 1 Satz 1 Nr. 2); whether a commissioning notice already is the
+Zuordnung to the Einspeisevergütung is the Netzbetreiber's reading.
+
+| `sect21c_ohne_zuordnung` | Effect |
+|---|---|
+| `angabe_verlangen` (default) | Refused with `422` and code `veraeusserungsform_missing`; nothing is paid on a guess |
+| `einspeiseverguetung` | Registered as `VERGUETUNG` (§ 21c Abs. 1 Satz 5) |
+| `unentgeltliche_abnahme` | Below 200 kW registered as `UNENTGELTLICHE_ABNAHME` and settled at 0 ct; from 200 kW refused like `angabe_verlangen` |
+
+A registration that names its `settlement_model` is never touched by this
+setting.
 
 ### `[policy] beihilfe_politik` {#policy-beihilfe-politik}
 
@@ -1157,6 +1176,7 @@ in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 | `allow_insecure_no_auth` | `false` | Development only |
 | `[beihilfevorbehalt]` | no approvals | Recorded state-aid approvals; see [Beihilfevorbehalt](#beihilfevorbehalt-from-01-01-2027) |
 | `[policy] beihilfe_politik` | `verweigern` | See [`beihilfe_politik`](#policy-beihilfe-politik); every operator setting is listed in [Operator policy](@/docs/reference/operator-policy.md) |
+| `[policy] sect21c_ohne_zuordnung` | `angabe_verlangen` | See [`sect21c_ohne_zuordnung`](#policy-sect21c-ohne-zuordnung) |
 | `[policy] sect52_aufrechnung` | `gesondert` | See [`sect52_aufrechnung`](#policy-sect52-aufrechnung) |
 
 ```toml

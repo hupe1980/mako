@@ -208,7 +208,7 @@ mod tests {
         OutboxMessage::new(
             StreamId::new("netzzugang/test"),
             ProcessId::new(),
-            TenantId::from_party_id("9900000000004"),
+            TenantId::from_tenant("9900000000004"),
             CorrelationId::new(),
             ConversationId::new(),
             EventId::new(),

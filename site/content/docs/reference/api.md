@@ -20,11 +20,11 @@ A refusal is the shared `ApiError` body: branch on its `code`.
 | `accountingd` | accountingd — Customer Account Ledger | 77 | [`accountingd.json`](https://hupe1980.github.io/mako/api/accountingd.json) | [guide](@/docs/services/accountingd.md) |
 | `agentd` | agentd — Advisory Agent Plane | 10 | [`agentd.json`](https://hupe1980.github.io/mako/api/agentd.json) | [guide](@/docs/services/agentd.md) |
 | `billingd` | billingd — multi-product billing | 34 | [`billingd.json`](https://hupe1980.github.io/mako/api/billingd.json) | [guide](@/docs/services/billingd.md) |
-| `edmd` | edmd — Energiedatenmanagement | 72 | [`edmd.json`](https://hupe1980.github.io/mako/api/edmd.json) | [guide](@/docs/services/edmd.md) |
+| `edmd` | edmd — Energiedatenmanagement | 73 | [`edmd.json`](https://hupe1980.github.io/mako/api/edmd.json) | [guide](@/docs/services/edmd.md) |
 | `einsd` | einsd — EEG/KWKG feed-in settlement | 41 | [`einsd.json`](https://hupe1980.github.io/mako/api/einsd.json) | [guide](@/docs/services/einsd.md) |
 | `invoicd` | invoicd — INVOIC check and settlement | 22 | [`invoicd.json`](https://hupe1980.github.io/mako/api/invoicd.json) | [guide](@/docs/services/invoicd.md) |
 | `makod` | makod — MaKo process engine | 17 | [`makod.json`](https://hupe1980.github.io/mako/api/makod.json) | [guide](@/docs/services/makod.md) |
-| `marktd` | marktd — Master Data Manager | 132 | [`marktd.json`](https://hupe1980.github.io/mako/api/marktd.json) | [guide](@/docs/services/marktd.md) |
+| `marktd` | marktd — Master Data Manager | 134 | [`marktd.json`](https://hupe1980.github.io/mako/api/marktd.json) | [guide](@/docs/services/marktd.md) |
 | `netzbilanzd` | netzbilanzd — Netzbilanzierung and Netzabrechnung | 49 | [`netzbilanzd.json`](https://hupe1980.github.io/mako/api/netzbilanzd.json) | [guide](@/docs/services/netzbilanzd.md) |
 | `portald` | portald — Customer Portal | 18 | [`portald.json`](https://hupe1980.github.io/mako/api/portald.json) | [guide](@/docs/services/portald.md) |
 | `processd` | processd — process decisions | 41 | [`processd.json`](https://hupe1980.github.io/mako/api/processd.json) | [guide](@/docs/services/processd.md) |

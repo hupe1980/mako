@@ -114,14 +114,21 @@ fn sperrandrohung_text(sperrkosten_ct: i64, entsperrkosten_ct: i64) -> String {
 }
 
 /// The creditor as § 126b BGB's declarant, from the operator's own config.
-fn absender(cfg: &AccountingdConfig) -> PartyView {
+///
+/// # Errors
+///
+/// `creditor_name` is not set: a Mahnung that names the tenant key as its
+/// sender names nobody, so none is issued.
+fn absender(cfg: &AccountingdConfig) -> anyhow::Result<PartyView> {
+    let Some(name) = cfg.creditor_name() else {
+        anyhow::bail!(
+            "creditor_name is not configured — a Mahnung names the Lieferant as its sender; \
+             set creditor_name in accountingd.toml"
+        );
+    };
     let a = &cfg.creditor_address;
-    PartyView {
-        name: Some(
-            cfg.creditor_name
-                .clone()
-                .unwrap_or_else(|| cfg.tenant.clone()),
-        ),
+    Ok(PartyView {
+        name: Some(name.to_owned()),
         line1: match (a.street.as_deref(), a.building_number.as_deref()) {
             (Some(s), Some(n)) => Some(format!("{s} {n}")),
             (Some(s), None) => Some(s.to_owned()),
@@ -131,7 +138,7 @@ fn absender(cfg: &AccountingdConfig) -> PartyView {
         city: a.town.clone(),
         country: a.country.clone(),
         ..PartyView::default()
-    }
+    })
 }
 
 /// Build the page for one case.
@@ -186,7 +193,7 @@ pub async fn build_view(
         stufe,
         datum: mako_fristen::heute().to_string(),
         zahlungsfrist: case.due_date.to_string(),
-        absender: absender(cfg),
+        absender: absender(cfg)?,
         empfaenger: PartyView {
             name: buyer.name,
             vat_id: buyer.vat_id,

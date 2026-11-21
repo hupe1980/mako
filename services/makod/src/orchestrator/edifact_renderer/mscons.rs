@@ -131,7 +131,7 @@ pub(super) fn render_mscons(
         }
     }
 
-    let sender = text(&p.sender_mp_id).unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(text(&p.sender_mp_id), registry, mt)?;
     let receiver = text(&p.receiver_mp_id).unwrap_or(msg.recipient.as_ref());
 
     // SG6 carries three *different* LOC qualifiers (MSCONS AHB 3.2): `172` is
@@ -273,7 +273,7 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
         }
     };
 
-    let sender = text(&p.sender_mp_id).unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(text(&p.sender_mp_id), registry, mt)?;
     let receiver = text(&p.receiver_mp_id).unwrap_or(msg.recipient.as_ref());
     let malo_id = text(&p.malo_id).ok_or_else(|| missing("malo_id"))?;
 
@@ -442,7 +442,7 @@ pub(super) fn render_mscons_zaehlerstand(
         message_type: mt.into(),
         field: field.into(),
     };
-    let sender = text(&p.sender_mp_id).unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(text(&p.sender_mp_id), registry, mt)?;
     let receiver = text(&p.receiver_mp_id).unwrap_or(msg.recipient.as_ref());
     // `SG6 LOC+172` names the Messlokation with its Zähler in `SG7 RFF+MG`,
     // or — for values from an iMS — nothing, the Konfigurations-ID riding
@@ -548,7 +548,7 @@ pub(super) fn render_mscons_werte(
         field: field.into(),
     };
 
-    let sender = text(&p.sender_mp_id).unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(text(&p.sender_mp_id), registry, mt)?;
     // The recipient is the ESA — this is the whole point of the addressing gap:
     // the MSB emits 13027 to a party that is neither NB nor LF.
     let receiver = text(&p.receiver_mp_id).unwrap_or(msg.recipient.as_ref());

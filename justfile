@@ -166,7 +166,7 @@ ci:
 
 [private]
 [group('gate')]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-docker-build check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-openapi-routes api-catalog-check event-catalog-check check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-eval-cases check-translations check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-docker-build check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-openapi-routes api-catalog-check event-catalog-check check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-tenant-not-mp-id check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-eval-cases check-translations check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # `--all-targets` so bench targets are built and their `main` runs in test mode;
 # without it a panicking Criterion bench is invisible to `just ci`. Under
@@ -281,7 +281,7 @@ smoke-roles:
                "eiv-strom:EIV:9900001000001"; do
         IFS=: read -r rolle role mp_id <<< "$row"
         echo "==> rollen = [\"$rolle\"] (party role $role)"
-        printf '[deployment]\nrollen = ["%s"]\n\n[[party]]\nmp_id = "%s"\nroles = ["%s"]\nprimary = true\n' \
+        printf '[deployment]\ntenant = "smoke"\nrollen = ["%s"]\n\n[[party]]\nmp_id = "%s"\nroles = ["%s"]\nprimary = true\n' \
             "$rolle" "$mp_id" "$role" > "$tmp/makod.toml"
         # The EIV's answer window has no published value and no default.
         if [ "$rolle" = "eiv-strom" ]; then
@@ -598,7 +598,8 @@ test-marktd-db:
         temporal_constraints_integration:: tenant_isolation_integration:: \
         overlap_is_a_client_error:: konfigurationsprodukte_body:: \
         utilmd_stammdaten_integration:: lokationsbuendel_integration:: \
-        write_and_event_commit_together:: referenzreihen_integration::
+        write_and_event_commit_together:: referenzreihen_integration:: \
+        grundzustaendiger_msb::
 
 # invoicd's receipt store — the § 147 AO / GoBD audit trail, its per-tenant
 # uniqueness and the outbox delivery of the receipt event — and the ESA's
@@ -867,6 +868,11 @@ check-as4-controls:
 [group('guards')]
 check-tenant-predicate:
     cargo xtask check-tenant-predicate
+
+# Refuse the tenant or the primary [[party]] standing in for an MP-ID.
+[group('guards')]
+check-tenant-not-mp-id:
+    cargo xtask check-tenant-not-mp-id
 
 # Refuse a Cedar role literal the platform never mints.
 [group('guards')]
@@ -1226,7 +1232,15 @@ semver *crates:
                  | awk '{print $NF}' | sort -u)
     fi
     args=()
-    for c in $crates; do args+=(-p "$c"); done
+    for c in $crates; do
+        # A crate never published has no baseline, so nothing it can break.
+        if curl -sf -o /dev/null -A "mako-release (https://github.com/hupe1980/mako)" \
+            "https://crates.io/api/v1/crates/$c"; then
+            args+=(-p "$c")
+        else
+            echo "semver: $c is not on crates.io yet — its first release has no baseline"
+        fi
+    done
     echo "semver: ${#args[@]} flags against the versions published on crates.io"
     cargo semver-checks check-release "${args[@]}"
 

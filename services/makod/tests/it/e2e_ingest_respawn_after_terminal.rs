@@ -103,7 +103,7 @@ async fn a_settled_process_does_not_block_the_malo_on_the_ingest_path() {
             .await
             .expect("in-memory store"),
     );
-    let tenant = TenantId::from_party_id(NB_MP_ID);
+    let tenant = TenantId::from_tenant(NB_MP_ID);
     let dispatcher =
         EdifactIngestDispatcher::new(Arc::clone(&store), store.as_snapshot_store(), 100, tenant);
 
@@ -195,7 +195,7 @@ async fn a_running_process_still_owns_the_malo() {
             .await
             .expect("in-memory store"),
     );
-    let tenant = TenantId::from_party_id(NB_MP_ID);
+    let tenant = TenantId::from_tenant(NB_MP_ID);
     let dispatcher =
         EdifactIngestDispatcher::new(Arc::clone(&store), store.as_snapshot_store(), 100, tenant);
 

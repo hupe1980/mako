@@ -5,6 +5,7 @@
 mod authorization_guard;
 mod demo_config;
 mod esa_integration;
+mod grundzustaendiger_msb;
 mod konfigurationsprodukte_body;
 mod lokationsbuendel_integration;
 mod mabis_zp_integration;

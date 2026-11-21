@@ -43,7 +43,7 @@ async fn app() -> axum::Router {
     webdienste::build_app(
         Arc::new(MakodApiHandler {
             store,
-            tenant_id: mako_engine::ids::TenantId::from_party_id(TENANT),
+            tenant_id: mako_engine::ids::TenantId::from_tenant(TENANT),
         }),
         None,
         1024 * 1024,

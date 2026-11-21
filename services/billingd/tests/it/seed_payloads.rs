@@ -30,7 +30,10 @@ fn the_seeded_calculate_payload_deserialises() {
     let req: CalculateRequest = serde_json::from_value(world("billingd-calculate.json")).expect(
         "billingd would refuse this seeded body — fix tools/mako-seed/world, or the endpoint",
     );
-    assert_eq!(req.lf_mp_id, "9900357000004");
+    assert_eq!(
+        req.lf_mp_id, "9900357000028",
+        "the Stadtwerk's Lieferant, under its own MP-ID — not the Netzbetreiber's"
+    );
     assert!(
         req.meter.is_some(),
         "the seed supplies the reading, so the invoice does not depend on edmd's month"

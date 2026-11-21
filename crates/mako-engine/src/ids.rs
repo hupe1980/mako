@@ -128,47 +128,29 @@ define_id!(
 );
 
 impl TenantId {
-    /// Derive a deterministic `TenantId` from a GLN or other opaque operator
-    /// identifier string using UUID v5 (SHA-1 hash in a fixed namespace).
-    ///
-    /// This allows the production binary (`makod`) to accept a GLN from the
-    /// Derive a deterministic `TenantId` from a market-participant identifier
-    /// (GLN, BDEW code, EIC, or any opaque operator string) using UUID v5
-    /// (SHA-1 hash in a fixed namespace).
-    ///
-    /// This allows the production binary (`makod`) to accept a BDEW code or
-    /// GLN from the CLI and produce a stable `TenantId` that is consistent
-    /// across process restarts, without requiring that the identifier already
-    /// be a UUID.
-    ///
-    /// The accepted identifier formats are:
-    /// - **BDEW code** (13-digit, agency `"293"`) — most common in German MaKo
-    /// - **GLN** (13-digit GS1, agency `"9"`) — global GS1 scheme, rare in MaKo
-    /// - **EIC** (16-char ENTSO-E) — used by TSOs / Regelzonen
-    /// - Any other opaque string used as `--tenant-id`
+    /// Derive a deterministic `TenantId` from the tenant string — a
+    /// deployment's data-isolation key (`[deployment] tenant`), any stable
+    /// string — by UUID v5 in a fixed namespace, so the same tenant maps to the
+    /// same id across restarts. The tenant is never an MP-ID's stand-in: each
+    /// Marktrolle has its own (Allgemeine Festlegungen 6.1d Kap. 2.13).
     ///
     /// The namespace UUID is fixed and private to this crate:
-    /// `7e4a6b1c-2d3e-5f60-8a9b-0c1d2e3f4a5b` (arbitrary, registered once).
+    /// `7e4a6b1c-2d3e-5f60-8a9b-0c1d2e3f4a5b`.
     ///
     /// # Example
     ///
     /// ```rust
     /// use mako_engine::ids::TenantId;
     ///
-    /// // BDEW-issued market participant code (agency 293)
-    /// let id = TenantId::from_party_id("9900123456789");
-    /// assert_eq!(id, TenantId::from_party_id("9900123456789"));
-    /// assert_ne!(id, TenantId::from_party_id("9900357000004"));
-    ///
-    /// // EIC code (ENTSO-E) — e.g. for a TSO
-    /// let tso = TenantId::from_party_id("10XDE-EON-NETZ-C");
-    /// assert_ne!(id, tso);
+    /// let id = TenantId::from_tenant("stadtwerke-musterstadt");
+    /// assert_eq!(id, TenantId::from_tenant("stadtwerke-musterstadt"));
+    /// assert_ne!(id, TenantId::from_tenant("stadtwerke-nachbarstadt"));
     /// ```
     #[must_use]
-    pub fn from_party_id(party_id: &str) -> Self {
-        // Fixed v5 namespace for MaKo tenant party identifiers.
+    pub fn from_tenant(tenant: &str) -> Self {
+        // Fixed v5 namespace for MaKo tenants.
         const TENANT_NS: Uuid = Uuid::from_u128(0x7e4a_6b1c_2d3e_5f60_8a9b_0c1d_2e3f_4a5b);
-        Self(Uuid::new_v5(&TENANT_NS, party_id.as_bytes()))
+        Self(Uuid::new_v5(&TENANT_NS, tenant.as_bytes()))
     }
 }
 

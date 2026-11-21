@@ -269,9 +269,13 @@ export const en: Katalog = {
         verbunden: (liste: string) =>
           liste ? `Affiliated Lieferanten: ${liste}` : "No affiliated Lieferanten",
       },
+      tenant: {
+        titel: "Tenant",
+        text: "The data key every service writes to its rows — the same in all of them, e.g. “stadtwerke-musterstadt”. Not an MP-ID.",
+      },
       rollen: {
         titel: "Rollen and MP-IDs",
-        text: "Which Rollen does the deployment play, and under which MP-ID? Strom needs a BDEW-Codenummer (99…), Gas a DVGW-Codenummer (98…).",
+        text: "Which Rollen does the deployment play, and under which MP-ID? Each Rolle has its own; Strom needs a BDEW-Codenummer (99…), Gas a DVGW-Codenummer (98…).",
         mpId: (rolle: string) => `MP-ID ${rolle}`,
         namen: {
           "lf-strom": "Lieferant Strom",
@@ -287,7 +291,7 @@ export const en: Katalog = {
       },
       primaer: {
         titel: "Primary MP-ID",
-        text: "The storage key of every event stream — once chosen, it stays.",
+        text: "A CONTRL to an interchange addressed to none of the own MP-IDs answers under it.",
       },
       bilanzkreise: {
         titel: "Bilanzkreise",
@@ -1421,6 +1425,10 @@ export const en: Katalog = {
     json_required: "The decision did not arrive as JSON and was not accepted. Reload the page.",
     process_not_found:
       "No process is known under this key. Check the spelling — or the message has not arrived yet.",
+    creditor_name_not_configured:
+      "SEPA needs the creditor's name — set `creditor_name` in accountingd's configuration.",
+    foreign_catalogue: "This catalogue belongs to a different Lieferant than this service.",
+    mp_id_ungueltig: "That is not a valid Marktpartner-ID — 13 digits, Strom 99…, Gas 98….",
     malo_not_found: "This MaLo is not known.",
     partner_not_found: "This market partner is not known.",
     ambiguous_process:

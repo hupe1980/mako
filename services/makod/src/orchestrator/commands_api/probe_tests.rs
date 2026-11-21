@@ -22,8 +22,9 @@ async fn lfg_state() -> CommandsApiState {
         .await
         .expect("open in-memory SlateDB");
     let state = CommandsApiState {
-        tenant_id: TenantId::from_party_id(LF_MP_ID),
-        sender_party_id: LF_MP_ID.to_owned(),
+        tenant_id: TenantId::from_tenant(LF_MP_ID),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::party_registry::MpIdRegistry::single(LF_MP_ID),
         configured_marktrollen: vec!["LFG".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -31,7 +32,7 @@ async fn lfg_state() -> CommandsApiState {
         snapshot_store: store.as_snapshot_store(),
         malo_cache: Arc::new(SlateDbMaloCache::new(
             store.clone(),
-            TenantId::from_party_id(LF_MP_ID),
+            TenantId::from_tenant(LF_MP_ID),
         )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
@@ -382,8 +383,9 @@ async fn nb_state() -> CommandsApiState {
         .await
         .expect("open in-memory SlateDB");
     CommandsApiState {
-        tenant_id: TenantId::from_party_id(NB_MP_ID),
-        sender_party_id: NB_MP_ID.to_owned(),
+        tenant_id: TenantId::from_tenant(NB_MP_ID),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::party_registry::MpIdRegistry::single(NB_MP_ID),
         configured_marktrollen: vec!["NB".to_owned(), "LF".to_owned(), "MSB".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,
@@ -391,7 +393,7 @@ async fn nb_state() -> CommandsApiState {
         snapshot_store: store.as_snapshot_store(),
         malo_cache: Arc::new(SlateDbMaloCache::new(
             store.clone(),
-            TenantId::from_party_id(NB_MP_ID),
+            TenantId::from_tenant(NB_MP_ID),
         )),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),

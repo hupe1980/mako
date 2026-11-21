@@ -30,7 +30,7 @@ pub(super) fn render_insrpt(
             field: "melo".into(),
         });
     }
-    let sender = text(&p.sender).unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(text(&p.sender), registry, mt)?;
     let receiver = text(&p.receiver).unwrap_or(msg.recipient.as_ref());
 
     let release = release_for(msg, MessageType::Insrpt, ReleaseTrack::Short)?;

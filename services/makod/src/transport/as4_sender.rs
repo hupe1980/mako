@@ -104,6 +104,8 @@ use crate::party_registry::MpIdRegistry;
 pub struct WebhookEdifactSender {
     webhook_url: Arc<str>,
     mp_id_registry: Arc<MpIdRegistry>,
+    /// `[deployment] tenant`, the CloudEvent source's tenant.
+    tenant: Arc<str>,
     http_client: reqwest::Client,
     malo_sender: MaloIdentSender,
     netzzugang_sender: Option<Arc<crate::netzzugang::NetzzugangSender>>,
@@ -128,6 +130,7 @@ impl WebhookEdifactSender {
     pub fn new(
         webhook_url: impl Into<Arc<str>>,
         mp_id_registry: Arc<MpIdRegistry>,
+        tenant: Arc<str>,
         http_client: reqwest::Client,
         malo_sender: MaloIdentSender,
         shared_secret: Option<secrecy::SecretString>,
@@ -135,6 +138,7 @@ impl WebhookEdifactSender {
         Self {
             webhook_url: webhook_url.into(),
             mp_id_registry,
+            tenant,
             http_client,
             malo_sender,
             netzzugang_sender: None,
@@ -165,6 +169,7 @@ impl As4Sender for WebhookEdifactSender {
     ) -> impl std::future::Future<Output = Result<(), EngineError>> + Send {
         let webhook_url = Arc::clone(&self.webhook_url);
         let mp_id_registry: Arc<MpIdRegistry> = Arc::clone(&self.mp_id_registry);
+        let tenant = Arc::clone(&self.tenant);
         let http_client = self.http_client.clone();
         let malo_sender = self.malo_sender.clone();
         let netzzugang_sender = self.netzzugang_sender.clone();
@@ -221,7 +226,7 @@ impl As4Sender for WebhookEdifactSender {
                 };
 
             let ce = mako_service::CloudEvent::new(
-                mako_service::source("makod", mp_id_registry.primary_mp_id()),
+                mako_service::source("makod", &tenant),
                 mako_events::mako::EDIFACT_OUTBOUND,
                 msg_owned.process_id.to_string(),
                 serde_json::json!({

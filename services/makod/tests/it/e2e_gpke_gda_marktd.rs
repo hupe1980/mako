@@ -178,10 +178,11 @@ async fn nb(marktd: Option<mako_markt::marktd_client::MarktdClient>) -> Nb {
             .await
             .expect("in-memory store"),
     );
-    let tenant_id = TenantId::from_party_id(NB_MP);
+    let tenant_id = TenantId::from_tenant(NB_MP);
     let state = CommandsApiState {
         tenant_id,
-        sender_party_id: NB_MP.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(NB_MP),
         configured_marktrollen: vec!["NB".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,

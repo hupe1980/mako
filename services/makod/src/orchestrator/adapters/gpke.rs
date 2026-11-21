@@ -1369,6 +1369,71 @@ pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkfl
     registry
 }
 
+// ── GPKE Antwort auf Berechnungsformel (UTILTS 25010) ─────────────────────────
+
+/// The 25010's answer codes: `STS+E01++<code>:E_0218::<Zeitraum-ID>`, the code
+/// in C556 DE 9013 and the Zeitraum-ID in DE 9012, both read by position.
+fn utilts_antwortcodes(
+    u: &edi_energy::messages::utilts::UtiltsMessage,
+) -> Vec<mako_gpke::berechnungsformel::ZeitraumAntwort> {
+    u.segments()
+        .iter()
+        .filter(|s| s.tag == "STS" && s.component_str(0, 0) == Some("E01"))
+        .filter_map(|s| {
+            Some(mako_gpke::berechnungsformel::ZeitraumAntwort {
+                code: s.component_str(2, 0)?.to_owned(),
+                zeitraum_id: s.component_str(2, 3)?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// The Vorgangsnummer of the 25001 a 25010 answers — its `RFF+TN` (UTILTS
+/// AHB 1.1 `[534]`), the key the NB's `gpke-berechnungsformel` process runs
+/// under.
+#[must_use]
+pub fn berechnungsformel_referenz(msg: &AnyMessage) -> Option<String> {
+    let AnyMessage::Utilts(u) = msg else {
+        return None;
+    };
+    u.segments()
+        .iter()
+        .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("TN"))
+        .and_then(|s| s.component_str(0, 1))
+        .map(str::to_owned)
+}
+
+/// Build an [`AdapterRegistry`] for the NB's
+/// [`mako_gpke::berechnungsformel::GpkeBerechnungsformelWorkflow`]: one
+/// `E_0218` code per Zeitraum, read from `STS+E01++<code>:E_0218::<Zeitraum>`.
+pub fn gpke_berechnungsformel_registry()
+-> AdapterRegistry<mako_gpke::berechnungsformel::GpkeBerechnungsformelWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for the Berechnungsformel adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilts(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "Berechnungsformel adapter: expected UTILTS".into(),
+                ));
+            };
+            let antworten = utilts_antwortcodes(u);
+            Ok(
+                mako_gpke::berechnungsformel::FormelCommand::ReceiveAntwort {
+                    antworten,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                },
+            )
+        },
+    ));
+    registry
+}
+
 // ── GPKE UTILTS Konfigurationsdaten (PIDs 11002, 11003, …) ───────────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeUtiltsWorkflow`].

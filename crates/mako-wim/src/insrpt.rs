@@ -559,6 +559,16 @@ impl WimInsrptWorkflow {
             &mako_engine::payload::InsrptPayload {
                 pid,
                 melo: data.melo_id.as_str().to_owned(),
+                // The side this deployment is on sends: a multi-role
+                // deployment has no other way to tell which own MP-ID it is.
+                sender: Some(
+                    match data.seite {
+                        Seite::Melder => &data.melder_mp_id,
+                        Seite::Msb => &data.msb_mp_id,
+                    }
+                    .as_str()
+                    .to_owned(),
+                ),
                 receiver: Some(receiver.as_str().to_owned()),
                 document_date: Some(data.document_date.clone()),
                 message_ref: Some(message_ref.as_str().to_owned()),

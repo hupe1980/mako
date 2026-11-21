@@ -75,12 +75,12 @@ pub async fn handle_versorgung_event(
     makod: &MakodClient,
     pool: &PgPool,
     tenant: &str,
-    own_mp_id: &str,
+    identitaet: &crate::config::Identitaet,
 ) -> anyhow::Result<bool> {
     let ce_type = event["type"].as_str().unwrap_or("");
     match ce_type {
         t if t == mako_events::markt::VERSORGUNG_GAP_DETECTED => {
-            handle_gap_detected(event, cfg, marktd, makod, pool, tenant, own_mp_id).await?;
+            handle_gap_detected(event, cfg, marktd, makod, pool, tenant, identitaet).await?;
             Ok(true)
         }
         t if t == mako_events::markt::VERSORGUNG_EOG_BEGONNEN => {
@@ -155,7 +155,7 @@ async fn handle_gap_detected(
     makod: &MakodClient,
     pool: &PgPool,
     tenant: &str,
-    own_mp_id: &str,
+    identitaet: &crate::config::Identitaet,
 ) -> anyhow::Result<()> {
     let data = &event["data"];
     let Some(malo_id) = data["malo_id"].as_str() else {
@@ -166,7 +166,24 @@ async fn handle_gap_detected(
     let sparte: mako_markt::domain::Sparte = sparte_str
         .parse()
         .unwrap_or(mako_markt::domain::Sparte::Strom);
-    let nb_mp_id = data["nb_mp_id"].as_str().unwrap_or(own_mp_id);
+    // The Grundversorger is determined per Netzgebiet, so the lookup needs the
+    // NB's MP-ID. An event naming none is resolved to this NB's MP-ID of the
+    // event's Sparte — never to another role's code, and never by a guess
+    // between two.
+    let nb_mp_id = match data["nb_mp_id"].as_str() {
+        Some(nb) => nb,
+        None => {
+            let Some(nb) = identitaet.nb_fuer(sparte) else {
+                warn!(
+                    malo_id, %sparte,
+                    "processd EoG: gap-detected event names no nb_mp_id and \
+                     [identity] nb_mp_ids holds no single MP-ID for its Sparte — ignored"
+                );
+                return Ok(());
+            };
+            nb
+        }
+    };
 
     // Idempotency: one open case per MaLo. Re-detection reopens a closed case
     // (a MaLo can fall into a gap repeatedly) and a stale `angemeldet` one —

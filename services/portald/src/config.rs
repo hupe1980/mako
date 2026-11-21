@@ -99,10 +99,11 @@ pub struct PortaldConfig {
     /// Bearer token for `outputd`.
     pub outputd_api_key: Option<String>,
 
-    /// LF MP-ID (BDEW-Codenummer) used when registering a SEPA mandate.
-    /// Must match the `lf_mp_id` configured in `accountingd`. Defaults to
-    /// [`Self::tenant`].
-    pub lf_mp_id: Option<String>,
+    /// The Lieferant's MP-ID a self-service SEPA mandate is registered under —
+    /// the `lf_mp_id` configured in `accountingd`. Required: the tenant is an
+    /// isolation key, and „Für jede Sparte (Gas bzw. Strom) und jede Rolle hat
+    /// ein Marktteilnehmer genau eine MP-ID" (Identifikatoren AWH V1.2 Kap. 2.1).
+    pub lf_mp_id: String,
 
     /// Serve portal routes without resolving customer ownership.
     ///
@@ -155,20 +156,20 @@ impl PortaldConfig {
             &mut self.marktd_api_key,
             &mut self.outputd_url,
             &mut self.outputd_api_key,
-            &mut self.lf_mp_id,
         ] {
             if let Some(v) = slot.as_deref() {
                 *slot = Some(resolve_env(v)?);
             }
         }
         self.tenant = resolve_env(&self.tenant)?;
+        self.lf_mp_id = resolve_env(&self.lf_mp_id)?;
         Ok(())
     }
 
     /// The MP-ID a self-service SEPA mandate is registered under.
     #[must_use]
     pub fn lf_mp_id(&self) -> &str {
-        self.lf_mp_id.as_deref().unwrap_or(&self.tenant)
+        &self.lf_mp_id
     }
 }
 

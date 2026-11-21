@@ -27,7 +27,7 @@ pub struct FormatImpactApiState {
     pub impact: Option<Arc<FormatImpactState>>,
     /// Cedar authorizer.
     pub cedar: Arc<CedarAuthorizer>,
-    /// Operator tenant (MP-ID) — the Cedar resource scope.
+    /// Operator tenant (`[deployment] tenant`) — the Cedar resource scope.
     pub tenant: String,
 }
 

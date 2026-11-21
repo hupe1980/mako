@@ -44,7 +44,7 @@ mod tests {
         use crate::outbox::OutboxMessage;
 
         let mk = || {
-            let tenant = TenantId::from_party_id("9900000000001");
+            let tenant = TenantId::from_tenant("9900000000001");
             let process = ProcessId::new();
             OutboxMessage::new(
                 StreamId::for_process(tenant, &process),

@@ -79,7 +79,7 @@ impl MockBkv {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(BKV_ID),
+                TenantId::from_tenant(BKV_ID),
                 WorkflowId::new("mabis-billing", FV),
             ),
         }

@@ -27,7 +27,7 @@ pub const AUDIENCE: &str = "mako";
 /// The `kid` of the demo key.
 pub const KID: &str = "mako-demo-1";
 /// The tenant the demo estate serves (`deploy/demo/*.toml`).
-pub const TENANT: &str = "9900357000004";
+pub const TENANT: &str = "stadtwerke-musterstadt";
 /// `exp` of every demo token: 2100-01-01T00:00:00Z. Fixed, so a token is a
 /// pure function of its persona.
 pub const EXP: u64 = 4_102_444_800;

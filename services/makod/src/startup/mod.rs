@@ -582,9 +582,12 @@ pub(crate) struct WorkersConfig {
     // ── Outbound AS4 config ──────────────────────────────────────────────
     /// MP-ID registry — maps roles to MP-IDs and provides own-MP-ID detection.
     ///
-    /// Built from `[[party]]` entries in `makod.toml`. The primary MP-ID is used
-    /// as the storage partition key (`TenantId`) and AS4 `partyId` fallback.
+    /// Built from `[[party]]` entries in `makod.toml`.
     pub mp_id_registry: Arc<MpIdRegistry>,
+    /// `[deployment] tenant` — the CloudEvent source's tenant.
+    pub tenant: Arc<str>,
+    /// Derived from `tenant`: the storage partition key.
+    pub tenant_id: mako_engine::ids::TenantId,
     /// Configuration validated by `core::preflight` — the AS4 clients,
     /// MaLo-ID callback endpoints, and the Verzeichnisdienst URL are already
     /// parsed and proven here, so this module never re-parses a flag.
@@ -693,8 +696,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
                 cfg.webdienste_client.clone(),
             );
             let vz_partner_store = cfg.store.as_partner_store();
-            let vz_tenant_id =
-                mako_engine::ids::TenantId::from_party_id(cfg.mp_id_registry.primary_mp_id());
+            let vz_tenant_id = cfg.tenant_id;
             info!(url = %base_url, "Verzeichnisdienst integration enabled");
             let lookup = verzeichnisdienst_worker::VerzeichnisdienstLookup::new(
                 vz_client,
@@ -760,9 +762,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
                 ),
                 max_body_bytes: 256 * 1024 * 1024, // 256 MiB — generous but finite
                 partner_store: None,
-                tenant_id: mako_engine::ids::TenantId::from_party_id(
-                    cfg.mp_id_registry.primary_mp_id(),
-                ),
+                tenant_id: cfg.tenant_id,
                 // The durable sink, not a log-only one: a self-addressed
                 // message that fails to route is as much a § 147 AO record as
                 // one that arrived over the wire, and a combined-role
@@ -800,6 +800,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
         let sender = WebhookEdifactSender::new(
             edifact_webhook_url.as_str(),
             Arc::clone(&cfg.mp_id_registry),
+            Arc::clone(&cfg.tenant),
             cfg.http_client.clone(),
             malo_sender,
             cfg.erp_webhook_secret.clone(),

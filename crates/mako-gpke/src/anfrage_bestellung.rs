@@ -860,7 +860,7 @@ mod tests {
         let dl = Deadline::new(
             stream_id,
             ProcessId::new(),
-            TenantId::from_party_id("9900357000004"),
+            TenantId::from_tenant("9900357000004"),
             WorkflowId::new(WORKFLOW_NAME, "FV2025-10-01"),
             ANFRAGE_WINDOW_LABEL,
             due,

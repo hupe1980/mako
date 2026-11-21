@@ -56,8 +56,10 @@ use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 /// Runtime configuration for the ESA module.
 #[derive(Debug, Clone)]
 pub struct EsaModuleConfig {
-    /// This deployment's MSB MP-ID.
-    pub own_mp_id: String,
+    /// The MSB MP-ID the ESA's order is answered under: this deployment's
+    /// Strom `[identity] msb_mp_ids` entry, since WiM Strom Teil 2 Kap. 4 is a
+    /// Strom process.
+    pub msb_mp_id: String,
     pub tenant: String,
     /// `[esa] auto_accept`. When `true`, an `Accept` verdict dispatches the
     /// Bestätigung itself; when `false`, it goes to the approval queue with its
@@ -565,13 +567,13 @@ async fn evaluate(
 
             // Prüfschritt 6: is the ESA-Rahmenvertrag in force?
             let framework = marktd
-                .esa_framework_established(&cfg.own_mp_id, &payload.esa_mp_id)
+                .esa_framework_established(&cfg.msb_mp_id, &payload.esa_mp_id)
                 .await?;
             // Prüfschritt 8: is the Einwilligung still valid? A *missing*
             // record is the ESA's self-assertion, which BNetzA Mitteilung Nr. 3
             // forbids rejecting on — so `None`, not `Some(false)`.
             let einwilligung = marktd
-                .esa_consent_valid(&payload.esa_mp_id, &cfg.own_mp_id, &payload.lokations_id)
+                .esa_consent_valid(&payload.esa_mp_id, &cfg.msb_mp_id, &payload.lokations_id)
                 .await?;
             // Prüfschritt 7: is this MSB assigned to the location for the
             // period? Resolved on the Ausführungsdatum, which is when the
@@ -581,7 +583,7 @@ async fn evaluate(
                 (melo, Some(am)) => marktd
                     .get_melo_msb_at(melo, am)
                     .await?
-                    .map(|msb| msb == cfg.own_mp_id),
+                    .map(|msb| msb == cfg.msb_mp_id),
             };
             let gebuendelt = matches!(
                 produkt.ebene,
@@ -595,7 +597,7 @@ async fn evaluate(
             // gewünschte Messprodukt keine Übermittlung als Abo vor" — which is
             // a commercial statement mako must not make on a missing row.
             let Some(lieferbar) =
-                katalog_lieferbar(marktd, &cfg.own_mp_id, produkt, pflicht_am, abonnement).await?
+                katalog_lieferbar(marktd, &cfg.msb_mp_id, produkt, pflicht_am, abonnement).await?
             else {
                 return Ok(EsaDecisionOutcome::Escalate {
                     reason: format!(
@@ -620,7 +622,7 @@ async fn evaluate(
                 (false, _) | (_, None) => None,
                 (true, Some(am)) => {
                     marktd
-                        .msb_serves_whole_buendel(&payload.lokations_id, &cfg.own_mp_id, am)
+                        .msb_serves_whole_buendel(&payload.lokations_id, &cfg.msb_mp_id, am)
                         .await?
                 }
             };
@@ -785,7 +787,7 @@ async fn evaluate_anfrage(
 
     // Prüfschritt 3 — vertragliche Grundlage.
     let vertrag_vorhanden = marktd
-        .esa_framework_established(&cfg.own_mp_id, &payload.esa_mp_id)
+        .esa_framework_established(&cfg.msb_mp_id, &payload.esa_mp_id)
         .await?;
     // Prüfschritte 4/5 — Einwilligung: present, and plausible. A *missing*
     // record is the ESA's Zusicherung, which BNetzA Mitteilung Nr. 3 forbids
@@ -793,7 +795,7 @@ async fn evaluate_anfrage(
     // consent evidence-agnostically and never validates its form, so it has
     // nothing to say about Prüfschritt 5 beyond „there is a valid record".
     let einwilligung = marktd
-        .esa_consent_valid(&payload.esa_mp_id, &cfg.own_mp_id, &payload.lokations_id)
+        .esa_consent_valid(&payload.esa_mp_id, &cfg.msb_mp_id, &payload.lokations_id)
         .await?;
 
     let gebuendelt = matches!(
@@ -804,7 +806,7 @@ async fn evaluate_anfrage(
     );
     let buendel_einheitlich = if gebuendelt {
         marktd
-            .msb_serves_whole_buendel(&payload.lokations_id, &cfg.own_mp_id, am)
+            .msb_serves_whole_buendel(&payload.lokations_id, &cfg.msb_mp_id, am)
             .await?
     } else {
         None
@@ -830,7 +832,7 @@ async fn evaluate_anfrage(
         // escalates rather than refusing a §34-mandated Zusatzleistung on a
         // missing row; a Pflichtprodukt never reaches this Prüfschritt, because
         // Prüfschritt 1 branches past it.
-        messprodukt_angeboten: katalog_gefuehrt(marktd, &cfg.own_mp_id, produkt, am).await?,
+        messprodukt_angeboten: katalog_gefuehrt(marktd, &cfg.msb_mp_id, produkt, am).await?,
         vertrag_vorhanden,
         einwilligung_vorhanden: einwilligung,
         // Prüfschritt 5 asks whether the consent's own *contents* are plausible
@@ -1201,7 +1203,7 @@ mod tests {
 
     fn test_cfg() -> EsaModuleConfig {
         EsaModuleConfig {
-            own_mp_id: "9900357000004".to_owned(),
+            msb_mp_id: "9900357000035".to_owned(),
             tenant: "t".to_owned(),
             auto_accept: true,
             auto_reject: true,

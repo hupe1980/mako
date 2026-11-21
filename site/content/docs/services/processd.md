@@ -337,14 +337,17 @@ In a vertically integrated NB+LF utility, auto-acceptance is **always blocked**
 for An- and Abmeldungen from the operator's own LF:
 
 ```text
-initiating LF MP-ID == [identity] own_mp_id  →  initiator_is_affiliate = true
-                                                auto_accept overridden to false
-                                                → approval_queue (operator review)
+initiating LF MP-ID ∈ [identity] verbundene_lieferanten ∪ lf_mp_ids
+    →  initiator_is_affiliate = true
+       auto_accept overridden to false
+       → approval_queue (operator review)
 ```
 
-`[identity] own_mp_id` must match makod's primary party. Startup logs the coding
-authority derived from it (293 = BDEW, 332 = DVGW) and warns on a GS1 GLN. The
-flag lands on every `anmeldung_decisions` row and on the read model's
+The NB module answers only an An- or Abmeldung addressed to one of
+`[identity] nb_mp_ids` — each Marktrolle and Sparte has its own Codenummer
+(Allgemeine Festlegungen 6.1d Kap. 2.13), so a message to the operator's LF or
+MSB code is not the NB's. Startup refuses an entry that is no 13-digit MP-ID or
+that two role lists share, and warns on a GS1 GLN. The flag lands on every `anmeldung_decisions` row and on the read model's
 `ProcessProjection`; see [the Gleichbehandlung parity report](#ss-7a-abs-5-enwg-gleichbehandlung-parity).
 
 ### Selbstzahler — the Lieferantenwechsel carve-out
@@ -858,7 +861,7 @@ sized by.
 |---|---|---|
 | GPKE Strom | **a clock time on the 1. Werktag after the ÜT**: 11:00 Anmeldung (55001/55077), 06:00 Abmeldung (55004), 05:00 Lieferende NB→LF (55007), 09:00 Beendigung der Zuordnung (55010); Kündigung 55016 to the end of the 1. WT | BK6-24-174 GPKE Teil 2 |
 | GeLi Gas | Ablauf des **4. WT** Anmeldung (44001), **3. WT** Abmeldung (44004), **2. WT** Ersatz-/Grundversorgung (44013), **3. WT** Kündigung (44016) | BK7-24-01-009 Kap. 3.1–3.3 |
-| WiM (Strom + Gas) | **3 / 5 / 7 / 1 Werktage** (55039/55042/55051/55168 resp. 44039/44042/44051/44168), to the end of that Werktag in Berlin; REQOTE Preisanfrage 4/5/10 WT je PID; Rechnungsabwicklung 8 WT | BK6-24-174 Anlage 2a Kap. 2.2.2–2.5.2, 3.2.2, 3.3.1.2, 3.6.3 · AWH WiM Gas 2.0 |
+| WiM (Strom + Gas) | **3 / 5 / 7 / 1 Werktage** (55039/55042/55051/55168 resp. 44039/44042/44051/44168), to the end of that Werktag in Berlin; REQOTE Preisanfrage 4/5/5 WT je PID; Rechnungsabwicklung 8 WT | BK6-24-174 Anlage 2a Kap. 2.2.2–2.5.2, 3.2.2, 3.6.3 · BDEW-AWH Änderung der Technik V1.1 Kap. 2.1.2 · AWH WiM Gas 2.0 |
 | Everything else | `null` — **unknown, never unbounded** | — |
 
 A PID with no published window carries no deadline, is absent from every breach
@@ -881,8 +884,8 @@ The comparison covers the processes the network arm answers for a Lieferant,
 derived from the Antwortfrist table (`answered_by == "NB"` in GPKE and GeLi Gas):
 55001, 55077, 55004, 44001 and 44004. `initiator_is_affiliate` is set when the
 Lieferant's MP-ID (`new_supplier`, else the counterparty) is in
-`[identity] verbundene_lieferanten` — the list the NB module holds an
-affiliate's Anmeldung on, so the evidence and the hold cannot disagree.
+`[identity] verbundene_lieferanten` or `lf_mp_ids` — the set the NB module
+holds an affiliate's Anmeldung on, so the evidence and the hold cannot disagree.
 
 **`gap_pp = affiliate − third_party`, in percentage points; positive means the
 affiliate fared better.** `gap_pp` covers the completion rate, `frist_gap_pp`
@@ -1168,12 +1171,18 @@ url       = "env:DATABASE_URL"  # required
 pool_size = 10                  # default
 
 [identity]
-own_mp_id = "9900357000004"     # required — must match makod.toml [[party]] primary
-tenant    = ""                  # optional; defaults to own_mp_id
-# required, [] included — the MP-IDs of the affiliated Lieferanten (each role
-# has its own MP-ID). Their Anmeldungen are held for a person and grouped as
-# affiliate in the § 7a Abs. 5 EnWG evidence.
-verbundene_lieferanten = ["9900357000011"]
+tenant     = "stadtwerke-musterstadt"           # required, non-empty — the data-isolation key
+# One list per Marktrolle, one MP-ID per Sparte (99… Strom, 98… Gas), each
+# matching a makod.toml [[party]]. A role this deployment does not act in stays
+# empty; at least one is set, and no MP-ID is in two lists (Allgemeine
+# Festlegungen 6.1d Kap. 2.13).
+nb_mp_ids  = ["9900357000004", "9800357000004"] # NB, Neuanlage, EoG modules
+lf_mp_ids  = ["9900357000028", "9800357000028"] # LF module
+msb_mp_ids = ["9900357000035", "9800357000035"] # MSB and ESA modules
+# required, [] included — the affiliated Lieferanten beyond the own
+# lf_mp_ids, which count as affiliated anyway. Their Anmeldungen are held for
+# a person and grouped as affiliate in the § 7a Abs. 5 EnWG evidence.
+verbundene_lieferanten = ["9912345000005"]
 
 [makod]
 url     = "http://makod:8080"   # required
@@ -1512,7 +1521,7 @@ from the active `PreisblattMessung` in `marktd`:
 
 ```
 de.mako.engine.process.initiated (PIDs 35001/35002/35004/35005, REQOTE)
-  → GET marktd /api/v1/preisblaetter-messung/{own_mp_id}  ← PreisblattMessung current?
+  → GET marktd /api/v1/preisblaetter-messung/{msb_mp_id}  ← the Strom entry of [identity] msb_mp_ids
       Found   → wim.preisanfrage.angebot-senden
                  (includes preisblatt_gueltigkeit in payload for makod QUOTES build)
       Not found → approval_queue with the REQOTE Frist — an operator quotes

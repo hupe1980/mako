@@ -34,12 +34,12 @@ person decides; every answer, amount and Frist carries its source.
 
 | Layer | What it is |
 |---|---|
-| **Protocol** | `edi-energy`, `dvgw-edi`, `redispatch-xml` formats · `mako-engine` runtime · `makod` — 82 workflows over 499 Prüfidentifikatoren, AS4 with mutual TLS |
+| **Protocol** | `edi-energy`, `dvgw-edi`, `redispatch-xml` formats · `mako-engine` runtime · `makod` — 83 workflows over 499 Prüfidentifikatoren, AS4 with mutual TLS |
 | **Market data** | `mako-markt` · `marktd` hub: master data, registries, Referenzreihen, durable CloudEvents fan-out |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer** | `vertragd` contracts and online Vertragsschluss · `productd` catalogue · `accountingd` ledger · `outputd` documents · `portald` portal |
 | **Agents** | 11 of the 14 services expose an MCP server — **212 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
-| **Validator** | [Check an EDIFACT message in your browser](https://hupe1980.github.io/mako/validator/) — the validator makod runs, compiled to WebAssembly — beside an [Antwortcode lookup](https://hupe1980.github.io/mako/validator/codes/), a [Fristenrechner](https://hupe1980.github.io/mako/validator/fristen/) and an [ID check](https://hupe1980.github.io/mako/validator/ids/); nothing leaves the tab |
+| **Validator** | [Check an EDIFACT message in your browser](https://hupe1980.github.io/mako/validator/) — the validator makod runs, compiled to WebAssembly — beside an [Antwortcode lookup](https://hupe1980.github.io/mako/validator/codes/), a [Fristenrechner](https://hupe1980.github.io/mako/validator/fristen/) and an [ID check](https://hupe1980.github.io/mako/validator/ids/), and four [calculators](https://hupe1980.github.io/mako/tools/) from the crates the settlement uses — the § 30 MsbG smart-meter cap, a PV system's EEG rate, the 2027 levies, § 14a Modul 1 against Modul 2; nothing leaves the tab |
 | **Desk** | [`desk/`](desk/) — one inbox per Rolle, the rule behind every item, an assistant that cites every sentence ([guide](https://hupe1980.github.io/mako/docs/guide/desk/)) |
 | **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin · [`mako-conformance`](tools/mako-conformance/) — checks a replacement for a service against the contract mako's publishes ([guide](https://hupe1980.github.io/mako/docs/guide/replace-a-service/)) |
 
@@ -159,6 +159,7 @@ Each crate's README carries its scope, PIDs and regulatory sources.
 | [`invoic-checker`](crates/invoic-checker/) | INVOIC plausibility pipeline and its REMADV codes |
 | [`grid-billing`](crates/grid-billing/) | Grid settlement — NNE, KA, MMM, MSB, AWH Gas, each position with its legal reference |
 | [`eeg-billing`](crates/eeg-billing/) | EEG/KWKG feed-in settlement |
+| [`mako-messkonzept`](crates/mako-messkonzept/) | The Messkonzept of a Netzanschluss — the Lokationen its devices require, the decisions with their euros and sources, the match against a Netzbetreiber's catalogue |
 | [`energy-billing`](crates/energy-billing/) | Retail billing — 13 product kinds, § 41a dynamic tariffs, EN 16931 |
 | [`mako-service`](crates/mako-service/) | Service SDK — `run::<D>()`, config findings, policy, OIDC, Cedar, MCP, outbox, webhooks |
 | [`mako-events`](crates/mako-events/) | The CloudEvents type catalogue, one `pub const` per type |
@@ -172,7 +173,7 @@ service's OpenAPI 3.1 document is published at
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 82 workflows over 499 Prüfidentifikatoren, AS4 · REST · iMS |
+| [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 83 workflows over 499 Prüfidentifikatoren, AS4 · REST · iMS |
 | [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, Zuordnungsermächtigungen, Referenzreihen, CloudEvents fan-out |
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Answers the Entscheidungsbäume and escalates what it cannot decide; process KPIs, Fristen, the § 7a Abs. 5 EnWG report, the Sperrauftrag queue |
 | [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 19 MCP tools |

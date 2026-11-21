@@ -145,3 +145,148 @@ mod tests {
         assert_eq!(rule.unsourced(), Some(melo(2)));
     }
 }
+
+/// One `SEQ+Z37` Bestandteil eines Rechenschritts, in the UTILTS terms a
+/// Berechnungsformel (Prüfidentifikator 25001) travels in — the shape makod
+/// renders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Bestandteil {
+    /// `SEQ+Z37` DE 1050 — the Rechenschrittidentifikator.
+    pub schritt: u32,
+    /// `CAV` under `CCI+++Z86` — `Z69` … `Z83`.
+    pub operator: &'static str,
+    /// `RFF+Z19` — the Messlokation it reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub messlokation: Option<String>,
+    /// `RFF+Z23` — the Rechenschritt it reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schritt_ref: Option<u32>,
+    /// `CAV` under `CCI+++Z87` — `Z71` Verbrauch, `Z72` Erzeugung.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub richtung: Option<&'static str>,
+    /// `CCI+++Z16` Verlustfaktor Trafo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verlust_trafo: Option<String>,
+    /// `CCI+++ZB2` Verlustfaktor Leitung.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verlust_leitung: Option<String>,
+    /// `CCI+++ZG6` Aufteilungsfaktor Energiemenge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aufteilung: Option<String>,
+}
+
+/// The formula as UTILTS writes it: every Rechenschritt's components in step
+/// order (UTILTS AHB 1.1, MIG 1.1e `SEQ+Z37`) — the same formula
+/// [`Formula::eval`] computes the virtual Marktlokation with, so what the
+/// market is told and what edmd computes cannot differ.
+#[must_use]
+pub fn bestandteile(formula: &Formula) -> Vec<Bestandteil> {
+    use metering::allocation::formula::{Operand, Operator, Sign, Step};
+    let leer = |schritt: u32, operator: Operator| Bestandteil {
+        schritt,
+        operator: operator.as_str(),
+        messlokation: None,
+        schritt_ref: None,
+        richtung: None,
+        verlust_trafo: None,
+        verlust_leitung: None,
+        aufteilung: None,
+    };
+    let mit = |schritt: u32, operator: Operator, operand: &Operand| match operand {
+        Operand::Melo(m) => Bestandteil {
+            messlokation: Some(m.melo.as_str().to_owned()),
+            richtung: Some(m.direction.as_str()),
+            verlust_trafo: m.loss_trafo.map(|f| f.get().to_string()),
+            verlust_leitung: m.loss_line.map(|f| f.get().to_string()),
+            aufteilung: m.split.map(|f| f.get().to_string()),
+            ..leer(schritt, operator)
+        },
+        Operand::Step(s) => Bestandteil {
+            schritt_ref: Some(s.get()),
+            ..leer(schritt, operator)
+        },
+    };
+    let mut out = Vec::new();
+    for (id, step) in formula.steps() {
+        let schritt = id.get();
+        match step {
+            Step::Sum(terms) => out.extend(terms.iter().map(|(sign, operand)| {
+                let op = match sign {
+                    Sign::Plus => Operator::Addition,
+                    Sign::Minus => Operator::Subtraktion,
+                };
+                mit(schritt, op, operand)
+            })),
+            Step::Quotient { dividend, divisor } => {
+                out.push(mit(schritt, Operator::Dividend, dividend));
+                out.push(mit(schritt, Operator::Divisor, divisor));
+            }
+            Step::Product(factors) => {
+                out.extend(factors.iter().map(|f| mit(schritt, Operator::Faktor, f)));
+            }
+            Step::Positive(s) => out.push(Bestandteil {
+                schritt_ref: Some(s.get()),
+                ..leer(schritt, Operator::Positivwert)
+            }),
+        }
+    }
+    out
+}
+
+/// `Z40` „Berechnungsformel besitzt keine Rechenoperation" for a 1:1 Lokation
+/// — one step adding one Messlokation with no factor — else `Z33`
+/// „Berechnungsformel angefügt" (UTILTS MIG 1.1e `STS+Z23` DE 4405).
+#[must_use]
+pub fn formelstatus(bestandteile: &[Bestandteil]) -> &'static str {
+    match bestandteile {
+        [b] if b.operator == "Z69"
+            && b.messlokation.is_some()
+            && b.verlust_trafo.is_none()
+            && b.verlust_leitung.is_none()
+            && b.aufteilung.is_none() =>
+        {
+            "Z40"
+        }
+        _ => "Z33",
+    }
+}
+
+#[cfg(test)]
+mod bestandteile_tests {
+    use super::*;
+    use metering::allocation::formula::{FlowDirection, MeloOperand, SplitFactor};
+
+    fn melo(id: &str) -> MeloOperand {
+        MeloOperand::new(id.parse().expect("a MeLo-ID"), FlowDirection::Verbrauch)
+    }
+
+    /// A Summenmessung's formula becomes one Z69 Bestandteil per Messlokation
+    /// of step 1, with its register — what UTILTS writes in `SEQ+Z37`.
+    #[test]
+    fn a_sum_is_one_addition_per_messlokation() {
+        let a = "DE0000011000000000000000012345678";
+        let b = "DE0000011000000000000000087654321";
+        let f = Formula::sum([melo(a), melo(b)]).expect("valid");
+        let out = bestandteile(&f);
+        assert_eq!(out.len(), 2);
+        assert!(
+            out.iter()
+                .all(|x| x.schritt == f.result().get() && x.operator == "Z69")
+        );
+        assert_eq!(out[0].richtung, Some("Z71"));
+        assert_eq!(formelstatus(&out), "Z33");
+    }
+
+    /// One Messlokation and nothing else is a 1:1 Lokation: `Z40`, „keine
+    /// Rechenoperation"; with a split factor it is a formula again.
+    #[test]
+    fn one_messlokation_has_no_rechenoperation_until_it_carries_a_factor() {
+        let a = "DE0000011000000000000000012345678";
+        let eins = bestandteile(&Formula::melo(melo(a)).expect("valid"));
+        assert_eq!(formelstatus(&eins), "Z40");
+        let anteil = melo(a).split(SplitFactor::new(rust_decimal::dec!(0.25)).expect("a share"));
+        let geteilt = bestandteile(&Formula::melo(anteil).expect("valid"));
+        assert_eq!(geteilt[0].aufteilung.as_deref(), Some("0.25"));
+        assert_eq!(formelstatus(&geteilt), "Z33");
+    }
+}

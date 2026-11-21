@@ -304,6 +304,26 @@ def build_quotes(
 ) -> bytes:
     """The ESA Angebot — `bindungsfrist` is a count plus a unit, never a date."""
 
+def build_utilts(
+    pruefidentifikator: int,
+    sender: str,
+    receiver: str,
+    *,
+    vorgangsnummer: str,
+    referenz: str | None = None,
+    antworten: list[tuple[str, int]] | None = None,
+    freitext: str | None = None,
+    on: str | None = None,
+    release: str | None = None,
+    document_id: str | None = None,
+    message_ref: str = "1",
+    document_date: str | None = None,
+) -> bytes:
+    """The Antwort auf Berechnungsformel (25010).
+
+    One `(code, zeitraum_id)` per Zeitraum of the formula, out of `E_0218`.
+    """
+
 def build_orders(
     pruefidentifikator: int,
     sender: str,

@@ -115,22 +115,23 @@ mod tests {
             .unwrap_or_else(|e| panic!("a LF's Z46 is sendable: {e:?}"));
     }
 
-    /// The registry speaks for its own MP-IDs only, and for one declared with a
-    /// single AHB role.
+    /// The registry speaks for its own MP-IDs only — each of them one AHB
+    /// role, since a two-role MP-ID refuses the boot.
     #[test]
-    fn only_an_own_single_role_mp_id_has_a_role() {
+    fn only_an_own_mp_id_has_a_role() {
         let reg = registry("GMSB");
         assert_eq!(reg.ahb_rolle(SENDER), Some("MSB"));
         assert_eq!(reg.ahb_rolle(MSB), None);
-        let beide = MpIdRegistry::from_config(&[crate::config::PartyConfig {
-            mp_id: SENDER.to_owned(),
-            roles: vec!["NB".to_owned(), "MSB".to_owned()],
-            primary: true,
-            agency: None,
-            as4: None,
-        }])
-        .unwrap();
-        assert_eq!(beide.ahb_rolle(SENDER), None);
+        assert!(
+            MpIdRegistry::from_config(&[crate::config::PartyConfig {
+                mp_id: SENDER.to_owned(),
+                roles: vec!["NB".to_owned(), "MSB".to_owned()],
+                primary: true,
+                agency: None,
+                as4: None,
+            }])
+            .is_err()
+        );
     }
 
     /// Inbound, the sender's role is not known to the receiving deployment, so

@@ -1,7 +1,8 @@
 //! Stadtwerke Musterstadt — the one world the seeder writes, in one place.
 //!
 //! The Stadtwerk is Netzbetreiber, Lieferant and Messstellenbetreiber in one
-//! tenant, in Strom and in Gas. Its Marktpartner-IDs are synthetic on purpose: a check-digit-valid
+//! tenant (`stadtwerke-musterstadt`), in Strom and in Gas, each role under its
+//! own Codenummer. Its Marktpartner-IDs are synthetic on purpose: a check-digit-valid
 //! MP-ID names a real company, so none of these satisfies either published
 //! procedure (`every_mp_id_is_synthetic`). Its Marktlokationen carry the BDEW
 //! check digit the storage layer demands, derived here, never typed.
@@ -14,14 +15,26 @@ use rubo4e::identifiers::MaloId;
 use serde_json::Value;
 use time::Date;
 
-/// The Stadtwerk: tenant and MP-ID of its NB, LF and MSB (Strom).
+/// The Stadtwerk's Netzbetreiber (Strom). Each
+/// Marktrolle has its own Codenummer — „Marktteilnehmer benötigen für jede
+/// Marktrolle Marktfunktion im Strom- bzw. Gasmarkt eine gesonderte
+/// Codenummer" (Allgemeine Festlegungen 6.1d Kap. 2.13) — so its LF and MSB
+/// act on their own.
 pub const STADTWERK: &str = "9900357000004";
+/// The Stadtwerk's Lieferant (Strom).
+pub const STADTWERK_LF: &str = "9900357000028";
+/// The Stadtwerk's grundzuständiger Messstellenbetreiber (Strom).
+pub const STADTWERK_MSB: &str = "9900357000035";
 /// Its display name.
 pub const STADTWERK_NAME: &str = "Stadtwerke Musterstadt GmbH";
-/// The Stadtwerk in Gas: the DVGW-Codenummer of its NB, LF and MSB. A
-/// Marktteilnehmer holds one MP-ID per Sparte and role (BDEW-AWH
-/// Identifikatoren V1.2 Kap. 2.1, S. 4), so Gas is not the Strom number.
+/// The Stadtwerk's Gasnetzbetreiber, on its DVGW-Codenummer. A Marktteilnehmer
+/// holds one MP-ID per Sparte and role (BDEW-AWH Identifikatoren V1.2 Kap. 2.1,
+/// S. 4), so Gas is not the Strom number.
 pub const STADTWERK_GAS: &str = "9800357000004";
+/// The Stadtwerk's Gaslieferant.
+pub const STADTWERK_GAS_LF: &str = "9800357000028";
+/// The Stadtwerk's Gas-Messstellenbetreiber.
+pub const STADTWERK_GAS_MSB: &str = "9800357000035";
 /// Gasnetz Nachbarstadt — the neighbouring Gas Netzbetreiber whose
 /// NN-Rechnung the Stadtwerk's Lieferant disputes.
 pub const GASNETZ_NACHBARSTADT: &str = "9800468000003";
@@ -392,10 +405,14 @@ mod tests {
     fn every_mp_id_is_synthetic() {
         for id in [
             STADTWERK,
+            STADTWERK_LF,
+            STADTWERK_MSB,
             VERTRIEB,
             NORDLICHT,
             BKV,
             STADTWERK_GAS,
+            STADTWERK_GAS_LF,
+            STADTWERK_GAS_MSB,
             GASNETZ_NACHBARSTADT,
         ] {
             let mp = MarktpartnerId::new(id).unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -411,7 +428,12 @@ mod tests {
     /// BDEW-Codenummer.
     #[test]
     fn the_gas_parties_hold_dvgw_codenummern() {
-        for id in [STADTWERK_GAS, GASNETZ_NACHBARSTADT] {
+        for id in [
+            STADTWERK_GAS,
+            STADTWERK_GAS_LF,
+            STADTWERK_GAS_MSB,
+            GASNETZ_NACHBARSTADT,
+        ] {
             let mp = MarktpartnerId::new(id).unwrap_or_else(|e| panic!("{id}: {e}"));
             assert!(mp.is_dvgw(), "{id} is no DVGW-Codenummer");
         }
@@ -470,7 +492,7 @@ mod tests {
         assert!(edi.contains("RFF+Z13:31002'"));
         assert!(edi.contains(&format!("LOC+172+{}'", nachbar_malo())));
         assert!(edi.contains(&format!("NAD+MS+{GASNETZ_NACHBARSTADT}::332")));
-        assert!(edi.contains(&format!("NAD+MR+{STADTWERK_GAS}::332")));
+        assert!(edi.contains(&format!("NAD+MR+{STADTWERK_GAS_LF}::332")));
         assert!(edi.contains(&format!("PRI+CAL:{NN_ARBEITSPREIS_RECHNUNG}'")));
         let preis = &body("marktd-preisblatt-gas.json")["data"]["preispositionen"][0]["preisstaffeln"]
             [0]["preis"];

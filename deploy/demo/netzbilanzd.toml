@@ -10,7 +10,7 @@
 
 allow_insecure_no_auth = true
 
-tenant         = "9900357000004"
+tenant         = "stadtwerke-musterstadt"
 marktd_url     = "http://marktd:8180"
 marktd_api_key = "dev-marktd-key"
 makod_url      = "http://makod:8080"

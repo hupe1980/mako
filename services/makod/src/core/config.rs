@@ -49,13 +49,20 @@
 //! bucket = "my-makod-bucket"
 //! prefix = "makod"
 //!
-//! # The roles this instance plays, and one Marktpartner-ID covering them:
+//! # The tenant, the roles this instance plays, and one Marktpartner-ID per
+//! # role (Allgemeine Festlegungen 6.1d Kap. 2.13):
 //! [deployment]
-//! rollen = ["nb-strom", "lf-strom", "msb-strom"]
+//! tenant = "stadtwerke-musterstadt"
+//! rollen = ["nb-strom", "lf-strom"]
 //!
 //! [[party]]
-//! mp_id = "9900000000001"
-//! roles = ["NB", "LF", "MSB"]
+//! mp_id   = "9900000000001"
+//! roles   = ["NB"]
+//! primary = true
+//!
+//! [[party]]
+//! mp_id = "9900000000002"
+//! roles = ["LF"]
 //!
 //! [party.as4]
 //! signing_cert_pem_file    = "/etc/makod/9900000000001/signing.cert.pem"
@@ -286,20 +293,16 @@ mako_service::policy_choice! {
 
 /// One `[[party]]` entry — a single BDEW market-participant identity.
 ///
-/// Multiple `[[party]]` entries on the same `makod` instance describe an
-/// operator who has registered separate Marktpartner-IDs for different roles
-/// (e.g. a utility with distinct NB, LF, and MSB registrations). Allgemeine
-/// Festlegungen Kap. 2.13 requires a separate code per Energieart *and* Marktrolle
-/// for a market participant active in both Sparten, so a Strom NB and a Gas GNB
-/// are always two entries.
-///
-/// For the common case — a single company covering all Strom roles — one entry
-/// with all relevant roles is sufficient:
+/// One entry per Marktrolle and Sparte: „Marktteilnehmer benötigen für jede
+/// Marktrolle Marktfunktion im Strom- bzw. Gasmarkt eine gesonderte
+/// Codenummer" (Allgemeine Festlegungen 6.1d Kap. 2.13), so a utility that is
+/// NB, LF and MSB holds three entries per Sparte. A sub-qualifier names its
+/// role (`VNB` is an `NB`) and may share the entry.
 ///
 /// ```toml
 /// [[party]]
 /// mp_id = "9900001000001"
-/// roles = ["NB", "LF", "MSB"]
+/// roles = ["NB"]
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -314,12 +317,9 @@ pub struct PartyConfig {
     /// Valid values: `NB`, `LF`, `MSB`, `GNB`, `LFG`, `gMSB`, `MGV`, `BKV`,
     /// `UNB`, `ANB`, `VNB`, `NMSB`, `AMSB`, `ESA`.
     pub roles: Vec<String>,
-    /// Marks this entry as the **storage partition key** for the engine.
-    ///
-    /// When `true`, this Marktpartner-ID is used to derive the `TenantId` UUID
-    /// that scopes all event streams, outbox entries, and MaLo cache keys.
-    /// Exactly one entry should have `primary = true`; when none does, the
-    /// first entry in document order is used.
+    /// The MP-ID a CONTRL is sent under for an interchange that names none of
+    /// the own MP-IDs. At most one entry has `primary = true`; when none does,
+    /// the first entry in document order is used.
     #[serde(default)]
     pub primary: bool,
     /// NAD DE 3055 agency code of this MP-ID.
@@ -363,10 +363,11 @@ pub struct PartyAs4Config {
 
 // ── Sections ─────────────────────────────────────────────────────────────────
 
-/// `[deployment]` — the Marktrollen this instance plays.
+/// `[deployment]` — the tenant and the Marktrollen this instance plays.
 ///
 /// ```toml
 /// [deployment]
+/// tenant = "stadtwerke-musterstadt"
 /// rollen = ["nb-strom", "msb-strom"]
 /// ```
 ///
@@ -376,6 +377,10 @@ pub struct PartyAs4Config {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentConfig {
+    /// Tenant identifier — data-isolation key written to every database row.
+    /// Any stable unique string; never an MP-ID's stand-in, since each
+    /// Marktrolle has its own (`[[party]]`).
+    pub tenant: String,
     /// Role tokens: `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`,
     /// `msb-gas`, `esa-strom`, `bkv-strom`.
     pub rollen: Vec<crate::deployment::Rolle>,
@@ -916,11 +921,16 @@ bucket = "my-makod-bucket"
 prefix = "makod"
 
 [deployment]
-rollen = ["nb-strom", "lf-strom", "msb-strom"]
+tenant = "stadtwerke-musterstadt"
+rollen = ["nb-strom", "lf-strom"]
 
 [[party]]
 mp_id = "9900000000001"
-roles = ["NB", "LF", "MSB"]
+roles = ["NB"]
+
+[[party]]
+mp_id = "9900000000002"
+roles = ["LF"]
 
 [http]
 addr      = "0.0.0.0:8080"
@@ -950,13 +960,15 @@ signing_cert_pem_files   = ["/etc/makod/partners/9900000000002.sig.pem"]
 unbekannte_absender = "bdew_ou_zulassen"
 "#;
         let cfg: ConfigFile = toml::from_str(src).expect("documented example parses");
-        assert!(cfg.party.expect("party")[0].as4.is_some());
+        assert!(cfg.party.expect("party").iter().any(|p| p.as4.is_some()));
         assert_eq!(cfg.as4.expect("as4").partner.len(), 1);
         assert_eq!(
             cfg.policy.as4.unbekannte_absender.get(),
             UnbekannteAbsender::BdewOuZulassen
         );
-        assert_eq!(cfg.deployment.expect("deployment").rollen.len(), 3);
+        let deployment = cfg.deployment.expect("deployment");
+        assert_eq!(deployment.rollen.len(), 2);
+        assert_eq!(deployment.tenant, "stadtwerke-musterstadt");
         assert!(cfg.otel.expect("otel").endpoint.is_some());
     }
 

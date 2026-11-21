@@ -194,7 +194,7 @@ pub(super) fn gate_verdict(
 /// AHB to hold them to, and a type with no renderer leaves the outbox as JSON.
 const GATED_MESSAGE_TYPES: &[&str] = &[
     "APERAK", "CONTRL", "REQOTE", "QUOTES", "ORDERS", "ORDCHG", "ORDRSP", "INVOIC", "REMADV",
-    "MSCONS", "IFTSTA", "INSRPT",
+    "MSCONS", "IFTSTA", "INSRPT", "UTILTS",
 ];
 
 /// Render `pending` as the outbox worker will — its own `sender`, else this
@@ -207,20 +207,7 @@ fn edifact_findings(
 ) -> Result<Vec<String>, String> {
     use edi_energy::EdiEnergyMessage as _;
     use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId};
-    let sender = pending
-        .payload
-        .get("sender")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(&state.sender_party_id);
-    let registry =
-        crate::party_registry::MpIdRegistry::from_config(&[crate::config::PartyConfig {
-            mp_id: sender.to_owned(),
-            roles: Vec::new(),
-            primary: true,
-            agency: None,
-            as4: None,
-        }])
-        .map_err(|e| e.to_string())?;
+    let registry = &*state.parties;
     let process_id = ProcessId::new();
     let mut msg = mako_engine::outbox::OutboxMessage::new(
         StreamId::for_process(state.tenant_id, &process_id),
@@ -234,7 +221,7 @@ fn edifact_findings(
         pending.payload.clone(),
     );
     msg.format_version = Some(format_version.clone());
-    let rendered = crate::orchestrator::edifact_renderer::render_to_wire_bytes(&msg, &registry)
+    let rendered = crate::orchestrator::edifact_renderer::render_to_wire_bytes(&msg, registry)
         .map_err(|e| e.to_string())?;
     let parsed = edi_energy::parse(&rendered.bytes).map_err(|e| e.to_string())?;
     // The sender's role decides an AHB role Bedingung; this door knows it when
@@ -298,6 +285,7 @@ pub(super) fn strom_55013(
     // (Bedingungen `[483]`, `[623]`).
     for melo in melos {
         out.lokationen.push(StammdatenLokation {
+            zeitraum_id: None,
             qualifier: "Z17".to_owned(),
             id: melo.melo_id.clone(),
         });
@@ -572,6 +560,7 @@ fn gas_eog(
     // Lokation the renderer writes first.
     for melo in melos {
         out.lokationen.push(StammdatenLokation {
+            zeitraum_id: None,
             qualifier: "172".to_owned(),
             id: melo.melo_id.clone(),
         });
@@ -1233,6 +1222,7 @@ pub(super) fn gas_malo_struktur(sd: &MaloUtilmdStammdaten) -> Stammdaten {
             .messlokationen
             .iter()
             .map(|m| StammdatenLokation {
+                zeitraum_id: None,
                 qualifier: "172".to_owned(),
                 id: m.melo_id.clone(),
             })
@@ -1811,6 +1801,7 @@ pub(super) fn seg(tag: &str, elemente: Vec<Vec<&str>>) -> StammdatenSegment {
 
 pub(super) fn block(seq: &str, segmente: Vec<StammdatenSegment>) -> StammdatenBlock {
     StammdatenBlock {
+        zeitraum_id: None,
         seq: seq.to_owned(),
         segmente,
     }

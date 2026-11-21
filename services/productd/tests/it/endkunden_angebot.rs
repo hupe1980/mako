@@ -25,6 +25,8 @@ use time::macros::date;
 
 const LF: &str = "9900357000004";
 const NB: &str = "9900000000003";
+/// The grundzuständige MSB of the NB's grid, under its own MP-ID.
+const GMSB: &str = "9900000000010";
 /// The canonical valid fixture MaLo.
 const MALO: &str = "51238696012";
 /// The refusal fixture: a wrong check digit.
@@ -104,6 +106,7 @@ struct Fixture {
     produkt: serde_json::Value,
     status: &'static str,
     nne: Option<serde_json::Value>,
+    gmsb: Option<&'static str>,
     msb: Option<serde_json::Value>,
     ka: Option<KaBlatt>,
     ctx: PricingContext,
@@ -116,6 +119,7 @@ impl Fixture {
             produkt: produkt_data(),
             status: "PUBLISHED",
             nne: Some(netznutzung()),
+            gmsb: Some(GMSB),
             msb: Some(messung()),
             ka: Some(ka(Some("Tarifkunden"))),
             ctx: ctx(tag),
@@ -134,6 +138,7 @@ impl Fixture {
                 data: &self.produkt,
             }),
             netznutzung: self.nne.as_ref(),
+            gmsb_mp_id: self.gmsb,
             messung: self.msb.as_ref(),
             konzessionsabgabe: self.ka.as_ref(),
             ctx: &self.ctx,
@@ -158,6 +163,34 @@ fn a_missing_preisblatt_refuses_naming_the_nb() {
             .iter()
             .any(|f| f.contains("Preisblatt Netznutzung") && f.contains(NB)),
         "the refusal must name the Netznutzung sheet and the NB: {fehlend:?}"
+    );
+}
+
+/// The Messung sheet is the grundzuständige MSB's, under its own MP-ID: with
+/// no gMSB recorded for the grid the offer names that link as missing and
+/// never prices the NB's code as if it were the MSB's.
+#[test]
+fn a_missing_gmsb_link_refuses_naming_the_nb() {
+    let mut f = Fixture::strom(dec!(3500), date!(2027 - 02 - 01));
+    f.gmsb = None;
+    let err = bepreise(&f.eingaben()).expect_err("an offer without the gMSB of the grid");
+    assert_eq!(err.code, code::EINGABE_FEHLT);
+    let fehlend = err.fehlend();
+    assert!(
+        fehlend
+            .iter()
+            .any(|f| f.contains("grundzuständiger Messstellenbetreiber") && f.contains(NB)),
+        "the refusal must name the missing gMSB of the NB: {fehlend:?}"
+    );
+
+    let mut f = Fixture::strom(dec!(3500), date!(2027 - 02 - 01));
+    f.msb = None;
+    let fehlend = bepreise(&f.eingaben()).unwrap_err().fehlend();
+    assert!(
+        fehlend
+            .iter()
+            .any(|f| f.contains("Preisblatt Messung") && f.contains(GMSB)),
+        "a missing sheet is named under the gMSB's MP-ID: {fehlend:?}"
     );
 }
 

@@ -10,8 +10,10 @@
 
 allow_insecure_no_auth = true
 
-tenant   = "9900357000004"
-lf_mp_id = "9900357000004"
+tenant   = "stadtwerke-musterstadt"
+# The Lieferant (Strom) — its own MP-ID, not the tenant key and not the
+# Netzbetreiber's 9900357000004.
+lf_mp_id = "9900357000028"
 
 vertragd_url    = "http://vertragd:9780"
 edmd_url        = "http://edmd:8380"

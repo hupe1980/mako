@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.44.0"
+    "version": "0.45.0"
   },
   "paths": {
     "/api/v1/archive/olap/{malo_id}": {
@@ -4559,6 +4559,77 @@
           },
           "500": {
             "description": "Internal error, with an `error_id` the log carries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/virtual/{virtual_malo_id}/berechnungsformel": {
+      "get": {
+        "tags": [
+          "virtual"
+        ],
+        "summary": "`GET /api/v1/virtual/{virtual_malo_id}/berechnungsformel`",
+        "description": "The virtual Marktlokation's Berechnungsformel in the UTILTS terms the NB\ntransmits it in (Prüfidentifikator 25001): its validity, its status, the\nRechenschritt yielding the Energiemenge and every Bestandteil. It is the\nformula `/lastgang` computes with. A community share is no Berechnungsformel\nand is refused with `keine_berechnungsformel`.",
+        "operationId": "get_berechnungsformel",
+        "parameters": [
+          {
+            "name": "virtual_malo_id",
+            "in": "path",
+            "description": "The virtual Marktlokation's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No or unverifiable token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar refused the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No virtual meter of that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`keine_berechnungsformel` — a community share",
             "content": {
               "application/json": {
                 "schema": {

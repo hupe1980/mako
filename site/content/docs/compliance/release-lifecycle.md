@@ -110,7 +110,7 @@ When all profile and code changes are merged and `just ci` is green:
      over every crate the workflow publishes): a public-API break the new
      version number does not admit stops the release before anything is
      published. It runs only here, not in `just ci`.
-   - Publishes the 23 library crates (every crate under `crates/`
+   - Publishes the 24 library crates (every crate under `crates/`
      but `mako-service`, which is `publish = false`) to [crates.io](https://crates.io)
      with `cargo publish`, in dependency order, by Trusted Publishing.
    - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`)

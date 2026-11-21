@@ -58,7 +58,7 @@ async fn dispatcher() -> EdifactIngestDispatcher {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     )
 }
 
@@ -171,7 +171,7 @@ async fn settled_then_second_spawns<W>(
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN),
+        TenantId::from_tenant(OWN),
     );
     let first = d
         .dispatch(&msg, workflow, pid, time::OffsetDateTime::now_utc())
@@ -187,7 +187,7 @@ async fn settled_then_second_spawns<W>(
     };
     let identity = store
         .as_process_registry()
-        .lookup_correlated(TenantId::from_party_id(OWN), &key)
+        .lookup_correlated(TenantId::from_tenant(OWN), &key)
         .await
         .expect("lookup")
         .into_iter()

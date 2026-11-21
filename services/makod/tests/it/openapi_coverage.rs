@@ -21,14 +21,15 @@ async fn api() -> (axum::Router, utoipa::openapi::OpenApi) {
     );
     let cedar =
         Arc::new(makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"));
-    let tenant_id = TenantId::from_party_id(TENANT);
+    let tenant_id = TenantId::from_tenant(TENANT);
     let malo_cache = Arc::new(makod::malo_cache::SlateDbMaloCache::new(
         (*store).clone(),
         tenant_id,
     ));
     let commands = Arc::new(CommandsApiState {
         tenant_id,
-        sender_party_id: TENANT.to_owned(),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(TENANT),
         configured_marktrollen: vec!["LF".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,

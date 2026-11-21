@@ -77,8 +77,17 @@ pub struct AccountingdConfig {
     #[serde(default = "default_http")]
     pub http: mako_service::config::HttpConfig,
 
-    /// Operator tenant.
+    /// Tenant identifier — data-isolation key written to every database row.
+    /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique
+    /// string is valid.
     pub tenant: String,
+
+    /// The Lieferant whose customer accounts this ledger keeps: its MP-ID as
+    /// Lieferant, and the `lf_mp_id` a request or event that names none is
+    /// booked under. Never the tenant — „Für jede Sparte (Gas bzw. Strom) und
+    /// jede Rolle hat ein Marktteilnehmer genau eine MP-ID" (Identifikatoren
+    /// AWH V1.2 Kap. 2.1), so the Lieferant's code is a setting of its own.
+    pub lf_mp_id: String,
 
     /// ERP / portal webhook URL — receives outbound CloudEvents:
     /// `de.mako.accounting.payment.due`, `de.mako.accounting.mahnung.issued`,
@@ -172,8 +181,9 @@ pub struct AccountingdConfig {
     /// pain.008 XML when this is absent or contains an invalid IBAN.
     pub creditor_iban: Option<String>,
 
-    /// Display name of the LF as it appears in pain.008 XML (`<Cdtr><Nm>`).
-    /// If absent, defaults to `tenant` — set this to the company's legal name.
+    /// The LF's legal name: `<Cdtr><Nm>` of a pain.008, `<Dbtr><Nm>` of an EEG
+    /// pain.001 and the sender of a Mahnung. Absent, each of them is refused —
+    /// the tenant is an isolation key, not a name a bank or customer may read.
     pub creditor_name: Option<String>,
 
     /// SEPA Creditor Identifier (Gläubiger-ID, EPC AT-02 / ISO 20022 CdtrId).
@@ -333,7 +343,20 @@ pub struct AccountingdConfig {
     pub allow_insecure_no_auth: bool,
 }
 
+/// The refusal every SEPA message gives when `creditor_name` is not set.
+pub const CREDITOR_NAME_FEHLT: &str = "creditor_name is not configured — a SEPA message names \
+     the Lieferant by its legal name; set creditor_name in accountingd.toml";
+
 impl AccountingdConfig {
+    /// The configured creditor name, `None` when absent or blank.
+    #[must_use]
+    pub fn creditor_name(&self) -> Option<&str> {
+        self.creditor_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
     /// The three `dunning_fee_stufe{1,2,3}_ct`, each with its setting's name;
     /// a missing or negative one is `None`.
     #[must_use]

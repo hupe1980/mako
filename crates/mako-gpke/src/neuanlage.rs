@@ -34,10 +34,10 @@
 //!
 //! - **BNetzA BK6-24-174 Anlage 1b** — GPKE Teil 2 Kap. 2.2 Neuanlage
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK AHB 1.1 Kap. 2.4.1** — technical acknowledgement, **45 Minuten** on a
-//!   weekday for a UTILMD. A separate clock from the business answer window,
-//!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
-//!   dem ÜT.
+//! - **APERAK AHB 1.1 Kap. 2.4.1** — technical acknowledgement, **45 Minuten**
+//!   for a UTILMD (an UTILMD sent on a Samstag: Sonntag 12 Uhr). A separate clock
+//!   from the business answer, which GPKE Teil 2 Kap. 2.2.2 Nr. 2 (S. 31) sets
+//!   at „00:00 Uhr des 61. WT nach dem ÜT von Nr. 1".
 
 use mako_engine::envelope::{Richtung, Verlauf};
 use mako_engine::types::Pruefidentifikator;
@@ -537,10 +537,12 @@ impl NeuanlageTranche {
         });
         Stammdaten {
             lokationen: vec![StammdatenLokation {
+                zeitraum_id: None,
                 qualifier: "Z21".to_owned(),
                 id: self.tranche_id.as_str().to_owned(),
             }],
             bloecke: vec![StammdatenBlock {
+                zeitraum_id: None,
                 seq: "Z15".to_owned(),
                 segmente,
             }],

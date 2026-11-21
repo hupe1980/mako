@@ -42,10 +42,7 @@ pub(super) fn render_iftsta(
     };
 
     let pid = p.pid;
-    let sender = p
-        .sender
-        .as_deref()
-        .unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(p.sender.as_deref(), registry, mt)?;
     let receiver = p.receiver.as_deref().unwrap_or(msg.recipient.as_ref());
 
     let release = release_for(msg, MessageType::Iftsta, ReleaseTrack::Short)?;

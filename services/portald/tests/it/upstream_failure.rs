@@ -38,7 +38,7 @@ async fn failing_upstreams() -> String {
 async fn an_upstream_5xx_answers_502_with_an_error_id_and_echoes_nothing() {
     let base = failing_upstreams().await;
     let cfg: portald::config::PortaldConfig = toml::from_str(&format!(
-        "tenant = \"9900357000004\"\nvertragd_url = \"{base}\"\naccountingd_url = \"{base}\"\n"
+        "tenant = \"stadtwerke-musterstadt\"\nlf_mp_id = \"9900357000028\"\nvertragd_url = \"{base}\"\naccountingd_url = \"{base}\"\n"
     ))
     .expect("config parses");
     let app = mako_service::build_for_test::<portald::server::Portald>(cfg)

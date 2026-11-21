@@ -118,7 +118,7 @@ async fn a_productd_endpoint_receives_a_verifying_delivery() {
     *secret.lock().await = shown.to_owned();
 
     let put = http
-        .put(format!("{base}/api/v1/products/9900357000004/HOOK-STROM"))
+        .put(format!("{base}/api/v1/products/9900357000028/HOOK-STROM"))
         .json(&serde_json::json!({
             "category": "STROM",
             "name": "Webhook-Strom",
@@ -140,7 +140,7 @@ async fn a_productd_endpoint_receives_a_verifying_delivery() {
     mako_service::subscriptions::Subscriptions::new(
         pool.clone(),
         "productd",
-        "9900357000004",
+        "stadtwerke-musterstadt",
         mako_service::subscriptions::SubscriptionsConfig {
             allow_loopback: true,
             ..Default::default()

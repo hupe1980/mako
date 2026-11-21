@@ -96,7 +96,8 @@ pub struct LfModuleConfig {
     /// database does not know the answer.
     pub vertragd_url: Option<String>,
     pub vertragd_api_key: Option<SecretString>,
-    pub own_mp_id: String,
+    /// `[identity]` — „we supply" means an assignment under one of `lf`.
+    pub identitaet: crate::config::Identitaet,
     pub tenant: String,
     /// When `true`, dispatch the resolved answer automatically.
     pub auto_respond: bool,
@@ -725,7 +726,7 @@ fn parse_date(s: &str, pid: u32) -> Option<Date> {
 pub fn lage_from_versorgung(
     anfrage: &LfAnfrage,
     versorgung: Option<&VersorgungsStatusRecord>,
-    own_mp_id: &str,
+    identitaet: &crate::config::Identitaet,
 ) -> LfVertragslage {
     let termin = anfrage.termin;
     let Some(vs) = versorgung else {
@@ -735,9 +736,9 @@ pub fn lage_from_versorgung(
         };
     };
 
-    // „Beliefert" for these trees means *we* hold the assignment — under our own
-    // MP-ID, in any of the three states that are a supply.
-    let ours = vs.aktive().any(|z| z.lf_mp_id == own_mp_id);
+    // „Beliefert" for these trees means *we* hold the assignment — under one of
+    // the Lieferant's own MP-IDs, in any of the three states that are a supply.
+    let ours = vs.aktive().any(|z| identitaet.is_lf(&z.lf_mp_id));
     let beliefert = ours
         && matches!(
             vs.lieferstatus,
@@ -987,7 +988,7 @@ fn gesetzliche_pflicht(
     netzebene: Option<&str>,
 ) -> Option<bool> {
     let vs = versorgung?;
-    let fremd = |z: &&mako_markt::repository::LfZuordnung| z.lf_mp_id != config.own_mp_id;
+    let fremd = |z: &&mako_markt::repository::LfZuordnung| !config.identitaet.is_lf(&z.lf_mp_id);
     if matches!(vs.lieferstatus, LieferStatus::Beliefert) && vs.aktive().any(|z| fremd(&z)) {
         return Some(false);
     }
@@ -1072,7 +1073,7 @@ pub async fn process_lf_antwort(
         malo.as_ref().and_then(|m| m.netzebene.as_deref()),
     );
     let anfrage = &payload.anfrage;
-    let mut lage = lage_from_versorgung(anfrage, versorgung.as_ref(), &config.own_mp_id);
+    let mut lage = lage_from_versorgung(anfrage, versorgung.as_ref(), &config.identitaet);
 
     // The contract half. A deployment without `vertragd` leaves these facts
     // unknown, and the walk escalates when it reaches one — rather than
@@ -1462,7 +1463,15 @@ mod tests {
     const BG_EON: &str = "11YN-BG-EON----A";
     const BG_OTHER: &str = "11YN-BG-OTHER--3";
 
-    const OWN: &str = "9900357000004";
+    const OWN: &str = "9900357000028";
+
+    /// This deployment as a Lieferant: [`OWN`] in Strom.
+    fn eigen() -> crate::config::Identitaet {
+        crate::config::Identitaet {
+            lf: vec![OWN.to_owned()],
+            ..Default::default()
+        }
+    }
 
     fn make_vs(status: LieferStatus, lf_mp_id: Option<&str>) -> VersorgungsStatusRecord {
         VersorgungsStatusRecord {
@@ -1862,7 +1871,7 @@ mod tests {
         assert_eq!(payload.anfrage.terminart, Terminart::Naechstmoeglich);
 
         let lage = apply_vertrag(
-            lage_from_versorgung(&payload.anfrage, Some(&vs), OWN),
+            lage_from_versorgung(&payload.anfrage, Some(&vs), &eigen()),
             &serde_json::json!({
                 "vertrag": { "vertragsende": serde_json::Value::Null },
                 "naechstmoeglicher_kuendigungstermin": "2026-12-31",
@@ -1891,7 +1900,7 @@ mod tests {
             }),
         ))
         .expect("parses");
-        let lage = lage_from_versorgung(&payload.anfrage, Some(&vs), OWN);
+        let lage = lage_from_versorgung(&payload.anfrage, Some(&vs), &eigen());
         assert_eq!(lage.vorlauffrist_eingehalten, Bekannt::Ja);
 
         // Announced the day before the Zuordnungsende: far too late.
@@ -1904,7 +1913,7 @@ mod tests {
             }),
         ))
         .expect("parses");
-        let lage = lage_from_versorgung(&late.anfrage, Some(&vs), OWN);
+        let lage = lage_from_versorgung(&late.anfrage, Some(&vs), &eigen());
         assert_eq!(lage.vorlauffrist_eingehalten, Bekannt::Nein);
         assert_eq!(
             entscheide(&late, &lage, &Default::default())
@@ -1930,7 +1939,7 @@ mod tests {
             }),
         ))
         .expect("parses");
-        let lage = lage_from_versorgung(&payload.anfrage, Some(&vs), OWN);
+        let lage = lage_from_versorgung(&payload.anfrage, Some(&vs), &eigen());
         assert_eq!(lage.vorlauffrist_eingehalten, Bekannt::Unbekannt);
     }
 
@@ -1939,7 +1948,7 @@ mod tests {
     #[test]
     fn a_malo_we_do_not_supply_escalates() {
         let vs = make_vs(LieferStatus::Beliefert, Some("9900999000001"));
-        let lage = lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN);
+        let lage = lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen());
         assert!(!lage.beliefert);
         assert_eq!(lage.zuordnung_am_folgetag, Bekannt::Nein);
     }
@@ -1948,7 +1957,7 @@ mod tests {
     /// set of convenient `false`s.
     #[test]
     fn an_unknown_malo_leaves_the_facts_unknown() {
-        let lage = lage_from_versorgung(&beendigung_anfrage(), None, OWN);
+        let lage = lage_from_versorgung(&beendigung_anfrage(), None, &eigen());
         assert_eq!(lage.vertragsbindung_am_folgetag, Bekannt::Unbekannt);
         assert_eq!(lage.kunde_identisch, Bekannt::Unbekannt);
         assert_eq!(lage.zuordnung_am_folgetag, Bekannt::Unbekannt);
@@ -1959,7 +1968,7 @@ mod tests {
     #[test]
     fn without_contract_facts_a_beendigung_escalates_rather_than_agreeing() {
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
-        let lage = lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN);
+        let lage = lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen());
         let payload = LfAnfragePayload::parse(&event(
             55_010,
             serde_json::json!({
@@ -1983,7 +1992,7 @@ mod tests {
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
         let termin = Some(date!(2026 - 09 - 01));
         let lage = apply_vertrag(
-            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen()),
             &serde_json::json!({ "vertrag": { "vertragsende": "2027-12-31" } }),
             termin,
         );
@@ -2010,7 +2019,7 @@ mod tests {
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
         let termin = Some(date!(2026 - 09 - 01));
         let lage = apply_vertrag(
-            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen()),
             &serde_json::json!({ "vertrag": { "vertragsende": "2026-08-31" } }),
             termin,
         );
@@ -2036,7 +2045,7 @@ mod tests {
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
         let termin = Some(date!(2026 - 09 - 01));
         let lage = apply_vertrag(
-            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen()),
             &serde_json::json!({
                 "vertrag": { "vertragsende": serde_json::Value::Null },
                 "naechstmoeglicher_kuendigungstermin": "2026-12-31",
@@ -2064,7 +2073,7 @@ mod tests {
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
         let termin = Some(date!(2026 - 09 - 01));
         let lage = apply_vertrag(
-            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen()),
             &serde_json::json!({
                 "vertrag": {
                     // The Laufzeit happens to end on the requested date …
@@ -2086,7 +2095,7 @@ mod tests {
 
         // A real termination *does* land in `vertragsende`.
         let lage = apply_vertrag(
-            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen()),
             &serde_json::json!({
                 "vertrag": { "vertragsende": "2027-12-31", "kuendigung_zum": "2026-09-01" },
             }),
@@ -2100,7 +2109,7 @@ mod tests {
     /// `A18`.
     #[test]
     fn a_missing_contract_row_leaves_the_existence_unknown() {
-        let lage = lage_from_versorgung(&beendigung_anfrage(), None, OWN);
+        let lage = lage_from_versorgung(&beendigung_anfrage(), None, &eigen());
         assert_eq!(lage.vertrag_vorhanden, Bekannt::Unbekannt);
     }
 
@@ -2127,7 +2136,7 @@ mod tests {
         // `vertragd` answered „same customer" → this is not an Einzug: `A32`.
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
         let lage = apply_vertrag(
-            lage_from_versorgung(&payload.anfrage, Some(&vs), OWN),
+            lage_from_versorgung(&payload.anfrage, Some(&vs), &eigen()),
             &serde_json::json!({
                 "vertrag": { "vertragsende": serde_json::Value::Null },
                 "naechstmoeglicher_kuendigungstermin": "2026-09-01",
@@ -2152,7 +2161,7 @@ mod tests {
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
         let termin = Some(date!(2026 - 09 - 01));
         let lage = apply_vertrag(
-            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen()),
             &serde_json::json!({
                 "vertrag": { "vertragsende": serde_json::Value::Null },
                 "naechstmoeglicher_kuendigungstermin": "2026-09-01",
@@ -2233,7 +2242,7 @@ mod tests {
             marktd_api_key: SecretString::from(String::new()),
             vertragd_url: None,
             vertragd_api_key: None,
-            own_mp_id: OWN.to_owned(),
+            identitaet: eigen(),
             tenant: "t".to_owned(),
             auto_respond: false,
             bilanzkreise: Vec::new(),
@@ -2366,7 +2375,7 @@ mod tests {
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
         let termin = Some(date!(2026 - 09 - 01));
         let lage = apply_vertrag(
-            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen()),
             &serde_json::json!({
                 "vertrag": { "vertragsende": "2027-12-31" },
                 "naechstmoeglicher_kuendigungstermin": "2027-12-31",
@@ -2395,7 +2404,7 @@ mod tests {
     fn a_gas_vertragsbindung_without_a_next_date_escalates() {
         let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
         let lage = apply_vertrag(
-            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), &eigen()),
             &serde_json::json!({ "vertrag": { "vertragsende": "2027-12-31" } }),
             Some(date!(2026 - 09 - 01)),
         );

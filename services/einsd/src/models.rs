@@ -13,6 +13,9 @@ pub const VERGUETUNG: &str = "VERGUETUNG";
 /// It was Nr. 2 under the EEG 2017; the EEG 2023 inserted the unentgeltliche
 /// Abnahme in front of it.
 pub const AUSFALLVERGUETUNG: &str = "AUSFALLVERGUETUNG";
+/// §21 Abs. 1 Satz 1 Nr. 2 EEG 2023 — Einspeisevergütung in der Variante der
+/// unentgeltlichen Abnahme: the claim „verringert sich … auf null".
+pub const UNENTGELTLICHE_ABNAHME: &str = "UNENTGELTLICHE_ABNAHME";
 /// §20 EEG 2023 — gleitende Marktprämie (Direktvermarktung).
 pub const DIREKTVERMARKTUNG: &str = "DIREKTVERMARKTUNG";
 /// §22 EEG 2023 — wettbewerblich ermittelte Marktprämie (Ausschreibung).
@@ -35,9 +38,10 @@ pub const FLEXIBILITAET: &str = "FLEXIBILITAET";
 pub const FLEXIBILITAET_ZUSCHLAG: &str = "FLEXIBILITAET_ZUSCHLAG";
 
 /// Every accepted token, in the schema's order.
-pub const ALL: [&str; 12] = [
+pub const ALL: [&str; 13] = [
     VERGUETUNG,
     AUSFALLVERGUETUNG,
+    UNENTGELTLICHE_ABNAHME,
     DIREKTVERMARKTUNG,
     AUSSCHREIBUNG,
     SONSTIGE_DIREKTVERMARKTUNG,

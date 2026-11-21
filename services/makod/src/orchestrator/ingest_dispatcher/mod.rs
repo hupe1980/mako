@@ -676,6 +676,7 @@ impl EdifactIngestDispatcher {
         "gpke-anfrage-bestellung",
         "gpke-ankuendigung-zuordnung-lf",
         "gpke-beendigung-zuordnung",
+        "gpke-berechnungsformel",
         "gpke-datenabruf",
         "gpke-datenabruf-msb",
         "gpke-eog",

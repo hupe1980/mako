@@ -96,7 +96,7 @@ impl MockLfn {
         Self {
             process: Process::new(
                 InMemoryEventStore::new(),
-                TenantId::from_party_id(LFN_ID),
+                TenantId::from_tenant(LFN_ID),
                 WorkflowId::new(mako_gpke::ankuendigung_zuordnung_lf::WORKFLOW_NAME, FV),
             ),
             platform: Platform::with_all_profiles(),

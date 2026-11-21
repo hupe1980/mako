@@ -49,7 +49,7 @@ async fn service(own: &str, role: &str) -> (ContrlAckService, SlateDbStore, Tena
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant = TenantId::from_party_id(own);
+    let tenant = TenantId::from_tenant(own);
     let svc = ContrlAckService::new(Arc::new(store.clone()), tenant, registry(own, role));
     (svc, store, tenant)
 }

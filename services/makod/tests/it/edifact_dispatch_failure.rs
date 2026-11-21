@@ -67,7 +67,7 @@ async fn post_with_failing_store(
         .await
         .expect("in-memory store")
         .with_max_stream_events(0);
-    let tenant = TenantId::from_party_id(OWN_MP);
+    let tenant = TenantId::from_tenant(OWN_MP);
     let dispatcher = Arc::new(EdifactIngestDispatcher::new(
         Arc::new(store.clone()),
         store.as_snapshot_store(),

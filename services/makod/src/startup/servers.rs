@@ -50,8 +50,10 @@ pub(crate) struct ServerDeps {
     pub store: SlateDbStore,
     pub pid_router: mako_engine::pid_router::PidRouter,
     pub mp_id_registry: Arc<MpIdRegistry>,
-    /// Derived from the primary Marktpartner-ID. `makod` is single-tenant, so
-    /// it is computed once here rather than re-derived at each call site.
+    /// `[deployment] tenant`.
+    pub tenant: Arc<str>,
+    /// Derived from `tenant`. `makod` is single-tenant, so it is computed once
+    /// here rather than re-derived at each call site.
     pub tenant_id: TenantId,
     pub cedar: Arc<CedarAuthorizer>,
     pub platform: Arc<Platform>,
@@ -170,8 +172,6 @@ pub(crate) async fn serve_http(
     deps: &ServerDeps,
     cfg: HttpServerConfig<'_>,
 ) -> anyhow::Result<JoinHandle<()>> {
-    let primary_mp_id = deps.mp_id_registry.primary_mp_id().to_owned();
-
     let api_state = deps.ingest_state(
         Arc::clone(&deps.cedar),
         cfg.max_body_bytes,
@@ -181,7 +181,7 @@ pub(crate) async fn serve_http(
     let admin_state = Arc::new(malo_admin_api::MaloAdminState {
         cache: (*cfg.malo_cache).clone(),
         cedar: Arc::clone(&deps.cedar),
-        tenant_id: primary_mp_id.clone(),
+        tenant_id: deps.tenant.to_string(),
     });
 
     let partner_store = deps.store.as_partner_store();
@@ -197,7 +197,8 @@ pub(crate) async fn serve_http(
 
     let commands_state = Arc::new(commands_api::CommandsApiState {
         tenant_id: deps.tenant_id,
-        sender_party_id: primary_mp_id.clone(),
+        tenant: deps.tenant.to_string(),
+        parties: Arc::clone(&deps.mp_id_registry),
         configured_marktrollen: cfg.marktrollen,
         max_body_bytes: cfg.max_body_bytes,
         snapshot_interval: cfg.snapshot_interval,
@@ -215,7 +216,7 @@ pub(crate) async fn serve_http(
         metrics_api::MetricsState::new(
             deps.store.clone(),
             Arc::clone(&deps.cedar),
-            primary_mp_id.clone(),
+            deps.tenant.to_string(),
         )
         .with_volatile_mode(cfg.volatile_mode)
         .with_zertifikate(cfg.zertifikate.clone()),
@@ -224,7 +225,7 @@ pub(crate) async fn serve_http(
     let migration_state = Arc::new(migration_api::MigrationApiState {
         store: Arc::new(deps.store.clone()),
         cedar: Arc::clone(&deps.cedar),
-        tenant: primary_mp_id.clone(),
+        tenant: deps.tenant.to_string(),
     });
 
     let einrichtung_state = Arc::new(einrichtung_api::EinrichtungState {
@@ -232,7 +233,7 @@ pub(crate) async fn serve_http(
         dienste: cfg.einrichtung_dienste,
         http: mako_service::http::default_client(),
         cedar: Arc::clone(&deps.cedar),
-        tenant: deps.mp_id_registry.primary_mp_id().to_owned(),
+        tenant: deps.tenant.to_string(),
         zertifikate: cfg.zertifikate,
     });
 
@@ -249,11 +250,11 @@ pub(crate) async fn serve_http(
     let format_impact_state = Arc::new(format_impact_api::FormatImpactApiState {
         impact: format_impact.clone(),
         cedar: Arc::clone(&deps.cedar),
-        tenant: primary_mp_id.clone(),
+        tenant: deps.tenant.to_string(),
     });
 
     let mcp_state = Arc::new(mcp_server::MakodMcpState {
-        tenant: primary_mp_id.clone(),
+        tenant: deps.tenant.to_string(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         cedar: Arc::clone(&deps.cedar),
         commands: Arc::clone(&commands_state),
@@ -270,7 +271,7 @@ pub(crate) async fn serve_http(
         store: Arc::new(deps.store.clone()),
         tenant_id: deps.tenant_id,
         cedar: Arc::clone(&deps.cedar),
-        tenant: primary_mp_id,
+        tenant: deps.tenant.to_string(),
     });
 
     let mut app = edifact_api::router(api_state);
@@ -426,7 +427,7 @@ pub(crate) async fn serve_webdienste(
     } else {
         Some(webdienste::WebdiensteAuthState {
             cedar: Arc::clone(&deps.cedar),
-            tenant: Arc::from(deps.mp_id_registry.primary_mp_id()),
+            tenant: Arc::clone(&deps.tenant),
         })
     };
 

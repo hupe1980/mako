@@ -1192,7 +1192,8 @@ Every table block goes last: in TOML a bare key after a table header belongs to
 that table.
 
 ```toml
-tenant                = "9910000000002"
+tenant                = "stadtwerke-musterstadt"   # isolation key, not an MP-ID
+lf_mp_id              = "9900357000028"     # required: the Lieferant whose accounts these are
 erp_webhook_url       = "http://erp:8000/webhooks/accounting"
 erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
 iban_hash_secret      = "env:ACCOUNTINGD_IBAN_HASH_SECRET"
@@ -1229,7 +1230,7 @@ jahresabschluss_auto_enabled = false
 # SEPA
 creditor_iban         = "DE89370400440532013000"   # required for pain.008 (500 otherwise)
 creditor_id           = "DE74ZZZ09999999999"       # Gläubiger-ID, required
-creditor_name         = "Muster Energie GmbH"      # defaults to tenant
+creditor_name         = "Muster Energie GmbH"      # required to issue pain.008, pain.001, Mahnung
 # debtor_agent_bic    = "…"                        # required for camt.055 recalls
 # pain008_schema      = "pain.008.001.02"          # default pain.008.001.08
 # pain001_schema      = "pain.001.001.03"          # default pain.001.001.09

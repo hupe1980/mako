@@ -464,8 +464,16 @@ pub struct BillingdConfig {
     #[serde(default)]
     pub subscriptions: mako_service::subscriptions::SubscriptionsConfig,
 
-    /// Seller name for XRechnung generation (BG-4, BT-27). Defaults to tenant ID.
+    /// The seller's full name (BT-27): on every Rechnung, as the Lieferant of
+    /// the § 40 EnWG Verbraucherinformationen and as the Absender of a
+    /// Gebührenbescheid. Required — the start is refused without it, and the
+    /// tenant, an isolation key, is never printed in its place.
     pub seller_name: Option<String>,
+
+    /// The seller's GS1 GLN, stated under EAS `0088` as BT-34. A BDEW- or
+    /// DVGW-Codenummer is not a GLN and does not belong here. Absent, BT-34 is
+    /// omitted, which EN 16931 core allows and XRechnung (B2G) refuses.
+    pub seller_gln: Option<String>,
 
     /// BT-31 — seller VAT identifier (Umsatzsteuer-Identifikationsnummer).
     ///
@@ -643,6 +651,16 @@ impl BillingdConfig {
     /// # Errors
     ///
     /// Names every problem found, so one restart reports all of them.
+    /// The seller's name (BT-27), `None` when absent or blank;
+    /// [`Self::validate`] refuses the start then.
+    #[must_use]
+    pub fn seller_name(&self) -> Option<&str> {
+        self.seller_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+    }
+
     /// The § 14 Abs. 4 Nr. 2 UStG tax identifier this operator invoices under.
     ///
     /// The statute names two and requires one: the USt-IdNr. (BT-31) or the
@@ -680,6 +698,20 @@ impl BillingdConfig {
         // Neither identifier means every document this service issues omits a
         // § 14 Abs. 4 Nr. 2 UStG Pflichtangabe. Fail at startup, like [oidc],
         // not per invoice at 02:00 on the first of the month.
+        // The seller's name is on every Rechnung (§ 14 Abs. 4 Nr. 1 UStG, BT-27)
+        // and every Gebührenbescheid; refused at startup like the tax
+        // identifier, never filled with the tenant.
+        if self.seller_name().is_none() {
+            out.push(
+                Befund::blockiert(
+                    "seller_name",
+                    "refusing to start without `seller_name`: every Rechnung names the seller \
+                     (BT-27) and every Gebührenbescheid its Absender, and the tenant is an \
+                     isolation key, not a name",
+                )
+                .quelle("§ 14 Abs. 4 Nr. 1 UStG"),
+            );
+        }
         if self.seller_tax_identifier().is_none() {
             out.push(
                 Befund::blockiert(
@@ -1283,7 +1315,8 @@ mod straddle_tests {
     fn cfg(pinned_mwst: Option<&str>) -> BillingdConfig {
         let mut v = serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
-            "tenant": "9900357000004",
+            "tenant": "stadtwerke-musterstadt",
+            "seller_name": "Stadtwerke Musterstadt GmbH",
             "productd_url": "http://localhost:9080",
             "edmd_url": "http://localhost:8380",
             "marktd_url": "http://localhost:8080"
@@ -1414,7 +1447,8 @@ mod dated_rate_tests {
     fn cfg(rates: serde_json::Value) -> BillingdConfig {
         serde_json::from_value(serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
-            "tenant": "9900357000004",
+            "tenant": "stadtwerke-musterstadt",
+            "seller_name": "Stadtwerke Musterstadt GmbH",
             "seller_vat_id": "DE123456789",
             "productd_url": "http://localhost:9080",
             "edmd_url": "http://localhost:8380",
@@ -1502,7 +1536,8 @@ mod dated_rate_tests {
     fn a_year_less_behg_rate_is_refused_at_parse() {
         let parsed = serde_json::from_value::<BillingdConfig>(serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
-            "tenant": "9900357000004",
+            "tenant": "stadtwerke-musterstadt",
+            "seller_name": "Stadtwerke Musterstadt GmbH",
             "productd_url": "http://localhost:9080",
             "edmd_url": "http://localhost:8380",
             "marktd_url": "http://localhost:8080",
@@ -1773,7 +1808,8 @@ mod seller_identity_tests {
     fn cfg(vat_id: Option<&str>, tax_number: Option<&str>) -> BillingdConfig {
         let mut v = serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
-            "tenant": "9900357000004",
+            "tenant": "stadtwerke-musterstadt",
+            "seller_name": "Stadtwerke Musterstadt GmbH",
             "productd_url": "http://localhost:9080",
             "edmd_url": "http://localhost:8380",
             "marktd_url": "http://localhost:8080"
@@ -1804,7 +1840,8 @@ mod seller_identity_tests {
     fn e_rechnung(gesamtumsatz: serde_json::Value) -> anyhow::Result<BillingdConfig> {
         let mut v = serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
-            "tenant": "9900357000004",
+            "tenant": "stadtwerke-musterstadt",
+            "seller_name": "Stadtwerke Musterstadt GmbH",
             "productd_url": "http://localhost:9080",
             "edmd_url": "http://localhost:8380",
             "marktd_url": "http://localhost:8080",
@@ -1927,5 +1964,18 @@ mod seller_identity_tests {
     #[test]
     fn a_configured_seller_validates() {
         assert!(als_ergebnis(cfg(Some("DE123456789"), None).validate()).is_ok());
+    }
+
+    /// Every Rechnung and Gebührenbescheid names the seller: without
+    /// `seller_name` the start is refused at that path, and the tenant is
+    /// never printed in its place.
+    #[test]
+    fn a_missing_seller_name_refuses_the_start() {
+        for name in [None, Some("  ")] {
+            let mut c = cfg(Some("DE123456789"), None);
+            c.seller_name = name.map(str::to_owned);
+            let pfade: Vec<String> = c.validate().into_iter().map(|b| b.pfad).collect();
+            assert_eq!(pfade, ["seller_name"], "{name:?}");
+        }
     }
 }

@@ -1413,8 +1413,18 @@ mod tests {
                 .expect("in-memory store"),
         );
         let state = CommandsApiState {
-            tenant_id: TenantId::from_party_id(UENB),
-            sender_party_id: UENB.to_owned(),
+            tenant_id: TenantId::from_tenant("uenb-test"),
+            tenant: "uenb-test".to_owned(),
+            parties: Arc::new(
+                makod::party_registry::MpIdRegistry::from_config(&[makod::config::PartyConfig {
+                    mp_id: UENB.to_owned(),
+                    roles: vec!["UNB".to_owned()],
+                    primary: true,
+                    agency: None,
+                    as4: None,
+                }])
+                .expect("one ÜNB party"),
+            ),
             configured_marktrollen: vec!["ÜNB".to_owned()],
             max_body_bytes: 1_048_576,
             snapshot_interval: 100,
@@ -1424,7 +1434,7 @@ mod tests {
             snapshot_store: store.as_snapshot_store(),
             malo_cache: Arc::new(makod::malo_cache::SlateDbMaloCache::new(
                 (*store).clone(),
-                TenantId::from_party_id(UENB),
+                TenantId::from_tenant(UENB),
             )),
             maloid_result_cache: makod::malo_cache::MaloIdentResultCache::new((*store).clone()),
             store: Arc::clone(&store),

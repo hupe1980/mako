@@ -15,34 +15,27 @@ use energy_billing::en16931_map::{EN16931_SPEC_ID, XRECHNUNG_SPEC_ID};
 
 use crate::config::BillingdConfig;
 
-/// BT-34, the seller's own electronic address — but only if it is really a GLN.
+/// BT-34, the seller's own electronic address under EAS `0088` — only from
+/// `seller_gln`, and only if it is really a GLN.
 ///
-/// A BDEW-Codenummer is issued through GS1 and *is* a GLN, so declaring the
-/// operator's MP-ID under EAS `0088` is true for a correctly configured tenant.
-/// It is false for a mistyped one, and a scheme code alone cannot tell the
-/// difference: `BR-CL-25` validates the *scheme* and accepts any content. That is
-/// the same defect this crate already fixed on the buyer side — a MaLo-ID
-/// dressed up as a GLN — and it was still here on the seller side, unnoticed,
-/// because nothing checks a claim no rule can test.
-///
-/// `Identifier::eas` verifies the GS1 check digit and length for `0088`. On
-/// failure the term is
-/// **omitted**: BT-34 is optional in EN 16931 core, so a retail invoice stays
-/// valid, and omitting is the honest encoding of "we do not have one". A
-/// misconfigured operator therefore ships documents without BT-34 rather than
-/// documents asserting a GLN that no receiver can resolve — and finds out at the
-/// B2G path, where XRechnung requires the term and `render_xrechnung_cii`
-/// refuses to write a rejectable file.
-fn seller_electronic_address(tenant: &str) -> Option<Identifier> {
-    match Identifier::eas(tenant, "0088") {
+/// A BDEW- or DVGW-Codenummer is not a GLN (only a GS1-issued code is; NAD
+/// DE3055 `9` versus `293`/`332`), and the tenant is an isolation key, so
+/// neither is offered as one. `Identifier::eas` verifies the GS1 check digit
+/// and length for `0088`, because `BR-CL-25` validates the *scheme* and
+/// accepts any content. Absent or failing, the term is **omitted**: BT-34 is
+/// optional in EN 16931 core, so a retail invoice stays valid, and the B2G path
+/// — where XRechnung requires the term — refuses in `render_xrechnung_cii`
+/// rather than writing a rejectable file.
+fn seller_electronic_address(gln: Option<&str>) -> Option<Identifier> {
+    let gln = gln?;
+    match Identifier::eas(gln, "0088") {
         Ok(id) => Some(id),
         Err(e) => {
             tracing::warn!(
-                tenant,
+                gln,
                 error = %e,
-                "seller MP-ID is not a valid GS1 GLN — BT-34 omitted rather than \
-                 claiming a GLN this identifier is not. Check the `tenant` setting \
-                 against the operator's BDEW-Codenummer",
+                "seller_gln is not a valid GS1 GLN — BT-34 omitted rather than claiming a \
+                 GLN this identifier is not",
             );
             None
         }
@@ -52,24 +45,17 @@ fn seller_electronic_address(tenant: &str) -> Option<Identifier> {
 /// BG-4 SELLER, from the operator's `[seller]` configuration. Fills BG-6 contact
 /// and the split BG-5 address so the seller side satisfies XRechnung's BR-DE-2..7.
 fn seller_party(cfg: &BillingdConfig) -> Party {
-    let name = cfg
-        .seller_name
-        .clone()
-        .unwrap_or_else(|| cfg.tenant.clone());
+    // BT-27: `config::validate` refuses the start without it, and the tenant
+    // is never printed in its place.
     let s = cfg.seller.as_ref();
     Party {
-        name: Some(name.clone()),
+        name: cfg.seller_name().map(str::to_owned),
         vat_identifier: cfg.seller_vat_id.clone(),
         // BT-32 — the other half of the § 14 Abs. 4 Nr. 2 UStG disjunction,
         // carried whenever configured. `config::validate` guarantees at least
         // one of the two exists.
         tax_registration: cfg.seller_tax_number.clone(),
-        // BT-34 electronic address: the LF's own MP-ID under EAS 0088 (GLN).
-        // A BDEW-Codenummer *is* a GLN — BDEW issues them through GS1 — so the
-        // claim is true for a correctly configured operator, and `eas` checking
-        // the GLN is what makes "correctly configured" checkable rather than
-        // assumed.
-        electronic_address: seller_electronic_address(&cfg.tenant),
+        electronic_address: seller_electronic_address(cfg.seller_gln.as_deref()),
         address: PostalAddress {
             line1: s.and_then(|s| s.street.clone()),
             line2: s.and_then(|s| s.address_line2.clone()),
@@ -84,7 +70,9 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
             // BT-41 defaults to the company name: XRechnung wants a contact
             // point, and "the supplier" is a truthful one where the operator
             // has not named a department.
-            name: s.and_then(|s| s.contact_name.clone()).or(Some(name)),
+            name: s
+                .and_then(|s| s.contact_name.clone())
+                .or_else(|| cfg.seller_name().map(str::to_owned)),
             phone: s.and_then(|s| s.phone.clone()),
             email: s.and_then(|s| s.email.clone()),
         },
@@ -289,7 +277,7 @@ pub fn build(
             means: Some(en16931::invoice::PaymentMeans::CreditTransfer(vec![
                 en16931::invoice::CreditTransfer {
                     account_identifier: Some(iban),
-                    account_name: cfg.seller_name.clone(),
+                    account_name: cfg.seller_name().map(str::to_owned),
                     provider_identifier: cfg.seller_bic.clone(),
                 },
             ])),

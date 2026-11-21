@@ -170,7 +170,7 @@ concurrently and returns one object:
   "malo_id": "51238696012",
   "tenant": "9900357000004",
   "kundentyp": "B2C",
-  "versorgung":    { "lieferstatus": "Beliefert", "lf_mp_id": "9900357000004" },
+  "versorgung":    { "lieferstatus": "Beliefert", "lf_mp_id": "9900357000028" },
   "balance":       { "balance_ct": -4500, "currency": "EUR" },
   "last_invoice":  [ { "id": "…", "total_brutto_eur": "126.14" } ],
   "meter_summary": { "arbeitsmenge_kwh": "312.5", "sparte": "STROM" },
@@ -212,7 +212,11 @@ collection without a structured address and sets no end date for that, and
 
 ```toml
 # portald.toml
-tenant = "9900357000004"
+tenant = "stadtwerke-musterstadt"
+
+# Required — the Lieferant's MP-ID a self-service SEPA mandate is registered
+# under; must match accountingd's `lf_mp_id`.
+lf_mp_id = "9900357000028"
 
 # Required — the authorization authority for every route.
 vertragd_url     = "http://vertragd:9780"
@@ -232,10 +236,6 @@ outputd_url     = "http://outputd:9880"
 # einsd_api_key       = "env:PORTALD_EINSD_SERVICE_KEY"
 # marktd_api_key      = "env:PORTALD_MARKTD_SERVICE_KEY"
 # outputd_api_key     = "env:PORTALD_OUTPUTD_SERVICE_KEY"
-
-# MP-ID a self-service SEPA mandate is registered under. Defaults to `tenant`;
-# must match accountingd's `lf_mp_id`.
-# lf_mp_id = "9900357000004"
 
 # How the public Rechnung-nachrechnen page addresses the reader: sie | du.
 # nachrechnen_anrede = "sie"

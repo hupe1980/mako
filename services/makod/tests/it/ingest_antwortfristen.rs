@@ -72,7 +72,7 @@ async fn dispatcher() -> (SlateDbStore, EdifactIngestDispatcher) {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(GNB),
+        TenantId::from_tenant(GNB),
     );
     (store, d)
 }
@@ -96,7 +96,7 @@ async fn registered_due(
     let deadlines = store
         .as_deadline_store()
         .for_stream(&StreamId::for_process(
-            TenantId::from_party_id(GNB),
+            TenantId::from_tenant(GNB),
             &process_id,
         ))
         .await

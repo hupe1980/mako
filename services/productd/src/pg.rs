@@ -1571,7 +1571,7 @@ pub const FEED_CATEGORIES: &[&str] = &["STROM", "GAS", "WAERME", "SOLAR", "WAERM
 /// Query parameters for `GET /api/v1/comparison-feed`.
 #[derive(Debug, serde::Deserialize)]
 pub struct ComparisonFeedQuery {
-    /// Filter by LF operator (defaults to `cfg.tenant`).
+    /// Filter by LF operator (defaults to the configured `lf_mp_id`).
     pub lf_mp_id: Option<String>,
     /// Filter by Sparte: `STROM` | `GAS` | `WAERME`.
     pub sparte: Option<String>,

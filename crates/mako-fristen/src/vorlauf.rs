@@ -124,6 +124,14 @@ pub enum Anchor {
     /// Fortführung, the Überlassung der Einrichtung, the Ende des
     /// Abrechnungszeitraums or the Versand der Zusatz-/Kontrollablesung.
     Leistungsende,
+    /// The last day of the Umsetzungszeitraum a Bestellung of a
+    /// Messlokationsänderung names (BDEW-AWH Änderung der Technik an
+    /// Lokationen V1.1).
+    UmsetzungszeitraumEnde,
+    /// The event that sends a Berechnungsformel: the MSB's Zuordnung to a
+    /// Messlokation in the Lokationsbündel, or the change of the formula
+    /// becoming known (WiM Strom Teil 2 Kap. 2.3.2 Nr. 1).
+    BerechnungsformelAnlass,
 }
 
 impl Anchor {
@@ -143,6 +151,10 @@ impl Anchor {
             Self::Umstellungszeitpunkt => "Umstellungszeitpunkt",
             Self::Sperrtermin => "Sperrtermin",
             Self::Leistungsende => "Leistungsende",
+            Self::UmsetzungszeitraumEnde => "letzter Tag des Umsetzungszeitraums",
+            Self::BerechnungsformelAnlass => {
+                "Zuordnung des MSB zur Messlokation oder Bekanntwerden der Veränderung der Berechnungsformel"
+            }
         }
     }
 }
@@ -678,6 +690,17 @@ pub const fn esa_zweite_antwort_spaetester_uet(zahlungsziel: Date) -> Date {
 /// its PID. A PID alone cannot pick the right row.
 pub const WIM: &[VorlaufObligation] = &[
     VorlaufObligation {
+        key: "wim.berechnungsformel",
+        pid: Some(25_001),
+        pid_gas: None,
+        name: "Übermittlung der Berechnungsformel an jeden MSB des Lokationsbündels",
+        anchor: Anchor::BerechnungsformelAnlass,
+        shape: VorlaufShape::LatestWerktageAfter(3),
+        source: "WiM Strom Teil 2 Kap. 2.3.2 Nr. 1 — spätester ÜT ist der 3. WT nach der \
+                 Zuordnung des MSB zur Messlokation im Lokationsbündel oder dem Bekanntwerden \
+                 der Veränderung der Berechnungsformel",
+    },
+    VorlaufObligation {
         key: "wim.anmeldung-msb",
         pid: Some(55_042),
         pid_gas: Some(44_042),
@@ -799,6 +822,20 @@ pub const WIM: &[VorlaufObligation] = &[
         shape: VorlaufShape::LatestWerktageAfter(3),
         source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 5 — spätester ÜT ist der 3. WT \
                  nach dem ursprünglich bestätigten Änderungstermin",
+    },
+    // The AWH path orders against a Umsetzungszeitraum rather than a
+    // Änderungstermin, so its Scheitern counts from that period's last day.
+    VorlaufObligation {
+        key: "wim.scheitern-aenderung-technik.awh",
+        // IFTSTA 21027 to the NB, 21025 to the LF: one window, two PIDs.
+        pid: None,
+        pid_gas: None,
+        name: "Scheitern der Änderung der Technik (AWH Änderung der Technik)",
+        anchor: Anchor::UmsetzungszeitraumEnde,
+        shape: VorlaufShape::LatestWerktageAfter(3),
+        source: "BDEW-AWH Änderung der Technik an Lokationen V1.1 Kap. 2.1.2 / 2.2.2 Nr. 6 \
+                 (S. 10 / S. 18) — spätester ÜT ist der 3. WT nach dem letzten Tag des \
+                 Umsetzungszeitraums",
     },
     VorlaufObligation {
         key: "wim.vorabinformation-ersteinbau-ims",
@@ -1789,5 +1826,20 @@ mod fruehester_lieferbeginn_tests {
             fruehester_lieferbeginn(Sparte::Gas, false, date!(2026 - 11 - 23), CAL),
             date!(2026 - 11 - 23)
         );
+    }
+}
+
+#[cfg(test)]
+mod berechnungsformel_tests {
+    use super::*;
+
+    /// WiM Strom Teil 2 Kap. 2.3.2 Nr. 1: the NB sends the Berechnungsformel by
+    /// the 3. WT after its Anlass.
+    #[test]
+    fn the_berechnungsformel_is_sent_by_the_third_werktag() {
+        let o = vorlauf("wim.berechnungsformel").expect("catalogued");
+        assert_eq!(o.pid, Some(25_001));
+        assert_eq!(o.anchor, Anchor::BerechnungsformelAnlass);
+        assert_eq!(o.shape, VorlaufShape::LatestWerktageAfter(3));
     }
 }

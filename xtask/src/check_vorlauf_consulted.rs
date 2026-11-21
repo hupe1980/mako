@@ -81,6 +81,17 @@ const UNCHECKED: &[(&str, &str)] = &[
          Änderungstermin nor a Durchführungs-IFTSTA, so nothing anchors or discharges it",
     ),
     (
+        "wim.berechnungsformel",
+        "UTILTS 25001 — binds the NB as sender; no door sends a Berechnungsformel, \
+         so nothing anchors or discharges it",
+    ),
+    (
+        "wim.scheitern-aenderung-technik.awh",
+        "has no PID of its own (IFTSTA 21027 to the NB, 21025 to the LF) — binds the MSB's own Scheitern-Meldung after an AWH Bestellung; \
+         `wim-technik-aenderung` records no Umsetzungszeitraum and sends no 21027, so \
+         nothing anchors or discharges it",
+    ),
+    (
         "wim.vorabinformation-ersteinbau-ims.an-lf-und-nb",
         "has no PID: the 3-Monats-Vorabinformation to LF and NB is mako's own outbound \
          obligation when it plays gMSB",

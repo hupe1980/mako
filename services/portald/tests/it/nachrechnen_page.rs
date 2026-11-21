@@ -72,7 +72,7 @@ async fn get(path: &str) -> (StatusCode, String) {
 async fn get_with_headers(path: &str) -> (StatusCode, axum::http::HeaderMap, String) {
     let base = stub_billingd().await;
     let cfg: portald::config::PortaldConfig = toml::from_str(&format!(
-        "tenant = \"9900357000004\"\nvertragd_url = \"{base}\"\nbillingd_url = \"{base}\"\n"
+        "tenant = \"stadtwerke-musterstadt\"\nlf_mp_id = \"9900357000028\"\nvertragd_url = \"{base}\"\nbillingd_url = \"{base}\"\n"
     ))
     .expect("config parses");
     let app = mako_service::build_for_test::<portald::server::Portald>(cfg)

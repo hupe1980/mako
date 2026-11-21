@@ -27,11 +27,12 @@ async fn app() -> axum::Router {
         Arc::new(makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"));
     let malo_cache = Arc::new(makod::malo_cache::SlateDbMaloCache::new(
         (*store).clone(),
-        TenantId::from_party_id(TENANT),
+        TenantId::from_tenant(TENANT),
     ));
     let commands = Arc::new(CommandsApiState {
-        tenant_id: TenantId::from_party_id(TENANT),
-        sender_party_id: TENANT.to_owned(),
+        tenant_id: TenantId::from_tenant(TENANT),
+        tenant: "stadtwerke-test".to_owned(),
+        parties: crate::support::single_party(TENANT),
         configured_marktrollen: vec!["LF".to_owned()],
         max_body_bytes: 1_048_576,
         snapshot_interval: 100,

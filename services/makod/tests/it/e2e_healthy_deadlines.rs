@@ -125,7 +125,7 @@ fn gas_anmeldung() -> GasSupplierChangeCommand {
 #[tokio::test]
 async fn a_healthy_gas_anmeldung_survives_every_deadline() {
     let store = production_store().await;
-    let tenant = TenantId::from_party_id(NB_ID);
+    let tenant = TenantId::from_tenant(NB_ID);
     let process = Process::<GeliGasSupplierChangeWorkflow, _>::new(
         Arc::clone(&store),
         tenant,
@@ -196,7 +196,7 @@ async fn a_healthy_gas_anmeldung_survives_every_deadline() {
 #[tokio::test]
 async fn a_processable_gas_anmeldung_registers_no_aperak_window() {
     let store = production_store().await;
-    let tenant = TenantId::from_party_id(NB_ID);
+    let tenant = TenantId::from_tenant(NB_ID);
     let process = Process::<GeliGasSupplierChangeWorkflow, _>::new(
         Arc::clone(&store),
         tenant,
@@ -247,7 +247,7 @@ fn msb_anmeldung(pid: u32) -> DeviceChangeCommand {
 /// window it registered fires on the way, and the Zuordnung still completes.
 async fn healthy_beginn_msb(pid: u32, strom: bool) {
     let store = production_store().await;
-    let tenant = TenantId::from_party_id(NB_ID);
+    let tenant = TenantId::from_tenant(NB_ID);
     let process = Process::<WimDeviceChangeWorkflow, _>::new(
         Arc::clone(&store),
         tenant,
@@ -357,7 +357,7 @@ async fn an_unowned_label_closes_no_clearing_window() {
     use makod::orchestrator::deadline_dispatch::Fired;
 
     let store = production_store().await;
-    let tenant = TenantId::from_party_id(NB_ID);
+    let tenant = TenantId::from_tenant(NB_ID);
     let process = Process::<MabisBillingWorkflow, _>::new(
         Arc::clone(&store),
         tenant,

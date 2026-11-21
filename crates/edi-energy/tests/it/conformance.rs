@@ -538,3 +538,98 @@ fn the_meldepunkt_id_selects_the_sg27_branch() {
         "[56] demands the Messlokation SG27 — got {missing:?}"
     );
 }
+
+/// The MSB's Antwort auf Berechnungsformel (UTILTS 25010) — one
+/// `STS+E01` per Zeitraum out of `E_0218`, the 25001's Vorgangsnummer in
+/// `RFF+TN`, and the `FTX+ACB` beside an `A99` (UTILTS AHB [533], [534],
+/// [2005]) — validates against its AHB profile.
+#[cfg(feature = "utilts")]
+#[test]
+fn the_antwort_auf_berechnungsformel_validates() {
+    use edi_energy::builders::{UtiltsBuilder, UtiltsVorgang};
+    let vorgang = UtiltsVorgang::new("ANTWORT0002", 25010)
+        .antwort("A99", 1)
+        .antwort_freitext("Die Messlokation fehlt im Lokationsbündel.")
+        .ref_transaction("VORGANG0001");
+    let bytes = UtiltsBuilder::new(edi_energy::Release::new("1.1e"))
+        .sender("9900259000002")
+        .receiver("9900259000001")
+        .document_id("DOK25010")
+        .document_date("202610150800")
+        .add_vorgang(vorgang)
+        .serialize()
+        .expect("serialises");
+    let msg = Platform::with_all_profiles().parse(&bytes).expect("parses");
+    let report = msg
+        .validate_on_date(conformance_reference_date())
+        .expect("validates");
+    assert!(
+        report.is_valid(),
+        "{}\n{:#?}",
+        String::from_utf8_lossy(&bytes),
+        report.errors()
+    );
+}
+
+/// The NB's Änderung der Lokationsbündelstruktur to the MSB (UTILMD 55173):
+/// every object as an `SG5 LOC` of the Verwendungszeitraum, the structure in
+/// `SG8 SEQ+Z78 RFF+Z31`, and one `SEQ+Z58` per object with its `RFF+Z33`
+/// Objektcode (UTILMD AHB Strom 2.2, Codeliste der Lokationsbündelstrukturen
+/// 1.0, 9992 00000 002 6).
+#[cfg(feature = "utilmd")]
+#[test]
+fn an_aenderung_der_lokationsbuendelstruktur_validates() {
+    use edi_energy::builders::UtilmdBuilder;
+    use edi_energy::utilmd_codes::Transaktionsgrund;
+    use edi_energy::{Lokationstyp, Pruefidentifikator, Release};
+    const MALO: &str = "51238696012";
+    const MELO: &str = "DE0000011000000000000000012345678";
+    let bytes = UtilmdBuilder::new(Release::new("S2.2"))
+        .pruefidentifikator(Pruefidentifikator::new(55_173).expect("valid PID"))
+        .sender("9900259000001")
+        .receiver("9900259000002")
+        .document_date("202610140800")
+        .document_code("E03")
+        .message_ref("MSG1")
+        .transaction("VG55173")
+        .transaktionsgrund(Transaktionsgrund {
+            grund: "ZY2".to_owned(),
+            ergaenzung: None,
+            befristet: None,
+        })
+        .location_im_zeitraum(Lokationstyp::Marktlokation, MALO, 1)
+        .location_im_zeitraum(Lokationstyp::Messlokation, MELO, 1)
+        .sg6_segment("RFF", vec![vec!["Z49".into(), String::new(), "1".into()]])
+        .sg6_segment(
+            "DTM",
+            vec![vec!["Z25".into(), "202610142200+00".into(), "303".into()]],
+        )
+        .stammdaten_im_zeitraum("Z78", 1)
+        .rff("Z31", "9992000000026")
+        .done()
+        .stammdaten_im_zeitraum("Z58", 1)
+        .rff("Z18", MALO)
+        .rff("Z33", "9992000001016")
+        .done()
+        .stammdaten_im_zeitraum("Z58", 1)
+        .rff("Z19", MELO)
+        .rff("Z33", "9992000001032")
+        .done()
+        .done()
+        .serialize()
+        .expect("serialises");
+    let msg = Platform::with_all_profiles().parse(&bytes).expect("parses");
+    let report = msg
+        .validate_on_date(conformance_reference_date())
+        .expect("validates");
+    assert!(
+        report.is_valid(),
+        "{}\n{:#?}",
+        String::from_utf8_lossy(&bytes),
+        report
+            .errors()
+            .iter()
+            .map(|f| &f.message)
+            .collect::<Vec<_>>()
+    );
+}

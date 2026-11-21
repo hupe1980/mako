@@ -871,10 +871,12 @@ mod tests {
         use mako_engine::payload::{StammdatenBlock, StammdatenLokation, StammdatenSegment};
         Stammdaten {
             lokationen: vec![StammdatenLokation {
+                zeitraum_id: None,
                 qualifier: "Z16".into(),
                 id: "51238696012".into(),
             }],
             bloecke: vec![StammdatenBlock {
+                zeitraum_id: None,
                 seq: "ZD5".into(),
                 segmente: vec![StammdatenSegment {
                     tag: "RFF".into(),

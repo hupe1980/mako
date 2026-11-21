@@ -46,7 +46,7 @@ async fn malformed_invoic_stream() -> (Arc<SlateDbStore>, TenantId, ProcessId) {
     let store = SlateDbStore::open_in_memory()
         .await
         .expect("in-memory store");
-    let tenant = TenantId::from_party_id(TENANT);
+    let tenant = TenantId::from_tenant(TENANT);
     let process = ProcessId::from_uuid(uuid::Uuid::new_v4());
     let stream = StreamId::for_process(tenant, &process);
     store

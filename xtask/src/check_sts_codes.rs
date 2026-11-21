@@ -35,6 +35,10 @@ const RAW_STS_READERS: &[(&str, &str)] = &[
         "IFTSTA `STS+E01++<code>:<Codeliste>` — reads C556 (element 2) by position",
     ),
     (
+        "utilts_antwortcodes",
+        "UTILTS 25010 `STS+E01++<code>:E_0218::<Zeitraum>` — reads C556 (element 2) by position",
+    ),
+    (
         "iftsta_datenstatus",
         "IFTSTA `STS+Z04+A03:E_0026` — the IFTSTA MIG's Datenstatus rides C555 itself",
     ),

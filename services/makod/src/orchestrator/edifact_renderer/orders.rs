@@ -47,10 +47,7 @@ pub(super) fn render_reqote(
 
     let pid = checked_pid(p.pid, mt)?;
 
-    let sender = p
-        .sender
-        .as_deref()
-        .unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(p.sender.as_deref(), registry, mt)?;
     let receiver = p.receiver.as_deref().unwrap_or(msg.recipient.as_ref());
 
     let explicit_ref = p.message_ref.as_deref().map(msg_ref_from_uuid);
@@ -90,7 +87,7 @@ pub(super) fn render_reqote(
             builder = builder.leistungsbeginn(esa_dtm303(mt, "wunschtermin", termin)?);
         }
         let contact = text(&p.contact).unwrap_or("ESA-Service");
-        let comm = text(&p.contact_comm).unwrap_or_else(|| registry.primary_mp_id());
+        let comm = text(&p.contact_comm).unwrap_or(sender);
         builder = builder.contact(contact, comm);
         if let Some(note) = text(&p.bemerkung) {
             builder = builder.free_text("ACB", note);
@@ -134,7 +131,7 @@ pub(super) fn render_reqote(
 ///    multi-MP-ID deployments.
 /// 2. [`MpIdRegistry::sender_mp_id_for_orders_pid`], narrowed by the payload's
 ///    `sparte` where the PID is shared between Strom and Gas.
-/// 3. [`MpIdRegistry::primary_mp_id`] — final fallback.
+/// 3. The deployment's only MP-ID; with several, the message is refused.
 ///
 /// The receiver comes from `msg.recipient`.
 ///
@@ -163,11 +160,16 @@ pub(super) fn render_orders(
     // to weigh the two roles and warn.
     let sparte = p.sparte;
 
-    // Sender: explicit in payload first, then registry lookup by PID, then primary.
-    let sender = p.sender.as_deref().unwrap_or_else(|| {
-        pid.map(|p| registry.sender_mp_id_for_orders_pid(p, sparte))
-            .unwrap_or_else(|| registry.primary_mp_id())
-    });
+    // Sender: explicit in payload first, then the PID's sending Marktrolle,
+    // then the deployment's only MP-ID.
+    let sender = match p.sender.as_deref() {
+        Some(s) => s,
+        None => super::sender_of(
+            pid.and_then(|p| registry.sender_mp_id_for_orders_pid(p, sparte)),
+            registry,
+            mt,
+        )?,
+    };
 
     // Prefer the caller's Belegnummer (`message_ref`) so the wire UNH reference
     // matches the key the ESA registered its process under — the MSB's ORDRSP
@@ -669,10 +671,14 @@ pub(super) fn render_ordchg(
 
     let pid = checked_pid(p.pid, mt)?;
 
-    let sender = p
-        .sender
-        .as_deref()
-        .unwrap_or_else(|| registry.primary_mp_id());
+    // 39000 is the LF's Stornierung of its Sperrauftrag, so the Sparte names
+    // its sending Marktrolle.
+    let lf = match (pid, p.sparte) {
+        (Some(39_000), Some(mako_engine::types::Sparte::Strom)) => registry.mp_id_for_role("LF"),
+        (Some(39_000), Some(mako_engine::types::Sparte::Gas)) => registry.mp_id_for_role("LFG"),
+        _ => None,
+    };
+    let sender = super::sender_of(p.sender.as_deref().or(lf), registry, mt)?;
 
     let explicit_ref = text(&p.message_ref).map(msg_ref_from_uuid);
     let causation_ref = msg_ref_from_uuid(&msg.causation_event_id.to_string());
@@ -728,7 +734,7 @@ pub(super) fn render_ordchg(
 ///
 /// | Field          | Required | Description                                   |
 /// |----------------|----------|-----------------------------------------------|
-/// | `sender`       | no       | Sender MP-ID (falls back to `registry.primary_mp_id()`)|
+/// | `sender`       | no       | Sender MP-ID (falls back to a single-party deployment's MP-ID)|
 /// | `receiver`     | no       | Receiver MP-ID (falls back to `msg.recipient`)  |
 /// | `document_id`  | no       | BGM document identifier (Auftragsnummer)      |
 /// | `document_code`| no       | BGM DE 1001 (`Z14` on 19101)                  |
@@ -752,10 +758,7 @@ pub(super) fn render_ordrsp(
     let mt = "ORDRSP";
     let p: mako_engine::payload::OrdrspPayload = super::typed_payload(p)?;
 
-    let sender = p
-        .sender
-        .as_deref()
-        .unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(p.sender.as_deref(), registry, mt)?;
     let receiver = p.receiver.as_deref().unwrap_or(msg.recipient.as_ref());
     let document_id = text(&p.document_id);
     let pid = checked_pid(p.pid, mt)?;
@@ -967,10 +970,7 @@ pub(super) fn render_quotes(
     let mt = "QUOTES";
     let p: mako_engine::payload::QuotesPayload = super::typed_payload(p)?;
 
-    let sender = p
-        .sender
-        .as_deref()
-        .unwrap_or_else(|| registry.primary_mp_id());
+    let sender = super::sender_of(p.sender.as_deref(), registry, mt)?;
     let receiver = p.receiver.as_deref().unwrap_or(msg.recipient.as_ref());
     let doc_date = text(&p.document_date)
         .map(|d| dokumentdatum_303(mt, d))

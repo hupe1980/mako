@@ -14,8 +14,8 @@ export interface AccountingdTools {
        */
       malo_id: string;
       /**
-       * The LF MP-ID the account is held under. Defaults to the tenant, as on
-       * the REST route.
+       * The LF MP-ID the account is held under. Defaults to the configured
+       * `lf_mp_id`, as on the REST route.
        */
       lf_mp_id?: string | null;
     };
@@ -219,7 +219,8 @@ export interface AccountingdTools {
        */
       malo_id: string;
       /**
-       * The LF MP-ID the account is held under. Defaults to the tenant.
+       * The LF MP-ID the account is held under. Defaults to the configured
+       * `lf_mp_id`.
        */
       lf_mp_id?: string | null;
       /**
@@ -752,4 +753,4 @@ export interface Zuordnungskandidat {
 export const accountingdUntyped = ["compute_bilanzielle_abgrenzung","get_policy","get_vorauszahlung","import_payments","list_sepa_collections","post_manual_booking","run_abschlag_cycle","run_sepa_collection","trigger_jahresabschluss","update_abschlag"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const accountingdOberflaeche: Record<string, string> = {"get_balance":"696622e6","get_parked_booking":"51c90958","list_credit_payouts":"6141a750","list_dunning":"93c066f9","list_eeg_payouts":"639705d4","list_ledger":"96a22b78","list_overdue":"308dfe74","list_parked_bookings":"ac16f3bd","list_unmatched_payments":"58dafea6","suggest_payment_match":"f8d4b100"};
+export const accountingdOberflaeche: Record<string, string> = {"get_balance":"490f878c","get_parked_booking":"51c90958","list_credit_payouts":"6141a750","list_dunning":"93c066f9","list_eeg_payouts":"639705d4","list_ledger":"fc5c6e44","list_overdue":"308dfe74","list_parked_bookings":"ac16f3bd","list_unmatched_payments":"58dafea6","suggest_payment_match":"f8d4b100"};

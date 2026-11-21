@@ -184,19 +184,19 @@ pub struct CommandResource<'a> {
     pub marktrolle: &'a str,
     /// Prüfidentifikator associated with this command (e.g. `55001`).
     pub pid: u32,
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
 }
 
 /// Resource descriptor for `IngestEdifact` checks.
 pub struct IngestResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
 }
 
 /// Resource descriptor for MaLo admin checks.
 pub struct MaloResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
     /// 11-digit MaLo ID, present for single-record operations; `None` for stats.
     pub malo_id: Option<&'a str>,
@@ -204,7 +204,7 @@ pub struct MaloResource<'a> {
 
 /// Resource descriptor for partner admin checks.
 pub struct PartnerResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
     /// Partner MP-ID, present for single-record operations; `None` for list/import.
     pub mp_id: Option<&'a str>,
@@ -212,19 +212,19 @@ pub struct PartnerResource<'a> {
 
 /// Resource descriptor for metrics endpoint checks.
 pub struct MetricsResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
 }
 
 /// Resource descriptor for API-Webdienste (`:8090`) checks.
 pub struct WebdiensteResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
 }
 
 /// Resource descriptor for process-state reads (§ 6a EnWG unbundling scope).
 pub struct ProcessResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
     /// Workflow name of the process being read (e.g. `"gpke-lf-anmeldung"`).
     ///
@@ -237,19 +237,19 @@ pub struct ProcessResource<'a> {
 
 /// Resource descriptor for Rechnung read checks.
 pub struct RechnungResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
 }
 
 /// Resource descriptor for migration-trigger checks.
 pub struct MigrationResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
 }
 
 /// Resource descriptor for MCP endpoint checks.
 pub struct McpResource<'a> {
-    /// Operator tenant (MP-ID).
+    /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
 }
 

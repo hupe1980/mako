@@ -447,16 +447,16 @@ async fn gas(estate: &Estate) -> anyhow::Result<()> {
         ensure!(
             versorgung
                 .to_string()
-                .contains(&format!("\"lf_mp_id\":\"{}\"", world::STADTWERK_GAS)),
+                .contains(&format!("\"lf_mp_id\":\"{}\"", world::STADTWERK_GAS_LF)),
             "the supply record of {malo} names no Lieferant {}: {versorgung}",
-            world::STADTWERK_GAS
+            world::STADTWERK_GAS_LF
         );
     }
     pass(&format!(
         "marktd: {} Gas Marktlokationen in the grid of NB {}, supplied by LF {}",
         world::GAS_MALOS,
         world::STADTWERK_GAS,
-        world::STADTWERK_GAS
+        world::STADTWERK_GAS_LF
     ));
 
     let malo = world::gas_malo(0);

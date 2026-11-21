@@ -71,16 +71,23 @@ addr      = "0.0.0.0:8080"
 auth_keys = ["dev=dev-makod-key", "agentd=dev-mcp-key"]
 
 [deployment]
+tenant = "stadtwerke-musterstadt"   # the data-isolation key, the same in every daemon
 rollen = ["nb-strom", "lf-strom", "msb-strom", "nb-gas", "lf-gas", "msb-gas"]
 
-[[party]]
+[[party]]                      # one MP-ID per Marktrolle and Sparte
 mp_id   = "9900357000004"
-roles   = ["NB", "LF", "MSB"]
+roles   = ["NB"]
 primary = true
 
 [[party]]
-mp_id = "9800357000004"          # one MP-ID per Sparte and role
-roles = ["GNB", "LFG", "GMSB"]
+mp_id = "9900357000028"
+roles = ["LF"]
+
+[[party]]
+mp_id = "9900357000035"
+roles = ["MSB"]
+
+# … and GNB 9800357000004, LFG 9800357000028, GMSB 9800357000035
 
 [as4]
 allow_no_signing = true        # no [party.as4]: log outbound EDIFACT
@@ -150,8 +157,10 @@ bucket = "my-makod-events"
 prefix = "makod"
 # endpoint = "http://minio:9000"
 
-# The roles this instance plays — each needs exactly one [[party]] MP-ID.
+# The tenant, and the roles this instance plays — each needs exactly one
+# [[party]] MP-ID.
 [deployment]
+tenant = "stadtwerke-musterstadt"
 rollen = ["nb-strom"]
 
 # One entry per Marktpartner-ID. Allgemeine Festlegungen Kap. 2.13 requires a
@@ -294,17 +303,21 @@ declaration that could widen them.
 
 | TOML key | Required | Description |
 |---|---|---|
+| `tenant` | yes | The data-isolation key of every event stream, outbox entry and cache key — any stable string, the same `tenant` the other daemons write; never an MP-ID's stand-in |
 | `rollen` | yes | `lf-strom`, `lf-gas`, `nb-strom`, `nb-gas`, `msb-strom`, `msb-gas`, `esa-strom`, `bkv-strom`, `eiv-strom`. Each needs exactly one `[[party]]` MP-ID; see [Deployment roles](#deployment-roles) |
 
 ### `[[party]]` — operator identities (required)
 
-At least one entry; one per Marktpartner-ID.
+At least one entry; one per Marktrolle and Sparte. „Marktteilnehmer benötigen
+für jede Marktrolle Marktfunktion im Strom- bzw. Gasmarkt eine gesonderte
+Codenummer" (Allgemeine Festlegungen 6.1d Kap. 2.13), so an entry naming two
+Marktrollen is refused; a sub-qualifier names its role (`VNB` beside `NB`).
 
 | TOML key | Required | Description |
 |---|---|---|
 | `mp_id` | yes | 13-digit BDEW- (`99…`) or DVGW-Codenummer (`98…`) or GS1 GLN. An EIC is refused: it is not an MP-ID (BDEW-AWH Identifikatoren V1.2 Kap. 2.1, S. 4). A Gas role under a `99…` code, or a Strom role under a `98…` code, is refused (BDEW-AWH Identifikatoren V1.2 Kap. 2.2, S. 5: Stelle 1+2 „99 = BDEW/Strom", „98 = DVGW/Gas") |
 | `roles` | yes | Case-insensitive. Strom: `NB`, `ANB`, `VNB` (`nb-strom`), `LF` (`lf-strom`), `MSB`, `NMSB`, `AMSB` (`msb-strom`), `ESA` (`esa-strom`), `BKV` (`bkv-strom`), `EIV` (`eiv-strom`). Gas: `GNB` (`nb-gas`), `LFG` (`lf-gas`), `GMSB` (`msb-gas`). Each must belong to a declared `rollen` token; `UNB`, `BIKO`, `DP`, `BTR`, `MGV`, `FNB`, `KN` and `RB` have no module and are refused |
-| `primary` | no | Storage partition key (derives the `TenantId`) and default sender MP-ID; the first entry when none is marked |
+| `primary` | no | The MP-ID a CONTRL answers under for an interchange addressed to none of the own MP-IDs; the first entry when none is marked |
 | `agency` | no | NAD DE 3055 override, one of `9`, `293`, `332` — the MIGs' NAD code list (UTILMD MIG Strom S2.2 S. 32–33, UTILMD MIG Gas G1.2 S. 17–18); anything else is refused. Derived from the MP-ID otherwise, by the same rule that renders the NAD: `99…` → `293`, `98…` → `332`, other 13 digits → `9` |
 
 ### `[http]` / `[authz]` — REST API
@@ -329,19 +342,24 @@ OIDC issuer, and when neither a policy directory nor `permit_all` is set.
 `[deployment] rollen` decides which domain modules register;
 `startup::MODULE_TABLE` maps each role to its modules. Startup — and `--check` —
 refuses a configuration that declares no role, a declared role without exactly
-one `[[party]]` MP-ID, an MP-ID for a role the deployment does not declare, and
-a `[[party]]` role no module answers for (`UNB`, `BIKO`, `FNB`, `MGV`, `KN`,
+one `[[party]]` MP-ID, an MP-ID for a role the deployment does not declare, a
+`[[party]]` naming two Marktrollen, and a `[[party]]` role no module answers for (`UNB`, `BIKO`, `FNB`, `MGV`, `KN`,
 `DP`, `BTR`, `RB`). One MP-ID per role and Sparte is BDEW-AWH
 Identifikatoren V1.2 Kap. 2.1 (S. 4): „Für jede Sparte (Gas bzw. Strom) und
 jede Rolle hat ein Markteilnehmer genau eine MP-ID."
 
 ```toml
 [deployment]
+tenant = "stadtwerke-musterstadt"
 rollen = ["nb-strom", "msb-strom"]
 
 [[party]]
 mp_id = "9900357000004"
-roles = ["NB", "MSB"]
+roles = ["NB"]
+
+[[party]]
+mp_id = "9900357000035"
+roles = ["MSB"]
 ```
 
 | `rollen` token | `[[party]]` roles | Modules registered |
@@ -374,7 +392,7 @@ Every build links every domain crate; makod has no role cargo features and
 enables SlateDB through its `mako-engine` dependency, so a plain
 `cargo build -p makod` is the binary every deployment runs. The declaration
 selects registrations, and `--marktrollen` additionally refuses commands at runtime. Declaring every
-role registers the full **82 workflows over 499 Prüfidentifikatoren**, and the
+role registers the full **83 workflows over 499 Prüfidentifikatoren**, and the
 startup log records the counts a declaration registers. Which principal may
 read which role's processes is the Cedar policy's decision
 ([Authorization](#authorization)).
@@ -468,7 +486,7 @@ workload identity).
 - Only asymmetric algorithms (RS256/384/512, ES256/384, PS256/384/512); `HS*`
   is rejected.
 - `iss`, `aud` and `exp` are checked on every token.
-- **`mako_tenant` must equal the primary MP-ID**, and a missing claim is
+- **`mako_tenant` must equal `[deployment] tenant`**, and a missing claim is
   rejected: in a shared realm another operator's token is otherwise
   cryptographically valid here.
 - The JWT `sub` becomes the Cedar principal ID (for a Kubernetes service account,
@@ -995,7 +1013,7 @@ The CONTRL Empfangsbestätigung is owed for a DVGW interchange too (CONTRL AHB
 | **A spawn is one atomic write, on every door** | Events, outbox entries, deadlines and correlation-index entries commit in one SlateDB transaction — inbound message, ERP command or API-Webdienste request alike |
 | **A settled process yields its key** | Each initiating arm asks the replayed process state (`OccupiesBusinessKey`): settled yields, live keeps. An INVOIC is keyed on its own message reference |
 | **One business key, one process** | Lookup→spawn is serialised per business key on one lock map shared by ingest and the command door, so two initiating messages or commands for one MaLo take turns instead of producing `AmbiguousProcess` later |
-| **Self-addressed messages meet the network's standard** | The [loopback](#integrated-operators-nb-msb-same-mp-id) runs the same pre-send AHB conformance gate, refuses an interchange that will not parse back, and treats "dispatched nothing" as an error — except when no workflow for the receiving side is compiled in, where it acknowledges |
+| **Self-addressed messages meet the network's standard** | The [loopback](#integrated-operators-nb-lf-and-msb-in-one-deployment) runs the same pre-send AHB conformance gate, refuses an interchange that will not parse back, and treats "dispatched nothing" as an error — except when no workflow for the receiving side is compiled in, where it acknowledges |
 
 The business-key lock is in-process; that suffices because the data-directory
 lock makes makod a single writer.
@@ -1114,7 +1132,7 @@ Prüfmitteilung name.
 
 | Field | Source |
 |---|---|
-| `sender_mp_id` | The `[[party]]` MP-ID of the role (primary as fallback) |
+| `sender_mp_id` | The `[[party]]` MP-ID of the acting role; a command whose role the deployment holds under several MP-IDs names it (`anfragender`, `besteller`) or is refused |
 | `receiver_mp_id` | MaLo cache (`data_market_location_network_operators`) |
 | `pruefidentifikator` | The command name |
 | `message_ref` | Generated, replay-stable |
@@ -1256,6 +1274,8 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `gpke.stornierung.ablehnen` | `NB` | GPKE | 55024 | NB refuses it — `E14` with `bemerkung`, `Z14` or `ZE1` (`S_0087`) |
 | `gpke.geschaeftsdatenanfrage.anfragen` | `LF` · `MSB` | GPKE | 17132 | LF or MSB asks the NB for a Lokation's Stammdaten (ORDERS, `BGM+Z14` with the Anfrage-Nummer); answer due 1 WT after the Anfrage (GPKE Teil 4 Kap. 3.2 Nr. 2) |
 | `gpke.geschaeftsdatenanfrage.beantworten` | `NB` | GPKE | 55035 · 55095 · 55060 | NB answers with the Stammdaten and the Lokationsbündel marktd holds on the Stichtag (UTILMD, `RFF+AAV` = the Anfrage-Nummer); `503 marktd_unavailable` / `422 stammdaten_unvollstaendig` naming each fact, nothing sent |
+| `gpke.lokationsbuendel.aendern` | `NB` | GPKE | 55173 · 55175 | NB sends its own change of the Lokationsbündelstruktur to the MSB (55173) or the LF (55175), built from the bündel marktd holds on the Gültigkeitstag — every object as `SG5 LOC` of Zeitraum 1, `SEQ+Z78 RFF+Z31`, one `SEQ+Z58` with its `RFF+Z33` per object; `422 stammdaten_unvollstaendig` naming each missing Objektcode, nothing sent; Rückmeldung 55177/55180 by the 2. WT |
+| `gpke.berechnungsformel.senden` | `NB` | WiM | 25001 | NB sends an MSB of the bündel the Berechnungsformel edmd computes the virtual Marktlokation with (UTILTS, one Verwendungszeitraum, every `SEQ+Z37` Bestandteil), held to its AHB before anything is written; the 25010 is read through `E_0218` and 5 WT of silence is Zustimmung |
 | `gpke.geschaeftsdatenanfrage.ablehnen` | `NB` | GPKE | 19101 | NB refuses the Anfrage (ORDRSP, `RFF+ON`; `E_0441` for an LF, `E_0443` for an MSB) |
 | `geli.geschaeftsdatenanfrage.anfragen` | `LF` · `MSB` | GeLi Gas | 17101 · 17126 | LF (17101) or MSB (17126) asks the Gasnetzbetreiber for a Lokation's Stammdaten; answer due within 10 WT (BK7-24-01-009 Anlage Kap. 4.4) |
 | `geli.geschaeftsdatenanfrage.beantworten` | `NB` | GeLi Gas | 44035 · 44060 | GNB answers the Anfrage with the Stammdaten (UTILMD) |
@@ -1267,7 +1287,7 @@ at render time (`tests/it/e2e_gpke_antwort_conformance.rs`).
 | `wim.zuordnung.bestaetigen` | `NB` | WiM | 21012 | NB makes the Zuordnung from the reported date, 00:00 Uhr |
 | `wim.zuordnung.ablehnen` | `NB` | WiM | 21011 | NB records the MSB-Scheitermeldung; the MSBA stays assigned |
 | `wim.preisanfrage.angebot-senden` | `MSB` | WiM | 15001/15002/15004/15005 | MSB answers a Preisanfrage with the QUOTES Angebot the REQOTE's PID pairs with, back to its sender |
-| `wim.preisanfrage.anfragen` | `NMSB`, `MSB`, `LF` or `NB` | WiM | 35001/35002/35004/35005 | Requester sends the REQOTE; the MSB's QUOTES resumes the process by the location. Answer window per PID: 35001 4 WT, 35002 5 WT, 35005 10 WT, 35004 none |
+| `wim.preisanfrage.anfragen` | `NMSB`, `MSB`, `LF` or `NB` | WiM | 35001/35002/35004/35005 | Requester sends the REQOTE; the MSB's QUOTES resumes the process by the location. Answer window per PID: 35001 4 WT, 35002 5 WT, 35005 5 WT, 35004 none |
 | `wim.ersteinbau.vorabinformation-senden` | `MSB` | WiM | 21029 | gMSB announces the Ersteinbau eines iMS to the wMSB; refused later than 3 Monate und 3 WT before the Umstellungszeitpunkt (WiM Teil 1 Kap. 3.5.2 Nr. 1). Opens the wMSB's 3-WT answer window |
 | `wim.ersteinbau.scheitern-melden` | `MSB` | WiM | 21027/21025 | wMSB reports the Scheitern of its `A02` Eigenausbau (`Z74`/`Z75`) to every role of the Use-Case: 21027 to the gMSB and the NB, 21025 to the LF; marktd names NB and LF, an unresolved one is escalated by name |
 | `wim.ersteinbau.beantworten` | `MSB` | WiM | 21030/21031 | wMSB answers the Vorabinformation; the `E_0233` code picks the PID — `A03` 21030, `A01`/`A02`/`A04` 21031 |
@@ -1405,6 +1425,8 @@ Only fields the ERP owns; MP-IDs are resolved by the engine.
 | `geli.stammdaten-aenderung.senden` | `malo_id`, `pid` (`44112`/`44123`/`44175`/`44109`/`44120`), `empfaenger_mp_id`, `aenderungsdatum`, `vertragsbeginn` (`YYYYMMDD`), `gruppen` (the changed groups — `TERMIN_NETZNUTZUNGSABRECHNUNG` … `MARKTLOKATIONSANSCHRIFT` on a 44112, `ABRECHNUNGSINTERVALL_LF`, `GRUPPENZUORDNUNG`, `KUNDE_DES_LF`, `KORRESPONDENZANSCHRIFT_KUNDE_LF` on a 44109; none on a 44123, 44175 or 44120); on a 44109 the LF's `abrechnungsintervall_monate`, `haushaltskunde`, `kunde`, on a 44120 its `bilanzkreis` |
 | `gpke.geschaeftsdatenanfrage.anfragen` | `lokation_id`, `nb_mp_id`, `anfrage_nummer` (optional, an..35) |
 | `gpke.geschaeftsdatenanfrage.beantworten` | `anfragender_mp_id`, `anfrage_nummer`, `antwort_pid`, `stichtag` (optional, `YYYY-MM-DD`; absent = the Berlin day of sending) — the Stammdaten are read from marktd⁸ |
+| `gpke.lokationsbuendel.aendern` | `malo_id`, `pid` (55173 or 55175), `empfaenger_mp_id`, `gueltig_ab` (`YYYY-MM-DD`) — the bündel is read from marktd |
+| `gpke.berechnungsformel.senden` | `empfaenger_mp_id`, `formel` — edmd's `GET /api/v1/virtual/{id}/berechnungsformel` answer as served |
 | `gpke.geschaeftsdatenanfrage.ablehnen` | `anfragender_mp_id`, `anfrage_nummer`, `anfragender` (`LF`/`MSB`), `antwortcode` |
 | `wim.ersteinbau.vorabinformation-senden` | `melo_id`, `wmsb_mp_id`, `umstellungszeitpunkt` (YYYY-MM-DD) |
 | `wim.ersteinbau.beantworten` | `melo_id`, `antwortcode` (`E_0233`) |
@@ -1610,11 +1632,14 @@ The `ReceiverRole` decides the side: a document addressed to `A27` never
 reaches a Netzbetreiber workflow, and a deployment without `eiv-strom` skips it
 (and dead-letters it) rather than answering as EIV.
 
-### Integrated operators (NB + MSB, same MP-ID)
+### Integrated operators (NB, LF and MSB in one deployment)
 
-A Stadtwerke operating as NB and MSB under one MP-ID lists both roles on its
-`[[party]]`. For multi-role commands `marktrolle` selects the qualifier (`DDM`
-NB, `MS` MSB) and the workflow variant — a dispatch hint, not an identity claim.
+A Stadtwerk that is NB, LF and MSB runs the roles in one makod, one
+`[[party]]` per role and Sparte, each with its own Codenummer (Allgemeine
+Festlegungen 6.1d Kap. 2.13). Every message names the sending role's MP-ID, so
+a counterparty — and the Stadtwerk's own other roles — see the role, not the
+company. For multi-role commands `marktrolle` selects the qualifier (`DDM` NB,
+`MS` MSB) and the workflow variant.
 
 #### In-process loopback for self-addressed outbox messages
 
@@ -2171,7 +2196,9 @@ against the release profile.
 2. The PID's sending Marktrolle from the *Anwendungsübersicht
    Prüfidentifikatoren* 4.0, narrowed by `payload["sparte"]` for shared PIDs
    (`17115`–`17117`).
-3. The primary MP-ID, with a warning naming the PID.
+3. The deployment's only MP-ID, when it has a single `[[party]]`. With
+   several, the message is refused (`MissingField sender`) and dead-lettered
+   rather than sent under another Marktrolle's code.
 
 `orders_sender_coverage` pins step 2 for every routed ORDERS PID; `17118`
 (sender: weiterer MSB, GPKE Teil 3) and `17301` (RB HKN-R, receive-only) are

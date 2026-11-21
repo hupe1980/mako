@@ -9,7 +9,9 @@
 //!
 //! [`eeg-billing`]: eeg_billing
 
-use crate::models::{AUSFALLVERGUETUNG, KWKG_ZUSCHLAG, MIETERSTROM, VERGUETUNG};
+use crate::models::{
+    AUSFALLVERGUETUNG, KWKG_ZUSCHLAG, MIETERSTROM, UNENTGELTLICHE_ABNAHME, VERGUETUNG,
+};
 use anyhow::Context as _;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -40,8 +42,8 @@ pub struct AnlageUpsertRequest {
     /// `"VOLLEINSPEISUNG"` (§48 Abs. 2a bonus) or `"KWK_ZUSCHLAG"` (KWKG).
     #[serde(default = "default_ueberschuss")]
     pub verguetungsform: String,
-    /// Settlement model.
-    #[serde(default = "default_verguetung")]
+    /// Settlement model. Omitted, `[policy] sect21c_ohne_zuordnung` decides.
+    #[serde(default)]
     pub settlement_model: String,
     pub direktvermarktung: Option<bool>,
     /// Anzulegender Wert ct/kWh (Direktvermarktung / Ausschreibungswert).
@@ -246,10 +248,6 @@ pub struct AnlageUpsertRequest {
     /// `None` is treated as 0.00 at settlement time — the cap cannot be breached
     /// by a plant that has not submitted fuel composition data.
     pub biomasse_getreide_mais_anteil: Option<rust_decimal::Decimal>,
-}
-
-fn default_verguetung() -> String {
-    VERGUETUNG.to_owned()
 }
 
 fn default_ueberschuss() -> String {
@@ -480,10 +478,11 @@ impl AnlageRow {
     pub fn sect9_anlage(&self) -> eeg_billing::settlement_state::Sect9Anlage {
         eeg_billing::settlement_state::Sect9Anlage {
             leistung_kwp: self.leistung_kwp,
+            inbetriebnahme: self.inbetriebnahme,
             erzeugungsart: eeg_billing::ErzeugungsArt::from_db_str(&self.erzeugungsart).ok(),
             einspeiseverguetung_oder_mieterstrom: matches!(
                 self.settlement_model.as_str(),
-                VERGUETUNG | AUSFALLVERGUETUNG | MIETERSTROM
+                VERGUETUNG | AUSFALLVERGUETUNG | UNENTGELTLICHE_ABNAHME | MIETERSTROM
             ),
             ist_kwk_anlage: self.settlement_model == KWKG_ZUSCHLAG,
             wechselrichterleistung_va: self.wechselrichterleistung_va,
@@ -491,11 +490,53 @@ impl AnlageRow {
     }
 }
 
+/// A registration that names no Veräußerungsform where the operator's
+/// `[policy] sect21c_ohne_zuordnung` decides none for it.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "the plant names no settlement_model and `[policy] sect21c_ohne_zuordnung = \"{policy}\"` \
+     assigns it none: name the Veräußerungsform (§ 21c Abs. 1 Satz 1 EEG 2023)"
+)]
+pub struct VeraeusserungsformMissing {
+    /// The setting's value.
+    pub policy: &'static str,
+}
+
+/// The Veräußerungsform a registration without one is assigned under the
+/// operator's reading of § 21c Abs. 1 Satz 3 EEG 2023.
+///
+/// # Errors
+///
+/// [`VeraeusserungsformMissing`] where the reading assigns none — always under
+/// `angabe_verlangen`, and from 200 kW under `unentgeltliche_abnahme`.
+pub fn ohne_zuordnung(
+    policy: crate::config::Sect21cOhneZuordnung,
+    leistung_kwp: Decimal,
+) -> Result<&'static str, VeraeusserungsformMissing> {
+    use crate::config::Sect21cOhneZuordnung as P;
+    match policy {
+        P::Einspeiseverguetung => Ok(VERGUETUNG),
+        // Satz 3: „Anlagen mit einer installierten Leistung von weniger als
+        // 200 Kilowatt".
+        P::UnentgeltlicheAbnahme if leistung_kwp < Decimal::from(200u16) => {
+            Ok(crate::models::UNENTGELTLICHE_ABNAHME)
+        }
+        P::UnentgeltlicheAbnahme | P::AngabeVerlangen => Err(VeraeusserungsformMissing {
+            policy: mako_service::policy::PolicyChoice::name(policy),
+        }),
+    }
+}
+
 pub async fn upsert_anlage(
     pool: &PgPool,
     tenant: &str,
-    req: AnlageUpsertRequest,
+    ohne_zuordnung_policy: crate::config::Sect21cOhneZuordnung,
+    mut req: AnlageUpsertRequest,
 ) -> anyhow::Result<()> {
+    if req.settlement_model.trim().is_empty() {
+        req.settlement_model = ohne_zuordnung(ohne_zuordnung_policy, req.leistung_kwp)?.to_owned();
+    }
+
     // Refuse a registration the settlement could not honestly act on — most of
     // all a Marktprämie model with no anzulegender Wert, which would settle to
     // EUR 0 every month and emit a payout event for it.
@@ -3018,6 +3059,14 @@ pub async fn run_settlement(
             SettlementScheme::SonstigeDirektvermarktung,
             TariffSource::Statutory,
         ),
+        // § 21 Abs. 1 Satz 1 Nr. 2: the Einspeisevergütung whose claim
+        // „verringert sich in diesem Fall … auf null".
+        "UNENTGELTLICHE_ABNAHME" => (
+            SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: Decimal::ZERO,
+            },
+            TariffSource::Statutory,
+        ),
         other => anyhow::bail!("unknown settlement_model: {other}"),
     };
 
@@ -3437,6 +3486,7 @@ fn ist_sect19_abs1_anspruch(settlement_model: &str) -> bool {
         settlement_model,
         crate::models::VERGUETUNG
             | crate::models::AUSFALLVERGUETUNG
+            | crate::models::UNENTGELTLICHE_ABNAHME
             | crate::models::DIREKTVERMARKTUNG
             | crate::models::AUSSCHREIBUNG
             | crate::models::MIETERSTROM
@@ -5042,5 +5092,36 @@ mod sect53c_tests {
         assert!(
             format!("{:#}", satz(&luecke, VON, BIS).unwrap_err()).contains("endet am 2026-04-05")
         );
+    }
+}
+
+#[cfg(test)]
+mod ohne_zuordnung_tests {
+    use super::*;
+    use crate::config::Sect21cOhneZuordnung as P;
+    use rust_decimal::dec;
+
+    /// § 21c Abs. 1 Satz 3 EEG 2023 reaches only „Anlagen mit einer
+    /// installierten Leistung von weniger als 200 Kilowatt"; the default pays
+    /// nothing on a reading the operator has not chosen.
+    #[test]
+    fn a_plant_without_a_veraeusserungsform_follows_the_operators_reading() {
+        assert!(ohne_zuordnung(P::AngabeVerlangen, dec!(10)).is_err());
+        assert_eq!(
+            ohne_zuordnung(P::Einspeiseverguetung, dec!(10)).unwrap(),
+            VERGUETUNG
+        );
+        assert_eq!(
+            ohne_zuordnung(P::UnentgeltlicheAbnahme, dec!(199.99)).unwrap(),
+            UNENTGELTLICHE_ABNAHME
+        );
+        let e = ohne_zuordnung(P::UnentgeltlicheAbnahme, dec!(200)).unwrap_err();
+        assert_eq!(e.policy, "unentgeltliche_abnahme");
+    }
+
+    #[test]
+    fn the_default_reading_asks_for_the_veraeusserungsform() {
+        let p: mako_service::policy::Policy<P> = mako_service::policy::Policy::default();
+        assert_eq!(p.get(), P::AngabeVerlangen);
     }
 }

@@ -37,6 +37,50 @@
     <label class="vt-field">{{ ui.received }}
       <input id="vt-empfangen" type="datetime-local">
     </label>
+    {%- elif tool == "pog" %}
+    <label class="vt-field">{{ ui.verbrauch_label }}
+      <input id="vt-verbrauch" type="number" min="0" step="100" inputmode="numeric" placeholder="9000">
+    </label>
+    <label class="vt-field">{{ ui.leistung_label }}
+      <input id="vt-leistung" type="number" min="0" step="0.1" inputmode="decimal" placeholder="—">
+    </label>
+    <label class="vt-check"><input id="vt-14a" type="checkbox"> {{ ui.sect14a_label }}</label>
+    <label class="vt-check"><input id="vt-optional" type="checkbox"> {{ ui.optional_label }}</label>
+    {%- elif tool == "eeg" %}
+    <label class="vt-field">{{ ui.bauform_label }}
+      <select id="vt-bauform">
+        <option value="solar_aufdach">{{ ui.aufdach }}</option>
+        <option value="solar_freiflaeche">{{ ui.freiflaeche }}</option>
+      </select>
+    </label>
+    <label class="vt-field">{{ ui.kwp_label }}
+      <input id="vt-kwp" type="number" min="0" step="0.1" inputmode="decimal" placeholder="9.8">
+    </label>
+    <label class="vt-field">{{ ui.ibn_label }}
+      <input id="vt-ibn" type="date">
+    </label>
+    <label class="vt-check"><input id="vt-voll" type="checkbox"> {{ ui.voll_label }}</label>
+    <label class="vt-field">{{ ui.einspeisung_label }}
+      <input id="vt-einspeisung" type="number" min="0" step="100" inputmode="numeric" placeholder="—">
+    </label>
+    {%- elif tool == "preise" %}
+    <div class="vt-field">{{ ui.gruppe_label }}
+      <div class="vt-seg" role="radiogroup" aria-label="{{ ui.gruppe_label }}">
+        {%- for g in ["A", "B", "C"] %}
+        <label><input type="radio" name="vt-gruppe" value="{{ g }}"{% if loop.first %} checked{% endif %}> {{ ui["gruppe_" ~ g] }}</label>
+        {%- endfor %}
+      </div>
+    </div>
+    {%- elif tool == "modul14a" %}
+    <label class="vt-field">{{ ui.ap_label }}
+      <input id="vt-ap" type="number" min="0" step="0.01" inputmode="decimal" placeholder="8.50">
+    </label>
+    <label class="vt-field">{{ ui.geraet_label }}
+      <input id="vt-geraet" type="number" min="0" step="100" inputmode="numeric" placeholder="4000">
+    </label>
+    <label class="vt-field">{{ ui.pauschale_label }}
+      <input id="vt-pauschale" type="number" min="0" step="1" inputmode="numeric" placeholder="150">
+    </label>
     {%- else %}
     <label class="vt-field vt-wide">{{ ui.id_label }}
       <input id="vt-id" placeholder="51238696012" autocomplete="off" spellcheck="false" inputmode="text">

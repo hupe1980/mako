@@ -70,7 +70,7 @@ async fn concurrent_initiating_messages_spawn_one_process() {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         100,
-        TenantId::from_party_id(OWN_MP),
+        TenantId::from_tenant(OWN_MP),
     ));
 
     let edi = fixture();

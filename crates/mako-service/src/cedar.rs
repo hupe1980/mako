@@ -141,7 +141,7 @@ impl CedarEnforcer {
         resource_tenant: &str,
     ) -> Result<(), CedarError> {
         // Escape double-quotes inside IDs so Cedar does not confuse them with
-        // string delimiters.  In practice sub/tenant MP-IDs never contain `"`.
+        // string delimiters.  In practice a sub or a tenant never contains `"`.
         let p_uid = build_uid("User", &principal.sub)?;
         let a_uid = build_uid("Action", action)?;
         let r_uid = build_uid("Resource", resource_tenant)?;

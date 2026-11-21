@@ -38,21 +38,39 @@ auth_keys = [
   "marktd=dev-marktd-makod-key",
 ]
 
-# The roles this instance plays; each needs exactly one [[party]] MP-ID. The
-# Stadtwerk acts in Gas under its DVGW-Codenummer: a Marktteilnehmer holds one
-# MP-ID per Sparte and role (BDEW-AWH Identifikatoren V1.2 Kap. 2.1, S. 4), so
-# the Gas roles are their own [[party]].
+# The tenant every daemon of the Stadtwerk writes to its rows, and the roles
+# this instance plays. Each role has its own Codenummer — „Marktteilnehmer
+# benötigen für jede Marktrolle Marktfunktion im Strom- bzw. Gasmarkt eine
+# gesonderte Codenummer" (Allgemeine Festlegungen 6.1d Kap. 2.13) — the Strom
+# roles BDEW-Codenummern (99…), the Gas roles DVGW-Codenummern (98…).
 [deployment]
+tenant = "stadtwerke-musterstadt"
 rollen = ["nb-strom", "lf-strom", "msb-strom", "nb-gas", "lf-gas", "msb-gas"]
 
 [[party]]
 mp_id   = "9900357000004"
-roles   = ["NB", "LF", "MSB"]
+roles   = ["NB"]
 primary = true
 
 [[party]]
+mp_id = "9900357000028"
+roles = ["LF"]
+
+[[party]]
+mp_id = "9900357000035"
+roles = ["MSB"]
+
+[[party]]
 mp_id = "9800357000004"
-roles = ["GNB", "LFG", "GMSB"]
+roles = ["GNB"]
+
+[[party]]
+mp_id = "9800357000028"
+roles = ["LFG"]
+
+[[party]]
+mp_id = "9800357000035"
+roles = ["GMSB"]
 
 # Process lifecycle CloudEvents go to marktd, which fans them out — processd
 # answers an Anmeldung from them. Signed with marktd's
