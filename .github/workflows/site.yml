@@ -7,10 +7,20 @@ on:
     paths:
       - "site/**"
       - ".github/workflows/site.yml"
+      # The validator's module is built from these; a validator change
+      # redeploys it.
+      - "crates/edi-energy/**"
+      - "crates/mako-fristen/**"
+      - "tools/mako-wasm/**"
   pull_request:
     paths:
       - "site/**"
       - ".github/workflows/site.yml"
+      # The validator's module is built from these; a validator change
+      # redeploys it.
+      - "crates/edi-energy/**"
+      - "crates/mako-fristen/**"
+      - "tools/mako-wasm/**"
   workflow_dispatch:
 
 # Every job reads; `deploy` alone may write to Pages, and only it mints an
@@ -36,7 +46,7 @@ jobs:
   # link checker, and `deploy` runs too late to be that check.
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -50,6 +60,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
+
+      # The validator's WebAssembly module (site/static/validator/mako.wasm,
+      # not committed), held to the native build's answers and its budget.
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@1.58.0
+      - name: Build the validator module
+        run: just wasm
 
       # Zola validates links but never parses diagram source, so a broken
       # diagram would publish as an error box. This also fails if the renderer
@@ -84,7 +102,7 @@ jobs:
     needs: check
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
       pages: read     # configure-pages reads the site's base URL
@@ -105,6 +123,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
+
+      # The validator's WebAssembly module (site/static/validator/mako.wasm,
+      # not committed), held to the native build's answers and its budget.
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@1.58.0
+      - name: Build the validator module
+        run: just wasm
 
       - name: Build
         working-directory: site

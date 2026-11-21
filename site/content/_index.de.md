@@ -5,7 +5,7 @@ template = "home.html"
 
 [extra]
 translated_from = "templates/index.html"
-source_sha256 = "c89bcb355b81983364a22df5abca2bfe978bda056b345f2127d48ffc6741e3cf"
+source_sha256 = "9b0b3331572c50cbe727cc86847d247709d3e133d2b0f0d323fd3f7517fc8043"
 
 eyebrow = "Rust · MIT oder Apache-2.0 · BDEW EDI@Energy"
 hero_title = "Marktkommunikation für Strom und Gas,<br>von rohem EDIFACT bis zur Produktion — KI-first, in Rust."
@@ -38,6 +38,11 @@ why_lead = """Die Marktkommunikation ändert sich schnell — LFW24, § 14a, dyn
 der MaBiS-Hub. mako trennt die Fachlogik bewusst von Transport und Format: Wenn sich der Markt \
 bewegt, zieht die Plattform mit einem Import nach — nicht mit einer Neuentwicklung."""
 
+[extra.pill]
+name = "Validator"
+text = "EDIFACT-Nachricht im Browser prüfen"
+path = "@/validator.md"
+
 [[extra.cta]]
 label = "Loslegen"
 path = "@/docs/guide/getting-started.md"
@@ -46,6 +51,11 @@ lang = "de"
 [[extra.cta]]
 label = "Für Stadtwerke"
 path = "@/docs/guide/for-utilities.md"
+lang = "de"
+
+[[extra.cta]]
+label = "Nachricht prüfen"
+path = "@/validator.md"
 lang = "de"
 
 [[extra.cta]]

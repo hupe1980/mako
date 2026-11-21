@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{#- The validator page: a market message checked in the visitor's tab by the
+    validator makod runs (tools/mako-wasm). Every word the page shows lives
+    in the page's front matter (`page.extra.ui`) or comes from the module. -#}
+
+{% block head %}
+  {#- Nothing the visitor pastes may leave the tab: connections, images and
+      scripts are this origin's only. `wasm-unsafe-eval` compiles the module
+      (and Pagefind's); `unsafe-inline` is the base template's theme script. -#}
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": {{ page.title | json_encode | safe }},
+    "description": {{ page.description | json_encode | safe }},
+    "url": {{ page.permalink | json_encode | safe }},
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Web browser",
+    "inLanguage": {{ lang | json_encode | safe }},
+    "isAccessibleForFree": true,
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+  }
+  </script>
+{% endblock head %}
+
+{% block content %}
+{%- set ui = page.extra.ui -%}
+<div class="ps" data-wasm="{{ get_url(path='validator/mako.wasm') | safe }}" data-lang="{{ lang }}">
+  <header class="ps-head wrap" data-pagefind-body>
+    <p class="ps-eyebrow"><span class="ps-lock" aria-hidden="true">🔒</span> {{ ui.privacy }}</p>
+    <h1>{{ ui.title }}</h1>
+    <p class="ps-lede">{{ ui.lede | markdown(inline=true) | safe }}</p>
+  </header>
+
+  <noscript><p class="ps-alert wrap">{{ ui.no_js }}</p></noscript>
+  <p class="ps-alert wrap" id="ps-unsupported" hidden>{{ ui.no_wasm }}</p>
+
+  <section class="ps-input wrap" aria-label="{{ ui.input_label }}">
+    <div class="ps-drop" id="ps-drop">
+      <label class="sr-only" for="ps-text">{{ ui.input_label }}</label>
+      <textarea id="ps-text" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="soft"
+                placeholder="{{ ui.placeholder }}"></textarea>
+      <div class="ps-drop-bar">
+        <label class="ps-file">{{ ui.choose_file }}
+          <input id="ps-file" type="file" accept=".edi,.txt,.gz,.edifact,text/plain">
+        </label>
+        <span class="ps-note" id="ps-status" aria-live="polite">{{ ui.loading }}</span>
+      </div>
+    </div>
+    <div class="ps-samples">
+      <span class="ps-note">{{ ui.samples }}</span>
+      <div id="ps-sample-list" class="ps-chips"></div>
+    </div>
+  </section>
+
+  <section id="ps-result" class="ps-result wrap" aria-live="polite" hidden></section>
+</div>
+
+<dialog id="ps-share-dialog" class="ps-dialog">
+  <form method="dialog">
+    <h2>{{ ui.share_title }}</h2>
+    <p>{{ ui.share_warning }}</p>
+    <div class="ps-dialog-actions">
+      <button value="cancel" class="btn btn-ghost">{{ ui.share_cancel }}</button>
+      <button value="ok" class="btn btn-primary">{{ ui.share_confirm }}</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="application/json" id="ps-ui">{{ ui | json_encode | safe }}</script>
+{% endblock content %}
+
+{% block scripts %}
+<script type="module" src="{{ get_url(path='validator/validator.js', cachebust=true) | safe }}"></script>
+{% endblock scripts %}

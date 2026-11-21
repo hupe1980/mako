@@ -34,6 +34,8 @@ const GROUPS = [
   ["services", "Services"],
   ["regulatory", "Regulatory"],
   ["compliance", "Compliance"],
+  // A page beside `docs/` rather than in it: the validator.
+  ["tools", "Tools"],
 ];
 
 function walk(dir, out = []) {
@@ -123,7 +125,7 @@ for (const file of walk(CONTENT)) {
     `Source: ${url}\n\n` +
     `${text}\n`;
   writeFileSync(join(PUBLIC, path, "index.md"), twin);
-  const group = rel.split(sep)[1]?.replace(/\.md$/, "") ?? "";
+  const group = rel.includes(sep) ? (rel.split(sep)[1]?.replace(/\.md$/, "") ?? "") : "tools";
   pages.push({ rel, url, twinUrl: url + "index.md", twin, lang, group, ...fm });
 }
 

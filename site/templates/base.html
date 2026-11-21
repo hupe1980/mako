@@ -9,6 +9,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {#- A page's own head entries, before any resource loads: the validator's
+      Content-Security-Policy has to precede what it governs. -#}
+  {% block head %}{% endblock head %}
 
   {#- ── Page identity ───────────────────────────────────────────────────────
       Three kinds, because the structured data below differs for each:
@@ -264,6 +267,7 @@
           ["@/docs/_index.md", "en", "nav_docs"],
           ["@/docs/guide/getting-started.md", "en", "nav_get_started"],
           ["@/docs/guide/for-utilities.md", "en", "nav_for_utilities"],
+          ["@/validator.md", "en", "nav_validator"],
           ["@/docs/services/_index.md", "en", "nav_services"],
           ["@/docs/reference/_index.md", "en", "nav_reference"]
         ] -%}
@@ -272,6 +276,7 @@
           ["@/docs/_index.md", "de", "nav_docs"],
           ["@/docs/guide/getting-started.md", "de", "nav_get_started"],
           ["@/docs/guide/for-utilities.md", "de", "nav_for_utilities"],
+          ["@/validator.md", "de", "nav_validator"],
           ["@/docs/reference/_index.md", "en", "nav_reference"]
         ] -%}
         {%- endif -%}

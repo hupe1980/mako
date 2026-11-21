@@ -25,6 +25,7 @@ const ROOT = new URL("../..", import.meta.url).pathname;
 const CONTENT = join(ROOT, "site/content");
 const TEMPLATES = join(ROOT, "site/templates");
 const INIT = join(ROOT, "site/static/js/mermaid-init.js");
+const ROOT_MARKDOWN = ["README.md", "CONTRIBUTING.md"];
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -35,7 +36,7 @@ function walk(dir, out = []) {
   return out;
 }
 
-/** Every diagram on the site, as `{file, line, src}`. */
+/** Every diagram on the site and in the root Markdown, as `{file, line, src}`. */
 function diagrams() {
   const found = [];
   const push = (file, src, body, offset) => {
@@ -45,7 +46,10 @@ function diagrams() {
       src: body,
     });
   };
-  for (const file of walk(CONTENT).filter((f) => f.endsWith(".md"))) {
+  // The site's pages, and the Markdown GitHub renders: the README's diagram is
+  // the first one a visitor sees, and nothing else parses it.
+  const markdown = [...walk(CONTENT).filter((f) => f.endsWith(".md")), ...ROOT_MARKDOWN.map((f) => join(ROOT, f))];
+  for (const file of markdown) {
     const src = readFileSync(file, "utf8");
     for (const m of src.matchAll(/```mermaid\n([\s\S]*?)```/g)) {
       push(file, src, m[1], m.index);

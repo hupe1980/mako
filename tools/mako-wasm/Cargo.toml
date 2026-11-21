@@ -1,0 +1,30 @@
+[package]
+name        = "mako-wasm"
+description = "The validator's WebAssembly module: edi-energy and mako-fristen behind one JSON call, so a browser checks a market message with the validator makod runs"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+# cdylib for the browser, rlib so the parity test calls the same `call` natively.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Every message type: a visitor may paste any of them, and a type left out
+# would be reported as unvalidated rather than checked.
+edi-energy   = { workspace = true, features = ["utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp", "quotes", "comdis", "pricat", "utilts"] }
+edifact      = { workspace = true }
+mako-fristen = { workspace = true }
+serde        = { workspace = true }
+# Insertion order in every build: another workspace crate turns
+# `preserve_order` on, and the parity check compares bytes, so the module's
+# answer may not depend on what it happens to be compiled alongside.
+serde_json   = { workspace = true, features = ["preserve_order"] }
+time         = { workspace = true }
+
+[lints]
+workspace = true

@@ -90,3 +90,6 @@ desk/vergleich/abweichung/
 # Upstream-crate feedback notes — internal, never published
 /*_FEEDBACK.md
 /FEEDBACK_*.md
+
+# The validator module is built by `just wasm` (CI builds it for the site).
+site/static/validator/mako.wasm

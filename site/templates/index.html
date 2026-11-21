@@ -16,6 +16,7 @@
       <span class="tag tag-status">{{ trans(key="status", lang=lang) }}</span>
       <span>Rust · MIT or Apache-2.0 · BDEW EDI@Energy {{ config.extra.format_versions }}</span>
     </p>
+    <a class="hero-pill" href="{{ get_url(path='@/validator.md') | safe }}"><strong>Validator</strong> — check an EDIFACT message in your browser <span aria-hidden="true">→</span></a>
     <h1 class="hero-title">AI-first German energy-market operations,<br>from raw EDIFACT to production — in Rust.</h1>
     <p class="hero-sub">Every German electricity and gas market participant is required to
       exchange regulated messages with its counterparties — <em>Marktkommunikation</em>, MaKo.
@@ -28,6 +29,7 @@
       is computed by code.</p>
     <div class="hero-cta">
       <a class="btn btn-primary" href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
+      <a class="btn btn-ghost" href="{{ get_url(path='@/validator.md') | safe }}">Check a message</a>
       <a class="btn btn-ghost" href="{{ get_url(path='@/docs/_index.md') | safe }}">Read the docs</a>
       <a class="btn btn-ghost" href="{{ config.extra.repo }}" rel="noopener">GitHub ↗</a>
     </div>

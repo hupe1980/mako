@@ -39,6 +39,7 @@ person decides; every answer, amount and Frist carries its source.
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` · `eeg-billing` + `einsd` · `energy-billing` + `billingd` |
 | **Customer** | `vertragd` contracts and online Vertragsschluss · `productd` catalogue · `accountingd` ledger · `outputd` documents · `portald` portal |
 | **Agents** | 11 of the 14 services expose an MCP server — **212 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
+| **Validator** | [Check an EDIFACT message in your browser](https://hupe1980.github.io/mako/validator/) — the validator makod runs, compiled to WebAssembly; nothing leaves the tab |
 | **Desk** | [`desk/`](desk/) — one inbox per Rolle, the rule behind every item, an assistant that cites every sentence ([guide](https://hupe1980.github.io/mako/docs/guide/desk/)) |
 | **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin · [`mako-conformance`](tools/mako-conformance/) — checks a replacement for a service against the contract mako's publishes ([guide](https://hupe1980.github.io/mako/docs/guide/replace-a-service/)) |
 
@@ -82,6 +83,12 @@ flowchart LR
         MP["Counterparty MSH<br/>(NB · LF · MSB · ÜNB · BIKO)"]
     end
 
+    subgraph Edge["People & front ends"]
+        DESK["Desk<br/>one inbox per Rolle"]
+        SHOP["Shop · CRM · sales platform"]
+        BROWSER["Validator in the browser<br/>edi-energy as WebAssembly"]
+    end
+
     subgraph Transport["Transport & process"]
         MAKOD["makod<br/>AS4 mTLS · sign+encrypt<br/>signed receipts · PID router"]
         PROCESSD["processd<br/>Entscheidungsbäume · KPIs<br/>Sperrauftrag queue"]
@@ -107,15 +114,20 @@ flowchart LR
     end
 
     MP <-->|"AS4/ebMS3 · EDIFACT"| MAKOD
+    BROWSER -.-|"same validator"| MAKOD
+    SHOP -->|"Angebot · Bestellung"| PRODUCTD
+    PRODUCTD --> VERTRAGD
+    VERTRAGD -.->|"de.mako.vertrag.*"| SHOP
     MAKOD --> PROCESSD --> MARKTD
     MARKTD --> EDMD --> NETZB & EINSD & BILLINGD
     MAKOD --> INVOICD
-    PRODUCTD --> VERTRAGD --> BILLINGD
+    VERTRAGD --> BILLINGD
     BILLINGD --> ACCOUNTINGD
     BILLINGD & VERTRAGD --> OUTPUTD
     EDMD & VERTRAGD --> PORTALD
     MARKTD -.->|"de.mako.engine.*"| PROCESSD
     MAKOD & BILLINGD & EDMD -.->|"CloudEvents"| AGENTD
+    DESK -->|"MCP · Freigaben"| PROCESSD
     AGENTD -.->|"de.mako.agent.decision.made"| ERP
     ACCOUNTINGD --> ERP
 ```
@@ -230,7 +242,7 @@ crate's README.
 ## Develop
 
 ```bash
-just            # list every recipe
+just            # every recipe, by group
 just check      # cargo check, all targets and features
 just test       # the whole suite (cargo-nextest when installed)
 just test-db    # the real-PostgreSQL suites (testcontainers, needs Docker)
@@ -246,7 +258,8 @@ generated from the BDEW PDFs — fix the reader in `xtask/src/bdew/` and run
 ## Documentation
 
 [hupe1980.github.io/mako](https://hupe1980.github.io/mako/) — source under
-[`site/`](./site), built with [Zola](https://www.getzola.org/).
+[`site/`](./site), built with [Zola](https://www.getzola.org/); `just site-serve`
+serves it locally with live reload.
 
 | Section | What's inside |
 |---|---|

@@ -16,6 +16,9 @@
       <span class="tag tag-status">{{ trans(key="status", lang=lang) }}</span>
       <span>{{ x.eyebrow }} {{ config.extra.format_versions }}</span>
     </p>
+    {%- if x.pill %}
+    <a class="hero-pill" href="{{ get_url(path=x.pill.path, lang=lang) | safe }}"><strong>{{ x.pill.name }}</strong> — {{ x.pill.text }} <span aria-hidden="true">→</span></a>
+    {%- endif %}
     <h1 class="hero-title">{{ x.hero_title | safe }}</h1>
     <p class="hero-sub">{{ x.hero_sub | markdown(inline=true) | safe }}</p>
     <div class="hero-cta">

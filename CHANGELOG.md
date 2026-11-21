@@ -9,6 +9,17 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.43.0] — 2026-11-21
+
+### Added
+
+- **The EDIFACT validator** (`/validator/`, `/de/validator/`): paste, drop or link a market message and the page checks it in the browser with the validator makod runs — every segment named by its MIG, every finding on its line with the AHB conditions it names, the CONTRL and APERAK due times from `mako-fristen`. Nothing leaves the tab. `tools/mako-wasm` is the module; `just wasm` builds it and holds it to the native build's answers and a 1.5 MB gzip budget.
+
+### Changed
+
+- **The justfile is grouped**: `just --list` shows each recipe under its section with a one-line summary, and three guards' descriptions that had drifted onto their neighbours are back in place. `build-xtask` is gone (`cargo xtask` builds itself); `just site-serve` serves the site locally.
+- **`check-mermaid` parses the README's and CONTRIBUTING's diagrams too**; the README's architecture diagram shows the Desk, sales front ends and the browser validator.
+
 ## [0.42.0] — 2026-11-20
 
 ### Added
