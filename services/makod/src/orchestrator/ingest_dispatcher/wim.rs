@@ -183,7 +183,7 @@ impl EdifactIngestDispatcher {
             "wim-invoic" => match pid {
                 31009 | 31003 | 31004 => {
                     let cmd = adapters::wim_invoic_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_invoice_ref_from_invoic(msg);
+                    let malo_id = rechnungsempfaenger_key(&extract_invoice_ref_from_invoic(msg));
                     // The window is anchored on the Zahlungsziel the invoice
                     // carries in `DTM+265`, not on a fixed Werktage count, and
                     // where it sits relative to that date depends on who is
@@ -225,7 +225,7 @@ impl EdifactIngestDispatcher {
                 // itemized Abweisungen owned by mako-wim.
                 33001..=33004 => {
                     let cmd = adapters::wim_invoic_remadv_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_invoice_ref_from_remadv(msg);
+                    let invoice_ref = rechnungssteller_key(&extract_invoice_ref_from_remadv(msg));
                     self.resume_by_key::<WimInvoicWorkflow>(
                         inbound,
                         &invoice_ref,
@@ -238,7 +238,8 @@ impl EdifactIngestDispatcher {
                 // the same process by the invoice reference.
                 29001 => {
                     let cmd = adapters::wim_invoic_comdis_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_invoice_ref_from_comdis(msg);
+                    let invoice_ref =
+                        rechnungsempfaenger_key(&extract_invoice_ref_from_comdis(msg));
                     self.resume_by_key::<WimInvoicWorkflow>(
                         inbound,
                         &invoice_ref,

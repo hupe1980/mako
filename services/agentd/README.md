@@ -56,7 +56,7 @@ parsed and validated by `config::tests::the_readme_example_config_parses`.
 ```toml
 # agentd.toml
 # Every top-level key before the first [table]: TOML binds a bare key to the latest header, and every config type denies unknown fields.
-tenant           = "9900357000004"
+tenant           = "stadtwerke-musterstadt"
 public_base_url  = "https://agentd.internal:9580"   # what an A2A card advertises
 sweep_interval_secs  = 60
 

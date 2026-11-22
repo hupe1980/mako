@@ -281,8 +281,11 @@ pub(crate) async fn handle_command(
     );
 
     // ── Dispatch to workflow ──────────────────────────────────────────────────
-    let resolved_process_id = match dispatch_command(&state, akteur, &cmd_lower, &envelope.payload)
-        .await
+    let resolved_process_id = match super::in_rolle(
+        &effective_marktrolle,
+        dispatch_command(&state, akteur, &cmd_lower, &envelope.payload),
+    )
+    .await
     {
         Ok(DispatchOutcome::Spawned { process_id }) => {
             info!(

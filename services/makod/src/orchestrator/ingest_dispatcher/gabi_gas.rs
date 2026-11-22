@@ -34,7 +34,8 @@ impl EdifactIngestDispatcher {
             "gabi-gas-invoic" => match pid {
                 31010 | 31007 | 31008 => {
                     let cmd = adapters::gabi_gas_invoic_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_invoice_ref_from_invoic(msg);
+                    let invoice_ref =
+                        rechnungsempfaenger_key(&extract_invoice_ref_from_invoic(msg));
                     let due_at = zahlungsziel_due(msg, pid)?;
                     self.spawn_or_resume_guarded::<GaBiGasInvoicWorkflow>(
                         inbound,
@@ -51,7 +52,8 @@ impl EdifactIngestDispatcher {
                     // COMDIS — invoicer rejects payer's REMADV.
                     // Correlation: RFF+Z13 back-reference to original INVOIC message_ref.
                     let cmd = adapters::gabi_gas_comdis_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_invoice_ref_from_comdis(msg);
+                    let invoice_ref =
+                        rechnungsempfaenger_key(&extract_invoice_ref_from_comdis(msg));
                     self.resume_by_key::<GaBiGasInvoicWorkflow>(
                         inbound,
                         &invoice_ref,

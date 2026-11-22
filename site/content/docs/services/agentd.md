@@ -801,7 +801,7 @@ The `agentplane` operator CLI against the store takes `--store` as a path or a
 # key to the most recent table, and every config type is `deny_unknown_fields`.
 #
 # `tenant` scopes every store key and the erasure keys with them.
-tenant          = "9900357000004"
+tenant          = "stadtwerke-musterstadt"
 public_base_url = "https://agentd.internal:9580"
 
 sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes, recovers

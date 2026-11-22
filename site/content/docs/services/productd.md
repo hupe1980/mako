@@ -231,7 +231,7 @@ Exactly one of `malo_id` (the NB is read from `marktd`
 |---|---|
 | `ARBEITSPREIS`, `GRUNDPREIS` | the product version in force and `PUBLISHED`, or the front end's [`vertriebspreis`](#a-front-end-s-own-price-vertriebspreis) |
 | `NETZENTGELT_ARBEITSPREIS`, `NETZENTGELT_GRUNDPREIS` | `marktd` Preisblatt Netznutzung of the NB — positions `ARBEITSPREIS_WIRKARBEIT`, `GRUNDPREIS` |
-| `MESSSTELLENBETRIEB` | `marktd` Preisblatt Messung of the grundzuständige Messstellenbetreiber, filed under the MP-ID marktd records for the NB's grid (`GET /api/v1/netzbetreiber/{nb}/grundzustaendiger-msb`) — position `MESSSTELLENBETRIEB`. No recorded gMSB refuses `422 eingabe_fehlt`; the NB's own code is never read in its place |
+| `MESSSTELLENBETRIEB` | `marktd` Preisblatt Messung of the grundzuständige Messstellenbetreiber, filed under the MP-ID marktd records for the NB's grid on the gewünschter Lieferbeginn (`GET /api/v1/netzbetreiber/{nb}/grundzustaendiger-msb?at=`) — position `MESSSTELLENBETRIEB`. No recorded gMSB refuses `422 eingabe_fehlt`; the NB's own code is never read in its place |
 | `KONZESSIONSABGABE` | `marktd` Preisblatt Konzessionsabgabe — Strom: Tarifkunden up to 30 000 kWh (§ 2 Abs. 7 KAV), refused above; Gas: only a sheet for every Kundengruppe |
 | `SECT19_STROMNEV_UMLAGE`, `OFFSHORE_NETZUMLAGE`, `KWKG_UMLAGE` (Strom) | the dated series, group A′ |
 | `STROMSTEUER` / `ENERGIESTEUER`, `BEHG` (Gas) | the dated series; BEHG as for a B2B Gas quotation |

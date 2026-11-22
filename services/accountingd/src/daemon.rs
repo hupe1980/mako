@@ -9,7 +9,6 @@
 //! | CE type | Source | Effect |
 //! |---|---|---|
 //! | `de.mako.billing.rechnung.erstellt` | `billingd` | Debit entry (Brutto-Betrag) |
-//! | `de.mako.invoic.receipt.settled` | `invoicd` | Credit entry (NNE invoice settled) |
 //! | `de.mako.eeg.verguetung.berechnet` | `einsd` | Credit entry (EEG settlement) |
 //!
 //! ## CloudEvents emitted (outbound webhook → ERP)
@@ -85,9 +84,9 @@ impl Daemon for Accountingd {
     }
 
     /// `[eeg] auto_payout = true` pays every Vergütung receipt as it arrives,
-    /// so the account it pays from and the pain.001 version it writes must be
-    /// usable before the first receipt does: a payout owed is never skipped
-    /// for want of either.
+    /// so the Netzbetreiber it pays as, the account it pays from and the
+    /// pain.001 version it writes must be usable before the first receipt
+    /// does: a payout owed is never skipped for want of any of them.
     fn validate(cfg: &config::AccountingdConfig) -> Vec<mako_service::Befund> {
         use mako_service::befund::{Befund, Bereich};
         let mut out = Vec::new();
@@ -105,13 +104,47 @@ impl Daemon for Accountingd {
             ));
         }
         if cfg.creditor_name().is_none() {
-            let text = "creditor_name is not set — every pain.008, EEG pain.001 and Mahnung \
-                        names the Lieferant by it and is refused without it";
-            out.push(if cfg.eeg.auto_payout {
-                Befund::blockiert("creditor_name", text)
+            out.push(Befund::warnung(
+                "creditor_name",
+                "creditor_name is not set — every pain.008 and Mahnung names the Lieferant by \
+                 it and is refused without it",
+            ));
+        }
+        // § 19 Abs. 1 EEG 2023: the EEG payout is owed „gegen den Netzbetreiber",
+        // so its plant accounts and its pain.001 are the Netzbetreiber's — never
+        // `lf_mp_id` or `creditor_name` in their place.
+        let eeg_pflicht = |pfad: &'static str, text: &'static str| {
+            if cfg.eeg.auto_payout {
+                Befund::blockiert(pfad, text)
             } else {
-                Befund::warnung("creditor_name", text)
-            });
+                Befund::warnung(pfad, text)
+            }
+        };
+        match cfg.eeg.nb_mp_id() {
+            Some(nb) => {
+                if let Err(e) = rubo4e::identifiers::MarktpartnerId::new(nb) {
+                    out.push(Befund::blockiert(
+                        "eeg.nb_mp_id",
+                        format!(
+                            "[eeg] nb_mp_id {nb:?} is not an MP-ID ({e}) — set the \
+                             Netzbetreiber's 13-digit BDEW- or DVGW-Codenummer"
+                        ),
+                    ));
+                }
+            }
+            None => out.push(eeg_pflicht(
+                "eeg.nb_mp_id",
+                "[eeg] nb_mp_id is not set — the EEG payout is owed by the Netzbetreiber \
+                 (§ 19 Abs. 1 EEG 2023), and every EEG receipt is refused until its MP-ID is \
+                 configured",
+            )),
+        }
+        if cfg.eeg.debtor_name().is_none() {
+            out.push(eeg_pflicht(
+                "eeg.debtor_name",
+                "[eeg] debtor_name is not set — every EEG pain.001 names the Netzbetreiber as \
+                 debtor by it and is refused without it",
+            ));
         }
         if let Err(e) = crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
             out.push(Befund::aus_fehler(
@@ -310,6 +343,7 @@ impl Daemon for Accountingd {
             ledger: Arc::clone(&ledger),
             tenant: cfg.tenant.clone(),
             lf_mp_id: cfg.lf_mp_id.clone(),
+            eeg_nb_mp_id: cfg.eeg.nb_mp_id().map(str::to_owned),
             auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
                 &cfg.mcp,
                 oidc,
@@ -403,7 +437,7 @@ impl Daemon for Accountingd {
                                     &acct.malo_id,
                                     serde_json::json!({
                                         "malo_id":      acct.malo_id,
-                                        "lf_mp_id":     acct.lf_mp_id,
+                                        "lf_mp_id":     acct.mp_id,
                                         "amount_ct":    acct.abschlag_ct,
                                         "amount_eur":   crate::handlers::format_ct_as_eur(acct.abschlag_ct),
                                         "ust_satz":     acct.abschlag_ust_satz.to_string(),

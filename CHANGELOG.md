@@ -9,6 +9,33 @@ its date; `just bump <version>` opens the next section. mako is pre-1.0: any
 release may break, and every break is listed under **Changed** or **Removed**.
 History before this file is in `git log`.
 
+## [0.46.0] — 2026-11-22
+
+### Added
+
+- **A process records the Marktrolle it acts in.** makod stamps it at the spawn — the role of the command, or of the own MP-ID an inbound message is addressed to — `get_process` and `get_process_history` name it, and Cedar decides process reads on `context.rolle`, so a person who holds LF reads the LF's side of a `gpke-eog` and not the NB's (§ 6a Abs. 1 EnWG). The Desk heads a Verlauf „als Lieferant".
+- **A message between two own Marktrollen is marked.** `get_process_history` sets `intern` on a message whose sender and receiver are both own MP-IDs — the NB's invoice to its own LF — and the Desk shows it „im Haus".
+- **An EEG payout names the Anlagenbetreiber's address.** einsd records the Zahlungsempfänger's structured address on the Einspeiser (`zahlungsempfaenger_anschrift`; an incomplete one is `422 incomplete_postal_address`, an unknown country `422 invalid_country_code`), its receipt events carry it, and accountingd writes it as the pain.001's `Cdtr/PstlAdr`, snapshotted with the receipt and erased with the account.
+- **The Desk offers the Rollen a person holds.** In the demo sign-in the Rolle switcher narrows to the persona's `mako_roles`; elsewhere every Rolle stays on offer and the services' Cedar answer decides.
+
+### Changed
+
+- **Breaking — marktd: the grundzuständige MSB of a grid has a validity.** `PUT /api/v1/netzbetreiber/{nb}/grundzustaendiger-msb` takes `valid_from` and ends the link before it that day, as a transfer of the Grundzuständigkeit does (§§ 41, 43 MsbG); `GET ?at=` answers the link in force that day, and productd prices an offer's Messstellenbetrieb by the link on its Lieferbeginn.
+- **Breaking — accountingd:** `PUT /api/v1/accounts/{malo_id}` takes `?mp_id=` like the other routes that serve every account, so an EEG plant's master data can be written under the NB's code; vertragd sends it. An account route refuses a query key it does not take instead of ignoring it.
+- **Breaking — accountingd: an EEG payout is the Netzbetreiber's.** § 19 Abs. 1 EEG 2023 gives the Anlagenbetreiber its claim „gegen den Netzbetreiber", for the Marktprämie as for the Einspeisevergütung, so the plant's Kontokorrent is kept under the new `[eeg] nb_mp_id`, not the Lieferant's code, and the pain.001 pays as `[eeg] debtor_name` (and `[eeg.debtor_address]`), never as the supplier's `creditor_name`. Without them an EEG receipt answers `503 eeg_nb_not_configured` and a payout run `503 eeg_debtor_not_configured`. `accounts.lf_mp_id` and `unmatched_payments.lf_mp_id` are `mp_id` — the own role's MP-ID an account is kept under — and the routes serving both kinds of account take `?mp_id=`, as a manual booking (`POST …/buchen`, MCP `post_manual_booking`) takes `mp_id` in its body.
+- **Breaking — mako-engine:** `ProcessIdentity` and `Process` carry an optional `rolle`; `EventEnvelope` and `NewEvent` carry `intern`, set by `RunOptions::intern`.
+- **Breaking — makod:** an invoice's two sides run under two keys — `rechnung-steller:` for the process that sent it, `rechnung-empfaenger:` for the one that received it — and an MCP lookup by the document number lists both.
+
+### Removed
+
+- **accountingd no longer books `de.mako.invoic.receipt.settled`.** The event is the Lieferant's settlement of an invoice it received — a payable to the NB — and the branch credited it to the end customer's account; invoicd's event carries neither a MaLo nor an amount, so it never booked.
+
+### Fixed
+
+- **makod: an invoice to the own LF opens the LF's process.** Both sides were keyed by the bare document number, so on a deployment that is NB and LF the delivered Netznutzungsrechnung resumed the NB's invoicer process instead of opening the payer's.
+- **accountingd: a confirmed EEG payout and a Rückzahlung reach the plant's account.** Both were posted to a Kontokorrent keyed by the tenant, apart from the one the receipt credited, so wherever the tenant is not the Lieferant's code — the demo's since 0.45.0 — the plant's account kept money already paid as still owed. A manual booking reached the same stray account; it now goes to the account of its role, an `EEG_*` entry the NB's and every other the Lieferant's (`ledger::buchungskonto`).
+- **accountingd: the Jahresabschluss leaves EEG plants alone.** It settled every account, so a plant's unpaid EEG credit became an Erstattung — paid out by pain.001 beside the EEG payout where the plant's account carried an IBAN, carried forward as a supply Guthaben where it did not.
+
 ## [0.45.0] — 2026-11-21
 
 ### Added

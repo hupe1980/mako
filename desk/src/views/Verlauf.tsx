@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useBelegZiel } from "../app/belege";
 import { fristArt } from "../app/prozesse";
 import { offeneFristen } from "../app/prozessStand";
-import { useRolle } from "../app/rollen";
+import { ROLLEN, useRolle } from "../app/rollen";
 import type { DeadlineView, HistoryEntry } from "../data/gen/makod";
 import { call } from "../data/mcp";
 import { FristUhr } from "../design/FristUhr";
@@ -12,6 +12,11 @@ import { antwortTeile } from "../format/antwort";
 import { formatCount } from "../format/count";
 import { formatInstant } from "../format/date";
 import { eintrag, useT } from "../i18n";
+
+/** The Desk's name for a Marktrolle (`LF` → „Lieferant"), the code itself where it has none. */
+function rollenName(marktrolle: string): string {
+  return Object.values(ROLLEN).find((r) => r.marktrolle === marktrolle)?.label ?? marktrolle;
+}
 
 function Message({ entry }: { entry: HistoryEntry }) {
   const t = useT();
@@ -30,6 +35,14 @@ function Message({ entry }: { entry: HistoryEntry }) {
           {eingang ? t.verlauf.eingang : t.verlauf.ausgang}
         </span>
         {entry.pid && <span className="text-text">PID {entry.pid}</span>}
+        {entry.intern && (
+          <span
+            title={t.verlauf.imHausHinweis}
+            className="ml-auto rounded-full border border-separator px-2 text-caption text-text-2"
+          >
+            {t.verlauf.imHaus}
+          </span>
+        )}
       </p>
       {antwort && (
         <p className="m-0 mt-1 text-body text-text">
@@ -163,6 +176,11 @@ export function Verlauf({
         <h2 id={`verlauf-${processId}`} className="m-0 text-headline">
           {t.verlauf.titel}
         </h2>
+        {history.data?.rolle && (
+          <span className="text-body text-text-2">
+            {t.verlauf.alsRolle(rollenName(history.data.rolle))}
+          </span>
+        )}
         <span className="flex-1" />
         <span className="text-caption text-text-2">{t.verlauf.legende}</span>
       </div>

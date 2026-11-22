@@ -64,6 +64,19 @@ fn creditor_name_fehlt() -> ApiError {
         .with_code("creditor_name_not_configured")
 }
 
+/// The answer an EEG receipt gives when `[eeg] nb_mp_id` is not set:
+/// `503 eeg_nb_not_configured`, never the Lieferant's MP-ID in its place.
+fn eeg_nb_fehlt() -> ApiError {
+    ApiError::unavailable(crate::config::EEG_NB_FEHLT).with_code("eeg_nb_not_configured")
+}
+
+/// The answer an EEG payout gives when `[eeg] debtor_iban` or `debtor_name`
+/// is not set: `503 eeg_debtor_not_configured`, never the Lieferant's
+/// `creditor_name` in its place.
+fn eeg_debtor_fehlt() -> ApiError {
+    ApiError::unavailable(crate::config::EEG_DEBTOR_FEHLT).with_code("eeg_debtor_not_configured")
+}
+
 /// The 404 for a MaLo this tenant keeps no account for.
 fn account_not_found(malo_id: &str) -> axum::response::Response {
     ApiError::not_found(format!("account for MaLo {malo_id} not found")).into_response()
@@ -126,7 +139,7 @@ pub fn format_ct_as_eur(ct: i64) -> String {
     tag = "accounts",
     params(
         ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
-        AccountQuery,
+        KontoQuery,
     ),
     responses(
         (status = 200, description = "Done", body = serde_json::Value),
@@ -139,13 +152,13 @@ pub async fn get_account(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
-    Query(q): Query<AccountQuery>,
+    Query(q): Query<KontoQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
-    match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
+    match fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => account_not_found(&malo_id),
         Err(e) => ApiError::internal(e).into_response(),
@@ -159,7 +172,7 @@ pub async fn get_account(
     tag = "accounts",
     params(
         ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
-        AccountQuery,
+        KontoQuery,
     ),
     request_body = crate::pg::UpdateAccountRequest,
     responses(
@@ -175,29 +188,22 @@ pub async fn put_account(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Path(malo_id): Path<String>,
-    Query(q): Query<AccountQuery>,
+    Query(q): Query<KontoQuery>,
     Json(req): Json<crate::pg::UpdateAccountRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id).to_owned();
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id).to_owned();
     // Not `let _ =`: the update below keys on the row this creates, so a failed
     // upsert surfaces as „account not found" — a 404 for what is actually a
     // database fault, which sends the operator looking for the wrong problem.
-    if let Err(e) = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
+    if let Err(e) = upsert_account(&pool, &malo_id, &mp_id, &cfg.tenant).await {
         tracing::error!(error = %e, %malo_id, "accountingd: account upsert failed");
         return ApiError::internal(e).into_response();
     }
-    match update_account_tenanted(
-        &pool,
-        &malo_id,
-        &lf_mp_id,
-        &cfg.tenant,
-        iban_key.as_ref(),
-        req,
-    )
-    .await
+    match update_account_tenanted(&pool, &malo_id, &mp_id, &cfg.tenant, iban_key.as_ref(), req)
+        .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => refusal(e).into_response(),
@@ -264,7 +270,7 @@ pub async fn put_account_verbraucher(
     get,
     path = "/api/v1/accounts/{malo_id}/balance",
     tag = "accounts",
-    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), AccountQuery),
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), KontoQuery),
     responses(
         (status = 200, description = "The balance", body = crate::reads::Kontostand),
         (status = 403, description = "Cedar `read-account` refused"),
@@ -277,7 +283,7 @@ pub async fn get_balance(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
-    Query(q): Query<AccountQuery>,
+    Query(q): Query<KontoQuery>,
 ) -> Result<Json<crate::reads::Kontostand>, ApiError> {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
         return Err(ApiError::forbidden(e.to_string()));
@@ -286,7 +292,7 @@ pub async fn get_balance(
         &pool,
         &cfg.tenant,
         &malo_id,
-        q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id),
+        q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id),
     )
     .await
     .map(Json)
@@ -323,7 +329,7 @@ pub async fn get_ledger(
         &ledger,
         &cfg.tenant,
         &malo_id,
-        q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id),
+        q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id),
         q.limit,
     )
     .await
@@ -357,7 +363,7 @@ pub async fn get_kontoauszug(
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
     // `from`/`to` narrow the statement to a period. Both are needed for a
     // period: a bare `to` is the cumulative position through that date, which is
     // a balance rather than a Kontoauszug, and a bare `from` has no closing
@@ -378,7 +384,7 @@ pub async fn get_kontoauszug(
         (Some(from), Some(to)) => Some((from, to)),
         _ => return unprocessable("from and to must be given together".to_owned()),
     };
-    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+    let account = match fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
@@ -386,18 +392,18 @@ pub async fn get_kontoauszug(
     let query = period.map_or_else(doubleentry::BalanceQuery::all, |(from, to)| {
         doubleentry::BalanceQuery::between(from, to)
     });
-    let window =
-        match list_ledger(&ledger, &pool, &cfg.tenant, lf_mp_id, &malo_id, &query, 500).await {
-            Ok(e) => e,
-            Err(e) => return ledger_failure(e).into_response(),
-        };
+    let window = match list_ledger(&ledger, &pool, &cfg.tenant, mp_id, &malo_id, &query, 500).await
+    {
+        Ok(e) => e,
+        Err(e) => return ledger_failure(e).into_response(),
+    };
     // Eröffnungs- und Schlusssaldo: the two figures that make the page add up.
     // The closing figure is the opening plus everything on it, not the account's
     // current balance — a statement for last March must not close at today's.
     let bewegung_ct: i64 = window.lines.iter().map(|l| l.signed_ct).sum();
     Json(serde_json::json!({
         "malo_id": malo_id,
-        "lf_mp_id": lf_mp_id,
+        "mp_id": mp_id,
         "from": period.map(|(from, _)| from.to_string()),
         "to": period.map(|(_, to)| to.to_string()),
         "eroeffnungssaldo_ct": window.opening_ct,
@@ -614,17 +620,33 @@ pub async fn put_abschlag(
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
 pub struct AccountQuery {
-    /// The Lieferant's MP-ID the account is kept under; defaults to the
-    /// configured `lf_mp_id`.
+    /// The Lieferant's MP-ID the customer account is kept under; defaults to
+    /// the configured `lf_mp_id`.
     pub lf_mp_id: Option<String>,
+}
+
+/// Query for the endpoints that serve every account — a Lieferant's customer
+/// and a Netzbetreiber's EEG plant alike.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct KontoQuery {
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant; defaults to the
+    /// configured `lf_mp_id`.
+    pub mp_id: Option<String>,
 }
 
 /// Query for `GET /api/v1/accounts/{malo_id}/kontoauszug`.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct KontoauszugQuery {
-    pub lf_mp_id: Option<String>,
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant; defaults to the
+    /// configured `lf_mp_id`.
+    pub mp_id: Option<String>,
     /// Inclusive start of the statement period (ISO 8601 date).
     pub from: Option<String>,
     /// Inclusive end of the statement period (ISO 8601 date).
@@ -634,9 +656,10 @@ pub struct KontoauszugQuery {
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct LedgerQuery {
-    /// The Lieferant's MP-ID the account is kept under; defaults to the
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant; defaults to the
     /// configured `lf_mp_id`.
-    pub lf_mp_id: Option<String>,
+    pub mp_id: Option<String>,
     /// Maximum movements, newest first (default 100, at most 1000); what is
     /// cut off is folded into `opening_ct`.
     pub limit: Option<i64>,
@@ -654,7 +677,6 @@ pub struct LedgerQuery {
 ///
 /// Supported event types:
 /// - `de.mako.billing.rechnung.erstellt` → debit entry
-/// - `de.mako.invoic.receipt.settled`    → credit entry (NNE receipt paid)
 /// - `de.mako.invoic.receipt.disputed`   → no entry (dispute logged)
 /// - `de.mako.eeg.verguetung.berechnet`  → credit entry (EEG settlement)
 pub async fn ingest_webhook(
@@ -913,74 +935,6 @@ pub async fn ingest_webhook(
             StatusCode::OK.into_response()
         }
 
-        // ── NNE / INVOIC receipt settled (invoicd) ────────────────────────────
-        // de.mako.invoic.receipt.settled: the LF confirmed an inbound NNE invoice from the NB.
-        // For the customer ledger this is not directly relevant (it's an NB↔LF settlement),
-        // but if the LF passes the NNE cost through to the customer (MSB pass-through billing),
-        // a corresponding RECHNUNG should have been created by billingd already.
-        // We log the settlement as a ZAHLUNG credit if `settlement_eur` is present,
-        // meaning the NB confirmed receiving payment from the LF.
-        mako_events::invoic::RECEIPT_SETTLED => {
-            let malo_id = data
-                .and_then(|d| d.get("malo_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let settlement_ct: i64 = data
-                .and_then(|d| d.get("settlement_eur"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| {
-                    use rust_decimal::Decimal;
-                    use std::str::FromStr;
-                    // Positive settlement_eur = NB received payment → ZAHLUNG credit for customer.
-                    Decimal::from_str(s).ok().map(|d| {
-                        -(d * Decimal::from(100))
-                            .round_dp_with_strategy(
-                                0,
-                                rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                            )
-                            .to_string()
-                            .parse::<i64>()
-                            .unwrap_or(0)
-                    })
-                })
-                .unwrap_or(0);
-            if !malo_id.is_empty() && settlement_ct != 0 {
-                // A failed upsert is not "nothing to book": the entry below is
-                // posted against this row, so swallowing it would answer 200
-                // for a settlement that was never recorded.
-                if let Err(e) = upsert_account(&pool, malo_id, &cfg.lf_mp_id, &cfg.tenant).await {
-                    return ApiError::internal(e.context(format!(
-                        "account upsert for MaLo {malo_id} — returning 500 so the sender redelivers"
-                    )))
-                    .into_response();
-                }
-                if let Err(e) = crate::pg::post_entry(
-                    &ledger,
-                    &pool,
-                    &cfg.tenant,
-                    malo_id,
-                    &cfg.tenant,
-                    "ZAHLUNG",
-                    settlement_ct,
-                    &ce_id,
-                    Some(&ce_id),
-                    None,
-                    today,
-                    today,
-                    Some("NNE-Zahlung bestätigt (INVOIC settled)"),
-                    None,
-                )
-                .await
-                {
-                    return ledger_failure(e.context(format!(
-                        "ledger write for MaLo {malo_id} — returning 500 so the sender redelivers"
-                    )))
-                    .into_response();
-                }
-            }
-            StatusCode::OK.into_response()
-        }
-
         // ── EEG settlement receipts (einsd) ──────────────────────────────────
         // de.mako.eeg.verguetung.berechnet   → EEG_GUTSCHRIFT
         // de.mako.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE
@@ -1091,8 +1045,29 @@ fn eeg_beleg_aus(
         ketten_folge,
         bank_iban: text("bank_iban"),
         zahlungsempfaenger: text("zahlungsempfaenger"),
+        anschrift: zahlungsempfaenger_anschrift(data)?,
         sect52_aufgerechnet_ct: sect52_aufgerechnet_ct(data)?,
     })
+}
+
+/// `data.zahlungsempfaenger_anschrift` — the payee's structured `PstlAdr`;
+/// empty where the receipt states none.
+///
+/// One that is stated is held to the rules the pain.001 applies, so a receipt
+/// whose address the payout could not carry is refused at intake rather than
+/// leaving every payout of its chain unorderable.
+fn zahlungsempfaenger_anschrift(
+    data: &serde_json::Value,
+) -> Result<crate::sepa::AddressParts, String> {
+    let anschrift = match data.get("zahlungsempfaenger_anschrift") {
+        None | Some(serde_json::Value::Null) => return Ok(crate::sepa::AddressParts::default()),
+        Some(v) => serde_json::from_value::<crate::sepa::AddressParts>(v.clone())
+            .map_err(|e| format!("data.zahlungsempfaenger_anschrift: {e}"))?,
+    };
+    anschrift
+        .to_postal_address()
+        .map_err(|e| format!("data.zahlungsempfaenger_anschrift: {e}"))?;
+    Ok(anschrift)
 }
 
 /// `data.sect52.aufgerechnet_eur` in ct — the § 52 Abs. 6 Satz 2 EEG 2023
@@ -1119,7 +1094,8 @@ fn sect52_aufgerechnet_ct(data: &serde_json::Value) -> Result<i64, String> {
 ///
 /// Every failure answers an error so the sender redelivers: a refused payload
 /// — a second receipt at a taken chain position among them — `422` (einsd
-/// dead-letters it), anything else `500`. A redelivery is safe —
+/// dead-letters it), an unset `[eeg] nb_mp_id` `503 eeg_nb_not_configured`,
+/// anything else `500`. A redelivery is safe —
 /// the receipt, its booking and the payout are each idempotent — so a payout
 /// that could not be ordered is retried with the event, and
 /// `POST /api/v1/eeg/payouts/run` pays the same outstanding difference.
@@ -1145,7 +1121,14 @@ async fn ingest_eeg_beleg(
         return ApiError::unprocessable("EEG settlement event carries no data.malo_id")
             .into_response();
     };
-    let account_id = match upsert_account(pool, malo_id, &cfg.lf_mp_id, &cfg.tenant).await {
+    // § 19 Abs. 1 EEG 2023: the Anspruch is „gegen den Netzbetreiber", so the
+    // plant account is the Netzbetreiber's. Unset, the receipt is refused with
+    // a 503 and redelivered once the MP-ID is configured — never booked on the
+    // Lieferant's Kontokorrent in its place.
+    let Some(nb_mp_id) = cfg.eeg.nb_mp_id() else {
+        return eeg_nb_fehlt().into_response();
+    };
+    let account_id = match upsert_account(pool, malo_id, nb_mp_id, &cfg.tenant).await {
         Ok(id) => id,
         Err(e) => {
             return ApiError::internal(e.context(format!(
@@ -1162,15 +1145,9 @@ async fn ingest_eeg_beleg(
     // The receipt and its staged booking commit together.
     let erfasst = async {
         let mut tx = pool.begin().await?;
-        let e = crate::eeg_auszahlung::erfasse(
-            &mut tx,
-            ledger,
-            &cfg.tenant,
-            &cfg.lf_mp_id,
-            &beleg,
-            today,
-        )
-        .await?;
+        let e =
+            crate::eeg_auszahlung::erfasse(&mut tx, ledger, &cfg.tenant, nb_mp_id, &beleg, today)
+                .await?;
         tx.commit().await?;
         Ok::<_, crate::eeg_auszahlung::ErfassFehler>(e)
     }
@@ -1460,7 +1437,7 @@ pub async fn import_payments(
         };
         {
             let malo_id = matched.malo_id.clone();
-            let lf_mp_id = matched.lf_mp_id.clone();
+            let lf_mp_id = matched.mp_id.clone();
             {
                 let is_return = entry.is_return();
                 let entry_type = if is_return {
@@ -1581,7 +1558,7 @@ async fn stage_bank_row<'a>(
         tenant,
         log.bank_transaction_id,
         &draft.malo_id,
-        &draft.lf_mp_id,
+        &draft.mp_id,
         ledger_id,
     )
     .await?;
@@ -1888,7 +1865,7 @@ async fn import_cash_entries(
                 }
             };
             let malo_id = matched.malo_id.clone();
-            let lf_mp_id = matched.lf_mp_id.clone();
+            let lf_mp_id = matched.mp_id.clone();
 
             // Per **detail**, not per entry: a batch booking mixes settled
             // collections with returns, and `CashEntry::is_return` answers for
@@ -2911,7 +2888,7 @@ pub async fn escalate_dunning(
         &cfg.tenant,
         account_id,
         &account.malo_id,
-        &account.lf_mp_id,
+        &account.mp_id,
         stufe,
         amount_due_ct,
         due_date,
@@ -3630,7 +3607,7 @@ pub async fn close_einwand(
             return anyhow::Ok(None);
         };
         let ids: Option<(String, String)> = sqlx::query_as(
-            "SELECT malo_id, lf_mp_id FROM accounts WHERE account_id = $1 AND tenant = $2",
+            "SELECT malo_id, mp_id FROM accounts WHERE account_id = $1 AND tenant = $2",
         )
         .bind(account_id)
         .bind(&cfg.tenant)
@@ -4153,7 +4130,9 @@ pub struct BuchenRequest {
     pub booking_date: Option<String>,
     /// ISO 8601 value date. Defaults to `booking_date` when absent.
     pub value_date: Option<String>,
-    pub lf_mp_id: Option<String>,
+    /// The own MP-ID the account is kept under; defaults to `[eeg] nb_mp_id`
+    /// for an `EEG_*` entry and the configured `lf_mp_id` for every other.
+    pub mp_id: Option<String>,
 }
 
 /// `POST /api/v1/accounts/{malo_id}/buchen`
@@ -4211,8 +4190,20 @@ pub async fn post_buchen(
         return ApiError::unprocessable("amount_ct must be non-zero").into_response();
     }
 
-    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id).to_owned();
-    if let Err(e) = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
+    let mp_id = match crate::ledger::buchungskonto(
+        &req.entry_type,
+        req.mp_id.as_deref(),
+        &cfg.lf_mp_id,
+        cfg.eeg.nb_mp_id(),
+    ) {
+        Ok(mp_id) => mp_id,
+        Err(grund) => {
+            return ApiError::unprocessable(grund)
+                .with_code("eeg_nb_not_configured")
+                .into_response();
+        }
+    };
+    if let Err(e) = upsert_account(&pool, &malo_id, &mp_id, &cfg.tenant).await {
         return ApiError::internal(e).into_response();
     }
 
@@ -4244,7 +4235,7 @@ pub async fn post_buchen(
         &pool,
         &cfg.tenant,
         &malo_id,
-        &lf_mp_id,
+        &mp_id,
         &req.entry_type,
         req.amount_ct,
         &idempotency,
@@ -4839,7 +4830,10 @@ pub async fn settle_jahresabschluss(
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ZahlungsQuery {
-    pub lf_mp_id: Option<String>,
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant; defaults to the
+    /// configured `lf_mp_id`.
+    pub mp_id: Option<String>,
 }
 
 /// `PUT /api/v1/accounts/{malo_id}/zahlungsinformation`
@@ -4883,7 +4877,7 @@ pub async fn put_zahlungsinformation(
     if let Err(r) = typed.ensure_no_undefined_fields() {
         return bo4e_refusal(&r).into_response();
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id).to_owned();
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id).to_owned();
 
     // The BO4E gate ran while `Bo4e` deserialised the body. Its strict-enum
     // stage is what keeps `zahlungsart` — which drives the SEPA collection path
@@ -4903,7 +4897,7 @@ pub async fn put_zahlungsinformation(
     };
 
     // Ensure account row exists.
-    let account_id = match upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
+    let account_id = match upsert_account(&pool, &malo_id, &mp_id, &cfg.tenant).await {
         Ok(id) => id,
         Err(e) => return ApiError::internal(e).into_response(),
     };
@@ -4970,13 +4964,13 @@ pub async fn get_zahlungsinformation(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     use rubo4e::current::Zahlungsinformation;
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
     let row = sqlx::query(
         "SELECT iban, zahlungsinformation FROM accounts \
-         WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3 LIMIT 1",
+         WHERE malo_id = $1 AND mp_id = $2 AND tenant = $3 LIMIT 1",
     )
     .bind(&malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(&cfg.tenant)
     .fetch_optional(&pool)
     .await;
@@ -5073,7 +5067,7 @@ mod iban_tests {
     tag = "accounts",
     params(
         ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
-        AccountQuery,
+        KontoQuery,
     ),
     responses(
         (status = 200, description = "Done", body = serde_json::Value),
@@ -5087,18 +5081,18 @@ pub async fn get_open_items(
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
-    Query(q): Query<AccountQuery>,
+    Query(q): Query<KontoQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
-    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
+    let account = match fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
     };
-    match crate::pg::list_open_items(&ledger, lf_mp_id, &malo_id).await {
+    match crate::pg::list_open_items(&ledger, mp_id, &malo_id).await {
         Ok(items) => Json(serde_json::json!({
             "malo_id": malo_id,
             "balance_ct": account.balance_ct,
@@ -5159,7 +5153,7 @@ pub struct AnonymizeRequest {
     tag = "accounts",
     params(
         ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
-        AccountQuery,
+        KontoQuery,
     ),
     request_body = AnonymizeRequest,
     responses(
@@ -5175,7 +5169,7 @@ pub async fn post_anonymize(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
-    Query(q): Query<AccountQuery>,
+    Query(q): Query<KontoQuery>,
     Json(req): Json<AnonymizeRequest>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "erase-pii", &cfg.tenant) {
@@ -5188,8 +5182,8 @@ pub async fn post_anonymize(
         .into_response();
     }
 
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
-    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
+    let account = match fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return account_not_found(&malo_id),
         Err(e) => return ApiError::internal(e).into_response(),
@@ -5217,7 +5211,10 @@ pub async fn post_anonymize(
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ReconcileQuery {
-    pub lf_mp_id: Option<String>,
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant; defaults to the
+    /// configured `lf_mp_id`.
+    pub mp_id: Option<String>,
     /// When `true`, resets `balance_ct` to the recomputed value (safe, transactional).
     pub repair: Option<bool>,
 }
@@ -5269,14 +5266,12 @@ pub async fn post_reconcile(
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
-    if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
+    if let Ok(None) = fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
         return account_not_found(&malo_id);
     }
     let repair = q.repair.unwrap_or(false);
-    match crate::pg::reconcile_balance(&ledger, &pool, &malo_id, lf_mp_id, &cfg.tenant, repair)
-        .await
-    {
+    match crate::pg::reconcile_balance(&ledger, &pool, &malo_id, mp_id, &cfg.tenant, repair).await {
         Ok(result) => Json(result).into_response(),
         Err(e) => ledger_failure(e).into_response(),
     }
@@ -5425,8 +5420,9 @@ pub async fn get_entry_proof(
 pub struct BalanceProofQuery {
     /// Marktlokation whose Kontokorrent balance is being proven.
     pub malo_id: String,
-    /// The Lieferant the Kontokorrent belongs to.
-    pub lf_mp_id: String,
+    /// The own MP-ID the Kontokorrent is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant.
+    pub mp_id: String,
 }
 
 /// `GET /api/v1/periods/{period_id}/balance-proof` — proves what one customer's
@@ -5463,7 +5459,7 @@ pub async fn get_period_balance_proof(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     let (proof, head) = match ledger
-        .prove_period_balance(&period_id, &q.lf_mp_id, &q.malo_id)
+        .prove_period_balance(&period_id, &q.mp_id, &q.malo_id)
         .await
     {
         Ok(p) => p,
@@ -5489,7 +5485,7 @@ pub async fn get_period_balance_proof(
     Json(serde_json::json!({
         "period": period_id,
         "malo_id": q.malo_id,
-        "lf_mp_id": q.lf_mp_id,
+        "mp_id": q.mp_id,
         "account": proven.account.to_string(),
         "start": proven.start.to_string(),
         "end": proven.end.to_string(),
@@ -5617,7 +5613,7 @@ pub async fn get_trial_balance(
     tag = "accounts",
     params(
         ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
-        AccountQuery,
+        KontoQuery,
     ),
     responses(
         (status = 200, description = "Done", body = serde_json::Value),
@@ -5632,17 +5628,17 @@ pub async fn post_clear(
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
-    Query(q): Query<AccountQuery>,
+    Query(q): Query<KontoQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
-    if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+    let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
+    if let Ok(None) = fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
         return account_not_found(&malo_id);
     }
     let today = mako_fristen::heute();
-    match ledger.apply_fifo_clearing(lf_mp_id, &malo_id, today).await {
+    match ledger.apply_fifo_clearing(mp_id, &malo_id, today).await {
         Ok(positions) => Json(serde_json::json!({
             "cleared": !positions.is_empty(),
             // Each matched (debit, credit) pair is one clearing, named by its
@@ -6026,6 +6022,7 @@ pub struct RunEegPayoutsRequest {
         (status = 200, description = "Done", body = serde_json::Value),
         (status = 403, description = "Cedar `run-payout` refused", body = ApiError),
         (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
+        (status = 503, description = "`eeg_debtor_not_configured` — `[eeg] debtor_iban` or `debtor_name` is not set", body = ApiError),
     ),
 )]
 pub async fn post_run_eeg_payouts(
@@ -6038,9 +6035,8 @@ pub async fn post_run_eeg_payouts(
     if let Err(e) = cedar.check(&claims.principal(), "run-payout", &cfg.tenant) {
         return ApiError::forbidden(e.to_string()).into_response();
     }
-    if cfg.eeg.debtor_iban.is_none() {
-        return ApiError::unprocessable("EEG payout requires [eeg].debtor_iban in config")
-            .into_response();
+    if cfg.eeg.debtor_iban.is_none() || cfg.eeg.debtor_name().is_none() {
+        return eeg_debtor_fehlt().into_response();
     }
     if !(1..=12).contains(&req.billing_month) {
         return ApiError::unprocessable("billing_month must be 1–12").into_response();
@@ -6837,7 +6833,7 @@ async fn apply_pain002_status(
             malo_id,
             serde_json::json!({
                 "malo_id":         malo_id,
-                "lf_mp_id":        collected.lf_mp_id,
+                "lf_mp_id":        collected.mp_id,
                 "mandate_id":      collected.mandate_id.map(|id| id.to_string()),
                 "mandatsref":      collected.mandatsref,
                 "end_to_end_id":   collected.end_to_end_id,
@@ -7016,7 +7012,7 @@ pub async fn post_sepa_reversal(
     };
 
     // The compensating entry re-opens the receivable. Positive = Forderung.
-    let storno = match (entry.malo_id.as_deref(), entry.lf_mp_id.as_deref()) {
+    let storno = match (entry.malo_id.as_deref(), entry.mp_id.as_deref()) {
         (Some(malo_id), Some(lf_mp_id)) => {
             let today = mako_fristen::heute();
             Some(crate::pg::draft(
@@ -7108,7 +7104,7 @@ pub async fn post_sepa_reversal(
             serde_json::json!({
                 "reversal_id":          reversal_id.to_string(),
                 "malo_id":              malo_id,
-                "lf_mp_id":             entry.lf_mp_id,
+                "lf_mp_id":             entry.mp_id,
                 "mandatsref":           entry.mandatsref,
                 "original_msg_id":      entry.msg_id,
                 "original_end_to_end_id": entry.end_to_end_id,

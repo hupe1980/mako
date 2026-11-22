@@ -99,6 +99,9 @@ export const en: Katalog = {
     fehler: "The history could not be read",
     eingang: "Inbound",
     ausgang: "Outbound",
+    imHaus: "in-house",
+    imHausHinweis: "Between two of your own Marktrollen, delivered in-house — not over AS4.",
+    alsRolle: (rolle) => `as ${rolle}`,
     ohneZeitpunkt: "no time recorded",
     schritte: (n, text) => (n === 1 ? "1 internal step" : `${text} internal steps`),
   },
@@ -1427,6 +1430,10 @@ export const en: Katalog = {
       "No process is known under this key. Check the spelling — or the message has not arrived yet.",
     creditor_name_not_configured:
       "SEPA needs the creditor's name — set `creditor_name` in accountingd's configuration.",
+    eeg_nb_not_configured:
+      "The EEG payout is owed by the Netzbetreiber, and its Marktpartner-ID is not set — set `[eeg] nb_mp_id` in accountingd's configuration.",
+    eeg_debtor_not_configured:
+      "The EEG payout needs the Netzbetreiber's account and name — set `[eeg] debtor_iban` and `[eeg] debtor_name` in accountingd's configuration.",
     foreign_catalogue: "This catalogue belongs to a different Lieferant than this service.",
     mp_id_ungueltig: "That is not a valid Marktpartner-ID — 13 digits, Strom 99…, Gas 98….",
     malo_not_found: "This MaLo is not known.",

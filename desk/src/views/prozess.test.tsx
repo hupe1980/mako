@@ -133,6 +133,8 @@ const freigabe = {
 function stub(opts: {
   deadlines: unknown[];
   history?: unknown[];
+  /** The Marktrolle `get_process_history` names. */
+  rolle?: string;
   freigaben?: unknown[];
   projection?: Record<string, unknown>;
   posts?: { url: string; body: unknown }[];
@@ -168,6 +170,7 @@ function stub(opts: {
             structuredContent: {
               process_id: "p-1",
               workflow_name: "gpke-supplier-change",
+              rolle: opts.rolle ?? null,
               eintraege: opts.history ?? HISTORY,
             },
           };
@@ -248,6 +251,23 @@ describe("the Prozess page", () => {
     // The next Frist is the earliest pending one — the APERAK's here.
     const naechste = screen.getByRole("group", { name: "Nächste Frist" });
     expect(within(naechste).getByText("Eingangsbestätigung (APERAK)")).toBeTruthy();
+  });
+
+  it("names the role the process acts in and marks a message from the own house", async () => {
+    stub({
+      deadlines: [],
+      rolle: "LF",
+      history: [
+        {
+          ...eintrag(1, "2031-01-01T09:00:00Z", "InvoicReceived", "eingang", 31002),
+          intern: true,
+        },
+      ],
+    });
+    await open(`/prozess?key=${KEY}`);
+    expect(await screen.findByText("als Lieferant")).toBeTruthy();
+    const chip = await screen.findByText("im Haus");
+    expect(chip.getAttribute("title")).toContain("nicht über AS4");
   });
 
   it("steps through what the history states and what is still awaited", async () => {

@@ -345,6 +345,11 @@ pub struct ProcessIdentity {
     pub tenant_id: TenantId,
     /// The workflow version under which this process was created.
     pub workflow_id: crate::version::WorkflowId,
+    /// The Marktrolle the process acts in (`NB`, `LF`, `MSB`, …), where the
+    /// spawn knew it: one MP-ID names one role (Allgemeine Festlegungen 6.1d
+    /// Kap. 2.13), so the own MP-ID a process runs under decides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rolle: Option<Box<str>>,
 }
 
 impl ProcessIdentity {
@@ -364,7 +369,15 @@ impl ProcessIdentity {
             process_id,
             tenant_id,
             workflow_id,
+            rolle: None,
         }
+    }
+
+    /// The same identity, acting in `rolle`.
+    #[must_use]
+    pub fn with_rolle(mut self, rolle: Option<Box<str>>) -> Self {
+        self.rolle = rolle;
+        self
     }
 
     /// The event stream identifier for this process.

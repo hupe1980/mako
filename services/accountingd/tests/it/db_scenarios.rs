@@ -2274,7 +2274,7 @@ async fn a_mandate_makes_the_account_findable_by_iban() {
     // The CAMT.054 lookup, verbatim — a bank statement quotes the IBAN without
     // spaces, so the stored hash must be over the normalised form.
     let hit: Option<(String, String)> = sqlx::query_as(
-        "SELECT malo_id, lf_mp_id FROM accounts WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
+        "SELECT malo_id, mp_id FROM accounts WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
     )
     .bind(accountingd::ledger::iban_hash(
         Some(&key),
@@ -4549,7 +4549,7 @@ async fn enfg_zahlungen_serve_settled_payouts_and_aufrechnungen_only() {
     let tenant = uniq("T");
     let malo = uniq_malo();
     let account_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO accounts (malo_id, lf_mp_id, tenant) VALUES ($1, '', $2) RETURNING account_id",
+        "INSERT INTO accounts (malo_id, mp_id, tenant) VALUES ($1, '', $2) RETURNING account_id",
     )
     .bind(&malo)
     .bind(&tenant)

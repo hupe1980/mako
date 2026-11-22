@@ -232,7 +232,7 @@ idle_timeout_secs    = 600
 max_lifetime_secs    = 1800
 
 [identity]
-tenant = "9900357000004"              # required — data-isolation key
+tenant = "stadtwerke-musterstadt"              # required — data-isolation key
 own_mp_id = "9900000000003"           # this deployment's MSB; operator of readings edmd produces
                                       # itself. Unset, such readings are refused (422)
 

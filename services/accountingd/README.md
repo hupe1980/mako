@@ -13,7 +13,7 @@ ledger, committed with the business change that causes it; it prices nothing.
 | **Database** | PostgreSQL — satellites in `public`, the journal in schema `ledger` |
 | **MCP** | 20 tools, 1 prompt at `/mcp` |
 | **Emits** | `de.mako.accounting.*` (`payment.imported`, `mahnung.issued`, `sperrauftrag`, `sepa.collection-rejected`, …) to the ERP webhook |
-| **Consumes** | `de.mako.billing.rechnung.erstellt`, `de.mako.invoic.receipt.settled`, `de.mako.eeg.verguetung.berechnet`, `de.mako.eeg.marktpraemie.berechnet` at `POST /webhook` |
+| **Consumes** | `de.mako.billing.rechnung.erstellt`, `de.mako.eeg.verguetung.berechnet`, `de.mako.eeg.marktpraemie.berechnet` at `POST /webhook` |
 | **Depends on** | `makod` (ORDERS 17115/17117), `outputd` (Mahnung), `vertragd` (Mahnung recipient) |
 
 ## Run
@@ -47,14 +47,35 @@ answer the same type on both doors.
 The full route list with each Cedar action is the guide's
 [Endpoints](https://hupe1980.github.io/mako/docs/services/accountingd/#endpoints).
 
+## Accounts
+
+An account is keyed `(malo_id, mp_id, tenant)`, where `mp_id` is the MP-ID of
+the own Marktrolle it is kept under: the Lieferant's (`lf_mp_id`) for a
+customer, the Netzbetreiber's (`[eeg] nb_mp_id`) for an EEG plant. The EEG
+payout is the Netzbetreiber's — § 19 Abs. 1 EEG 2023: Anlagenbetreiber „haben
+für den in diesen Anlagen erzeugten Strom gegen den Netzbetreiber einen
+Anspruch auf 1. die Marktprämie nach § 20, 2. eine Einspeisevergütung …, 3.
+einen Mieterstromzuschlag …" — so the Netzbetreiber pays, the Anlagenbetreiber
+is paid, and neither the Direktvermarktungsunternehmer nor a Lieferant is a
+party to it. The routes that serve every account take `?mp_id=`; the
+Lieferant's customer features (Verbraucher status, Abschlag, payment plans,
+locks, interest, payment assignment) keep `?lf_mp_id=`. Both default to
+`lf_mp_id`, and a key a route does not take is refused.
+
 ## Configuration
 
-`tenant` (the isolation key); `lf_mp_id`, the Lieferant whose accounts the
-ledger keeps and the default of every `lf_mp_id` a request or event leaves out
-(required, an MP-ID); `[database]` (`url`, and `migration_url` for the role that may write
+`tenant` (the isolation key); `lf_mp_id`, the Lieferant whose customer accounts
+the ledger keeps and the default of every `lf_mp_id` / `mp_id` a request or
+event leaves out (required, an MP-ID); `[database]` (`url`, and `migration_url` for the role that may write
 the journal); `[oidc]`; the SEPA creditor `creditor_iban`, `creditor_id`,
-`creditor_name` (without it every pain.008, EEG pain.001 and Mahnung is
-refused — `503 creditor_name_not_configured` on a REST door), `[creditor_address]`; `makod_url` / `makod_api_key` (without
+`creditor_name` (without it every pain.008 and Mahnung is
+refused — `503 creditor_name_not_configured` on a REST door), `[creditor_address]`;
+`[eeg] nb_mp_id`, the Netzbetreiber the EEG plant accounts are kept under
+(without it every EEG receipt is refused `503 eeg_nb_not_configured` and
+redelivered), `[eeg] debtor_iban` / `debtor_name` / `[eeg.debtor_address]`, the
+Netzbetreiber as SEPA debtor of every EEG pain.001 (without the first two a
+payout is refused `503 eeg_debtor_not_configured`; `auto_payout = true` refuses
+the start without `nb_mp_id`, `debtor_iban` or `debtor_name`); `makod_url` / `makod_api_key` (without
 them the Sperr-Sequenz does not run); `outputd_url`, `vertragd_url`;
 `erp_webhook_url` / `erp_hmac_secret`. `dunning_auto_enabled` requires
 `dunning_fee_stufe{1,2,3}_ct` and `dunning_zahlungsfrist_stufe{1,2,3}_tage`.

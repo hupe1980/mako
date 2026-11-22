@@ -17,7 +17,7 @@ tenant = "stadtwerke-musterstadt"
 lf_mp_id = "9900357000028"
 
 # The Lieferant's legal name, as a bank and a customer read it on every
-# pain.008, EEG pain.001 and Mahnung.
+# pain.008 and Mahnung.
 creditor_name = "Stadtwerke Musterstadt GmbH"
 
 [http]
@@ -28,6 +28,14 @@ addr = "0.0.0.0:9380"
 # owner migrates and grants it (deploy/postgres/init.sql creates both).
 url           = "postgres://accountingd_app:accountingd_app@postgres:5432/accountingd"
 migration_url = "postgres://mako:mako@postgres:5432/accountingd"
+
+# The EEG payouts are the Netzbetreiber's: § 19 Abs. 1 EEG 2023 gives the
+# Anlagenbetreiber its Anspruch „gegen den Netzbetreiber", so the plant accounts
+# are kept under the NB's MP-ID and the pain.001 names the NB as debtor. The
+# demo Stadtwerk is one company, so the NB's legal name is the Lieferant's.
+[eeg]
+nb_mp_id    = "9900357000004"
+debtor_name = "Stadtwerke Musterstadt GmbH"
 
 # The demo sign-in: a token from `just token <persona>` or the Desk's persona
 # switcher is answered as that persona by Cedar; a request without one is the

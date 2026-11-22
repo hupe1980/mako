@@ -575,17 +575,28 @@ CREATE TABLE grundversorger (
 -- The MP-ID the grundzuständige MSB of an NB's grid acts under (§ 2 Nr. 4
 -- MsbG names the NB as that MSB until it transfers the Grundzuständigkeit;
 -- Identifikatoren AWH V1.2 Kap. 2.1 gives every role its own MP-ID). productd
--- reads the PreisblattMessung of an offer under it; with no row the offer is
--- refused rather than priced under the NB's code. The NB's MP-ID is already
--- per Sparte, so it is the key.
+-- reads the PreisblattMessung of an offer under it, for the offer's day; with
+-- no row covering that day the offer is refused rather than priced under the
+-- NB's code. The NB's MP-ID is already per Sparte, so it is the key. Validity
+-- is half-open [valid_from, valid_to): a transfer of the Grundzuständigkeit for
+-- moderne Messeinrichtungen and intelligente Messsysteme (§§ 41, 43 MsbG)
+-- closes one link and opens the next on the same day.
 
 CREATE TABLE grundzustaendige_msb (
     tenant      TEXT        NOT NULL,
     nb_mp_id    TEXT        NOT NULL,
     gmsb_mp_id  TEXT        NOT NULL,
+    valid_from  DATE        NOT NULL,
+    valid_to    DATE,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    PRIMARY KEY (tenant, nb_mp_id)
+    PRIMARY KEY (tenant, nb_mp_id, valid_from),
+    CHECK (valid_to IS NULL OR valid_to > valid_from),
+    CONSTRAINT grundzustaendige_msb_no_overlap EXCLUDE USING gist (
+        tenant WITH =,
+        nb_mp_id WITH =,
+        daterange(valid_from, valid_to) WITH &&
+    )
 );
 
 -- ── NB price sheets (PreisblattNetznutzung) ───────────────────────────────────

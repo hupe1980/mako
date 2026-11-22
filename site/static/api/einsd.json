@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.45.0"
+    "version": "0.46.0"
   },
   "paths": {
     "/api/v1/anlagen": {
@@ -1975,6 +1975,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "`zahlungsempfaenger_anschrift` refused — `incomplete_postal_address` (town or country missing) or `invalid_country_code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -3359,6 +3369,55 @@
           }
         }
       },
+      "Anschrift": {
+        "type": "object",
+        "description": "The Zahlungsempfänger's postal address, in the structured ISO 20022\n`PstlAdr` form accountingd's pain.001 emits as `Cdtr/PstlAdr`.\n\nThe field names are accountingd's `sepa::AddressParts`, which reads this\nobject from the settlement event unchanged.",
+        "properties": {
+          "building_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`BldgNb`."
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`Ctry` — ISO 3166-1 alpha-2, required whenever an address is given."
+          },
+          "country_subdivision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CtrySubDvsn` (Bundesland)."
+          },
+          "post_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`PstCd`."
+          },
+          "street": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`StrtNm`."
+          },
+          "town": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`TwnNm` — required whenever an address is given."
+          }
+        },
+        "additionalProperties": false
+      },
       "ApiError": {
         "type": "object",
         "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
@@ -3524,6 +3583,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "zahlungsempfaenger_anschrift": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Anschrift",
+                "description": "The Zahlungsempfänger's postal address (`Cdtr/PstlAdr` of the payout);\n`None` where none is registered."
+              }
             ]
           }
         }
@@ -4047,6 +4117,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "zahlungsempfaenger_anschrift": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Anschrift",
+                "description": "The Zahlungsempfänger's postal address. Given, it replaces the stored\none whole — town and country required — and omitted keeps it."
+              }
             ]
           }
         },

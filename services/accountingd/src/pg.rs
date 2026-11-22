@@ -20,7 +20,7 @@ use crate::ledger::{PgLedger, PostEntry};
 #[must_use]
 pub fn draft(
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     entry_type: &str,
     amount_ct: i64,
     idempotency: &str,
@@ -33,7 +33,7 @@ pub fn draft(
 ) -> PostEntry {
     let mut req = PostEntry::new(
         malo_id,
-        lf_mp_id,
+        mp_id,
         entry_type,
         amount_ct,
         idempotency,
@@ -71,7 +71,7 @@ pub async fn post_entry(
     pool: &PgPool,
     tenant: &str,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     entry_type: &str,
     amount_ct: i64,
     idempotency: &str,
@@ -84,7 +84,7 @@ pub async fn post_entry(
 ) -> anyhow::Result<Uuid> {
     let req = draft(
         malo_id,
-        lf_mp_id,
+        mp_id,
         entry_type,
         amount_ct,
         idempotency,
@@ -104,7 +104,9 @@ pub async fn post_entry(
 pub struct AccountRow {
     pub account_id: Uuid,
     pub malo_id: String,
-    pub lf_mp_id: String,
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant.
+    pub mp_id: String,
     pub tenant: String,
     pub kunden_nr: Option<String>,
     pub iban: Option<String>,
@@ -149,7 +151,10 @@ impl AccountRow {
     }
 }
 
-/// The account for `(malo_id, lf_mp_id, tenant)`, created if it does not exist.
+/// The account for `(malo_id, mp_id, tenant)`, created if it does not exist.
+///
+/// `mp_id` is the own Marktrolle's MP-ID the account is kept under: the
+/// Lieferant's for a customer, the Netzbetreiber's for an EEG Anlagenbetreiber.
 ///
 /// Takes an executor so a caller writing the account and what depends on it can
 /// commit them together.
@@ -160,19 +165,19 @@ impl AccountRow {
 pub async fn upsert_account(
     executor: impl sqlx::PgExecutor<'_>,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     tenant: &str,
 ) -> anyhow::Result<Uuid> {
     let row = sqlx::query(
-        // ON CONFLICT must match the UNIQUE (malo_id, lf_mp_id, tenant) constraint exactly.
-        // Using (malo_id, lf_mp_id) without tenant caused "no unique constraint matching" errors.
-        r"INSERT INTO accounts (malo_id, lf_mp_id, tenant)
+        // ON CONFLICT names the UNIQUE (malo_id, mp_id, tenant) constraint exactly;
+        // a column list without `tenant` matches no constraint and is refused.
+        r"INSERT INTO accounts (malo_id, mp_id, tenant)
           VALUES ($1, $2, $3)
-          ON CONFLICT (malo_id, lf_mp_id, tenant) DO UPDATE SET updated_at = now()
+          ON CONFLICT (malo_id, mp_id, tenant) DO UPDATE SET updated_at = now()
           RETURNING account_id",
     )
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .fetch_one(executor)
     .await
@@ -180,20 +185,20 @@ pub async fn upsert_account(
     Ok(row.try_get("account_id")?)
 }
 
-/// Fetch an account by (malo_id, lf_mp_id, tenant) — full tenant isolation.
+/// Fetch an account by (malo_id, mp_id, tenant) — full tenant isolation.
 ///
 /// Returns `None` when no account exists for this triple.
 pub async fn fetch_account(
     pool: &PgPool,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     tenant: &str,
 ) -> anyhow::Result<Option<AccountRow>> {
     sqlx::query_as::<_, AccountRow>(
-        "SELECT * FROM accounts WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3 LIMIT 1",
+        "SELECT * FROM accounts WHERE malo_id = $1 AND mp_id = $2 AND tenant = $3 LIMIT 1",
     )
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .fetch_optional(pool)
     .await
@@ -245,17 +250,17 @@ pub async fn set_account_sparte(
 pub async fn set_account_kunden_nr(
     pool: &PgPool,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     tenant: &str,
     kunden_nr: &str,
 ) -> anyhow::Result<u64> {
     let r = sqlx::query(
         "UPDATE accounts SET kunden_nr = $1, updated_at = now() \
-         WHERE malo_id = $2 AND lf_mp_id = $3 AND tenant = $4",
+         WHERE malo_id = $2 AND mp_id = $3 AND tenant = $4",
     )
     .bind(kunden_nr)
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .execute(pool)
     .await
@@ -336,16 +341,16 @@ fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<bool>
 pub async fn set_verbraucher(
     executor: impl sqlx::PgExecutor<'_>,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     tenant: &str,
     verbraucher: Option<bool>,
 ) -> anyhow::Result<()> {
     let rows = sqlx::query(
         "UPDATE accounts SET verbraucher = $4, updated_at = now()
-          WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
+          WHERE malo_id = $1 AND mp_id = $2 AND tenant = $3",
     )
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .bind(verbraucher)
     .execute(executor)
@@ -353,7 +358,7 @@ pub async fn set_verbraucher(
     .context("set_verbraucher")?
     .rows_affected();
     if rows == 0 {
-        anyhow::bail!("account not found: malo_id={malo_id} lf_mp_id={lf_mp_id} tenant={tenant}");
+        anyhow::bail!("account not found: malo_id={malo_id} mp_id={mp_id} tenant={tenant}");
     }
     Ok(())
 }
@@ -366,7 +371,7 @@ fn account_iban_hash(iban: Option<&str>, iban_key: Option<&[u8; 32]>) -> Option<
 
 /// Update the payment and address details of one account.
 ///
-/// `(malo_id, lf_mp_id)` is **not** a key. `accounts` is keyed on `account_id`
+/// `(malo_id, mp_id)` is **not** a key. `accounts` is keyed on `account_id`
 /// and carries only non-unique indexes over those two columns, so the pair
 /// matches a row in every tenant holding that Marktlokation. The tenant
 /// predicate is what makes this statement address one account, and what it
@@ -385,7 +390,7 @@ fn account_iban_hash(iban: Option<&str>, iban_key: Option<&[u8; 32]>) -> Option<
 pub async fn update_account_tenanted(
     executor: impl sqlx::PgExecutor<'_>,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     tenant: &str,
     iban_key: Option<&[u8; 32]>,
     req: UpdateAccountRequest,
@@ -405,10 +410,10 @@ pub async fn update_account_tenanted(
               addr_post_code       = COALESCE($13, addr_post_code),
               addr_country_subdivision = COALESCE($14, addr_country_subdivision),
               updated_at  = now()
-          WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
+          WHERE malo_id = $1 AND mp_id = $2 AND tenant = $3",
     )
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .bind(req.iban)
     .bind(req.mandatsref)
@@ -427,7 +432,7 @@ pub async fn update_account_tenanted(
     .rows_affected();
 
     if rows_affected == 0 {
-        anyhow::bail!("account not found: malo_id={malo_id} lf_mp_id={lf_mp_id} tenant={tenant}");
+        anyhow::bail!("account not found: malo_id={malo_id} mp_id={mp_id} tenant={tenant}");
     }
     Ok(())
 }
@@ -673,7 +678,7 @@ pub struct CollectionEntryRow {
     pub debtor_name: Option<String>,
     pub mandate_signed_at: Option<Date>,
     pub malo_id: Option<String>,
-    pub lf_mp_id: Option<String>,
+    pub mp_id: Option<String>,
 }
 
 const COLLECTION_ENTRY_SELECT: &str = r"
@@ -685,7 +690,7 @@ const COLLECTION_ENTRY_SELECT: &str = r"
            sm.bic           AS debtor_bic,
            sm.kontoinhaber  AS debtor_name,
            sm.signed_at     AS mandate_signed_at,
-           a.malo_id, a.lf_mp_id
+           a.malo_id, a.mp_id
     FROM sepa_collection_entries ce
     JOIN sepa_collection_runs r ON r.run_id = ce.run_id
     LEFT JOIN sepa_mandates sm  ON sm.mandate_id = ce.mandate_id
@@ -735,7 +740,7 @@ pub async fn find_collection_entry_by_e2e(
 pub struct AccountMatch {
     pub account_id: Uuid,
     pub malo_id: String,
-    pub lf_mp_id: String,
+    pub mp_id: String,
     /// Which rung of the ladder matched — carried onto the CloudEvent so a
     /// reconciliation agent can tell a bank-asserted match from an inferred one.
     pub matched_by: &'static str,
@@ -800,7 +805,7 @@ pub async fn resolve_account_for_payment(
     // paid and not what for.
     if let Some(hash) = clues.iban_hash {
         let rows = sqlx::query_as::<_, (Uuid, String, String)>(
-            "SELECT account_id, malo_id, lf_mp_id FROM accounts \
+            "SELECT account_id, malo_id, mp_id FROM accounts \
              WHERE iban_hash = $1 AND tenant = $2 LIMIT 2",
         )
         .bind(hash)
@@ -824,7 +829,7 @@ pub async fn resolve_account_for_payment(
         // admits a mandate whose Mandatsreferenz is that string. Either way,
         // two accounts is not an answer.
         let rows = sqlx::query_as::<_, (Uuid, String, String)>(
-            r"SELECT DISTINCT a.account_id, a.malo_id, a.lf_mp_id
+            r"SELECT DISTINCT a.account_id, a.malo_id, a.mp_id
               FROM accounts a
               WHERE a.tenant = $1
                 AND (a.account_id IN (SELECT account_id FROM sepa_collection_entries
@@ -852,7 +857,7 @@ pub async fn resolve_account_for_payment(
         return Ok(None);
     }
     let row = sqlx::query_as::<_, (Uuid, String, String)>(
-        r"SELECT DISTINCT a.account_id, a.malo_id, a.lf_mp_id
+        r"SELECT DISTINCT a.account_id, a.malo_id, a.mp_id
           FROM accounts a
           WHERE a.tenant = $1
             AND (a.malo_id = ANY($2)
@@ -890,11 +895,11 @@ fn unique_match(
 ) -> Option<AccountMatch> {
     match rows.len() {
         1 => {
-            let (account_id, malo_id, lf_mp_id) = rows.into_iter().next()?;
+            let (account_id, malo_id, mp_id) = rows.into_iter().next()?;
             Some(AccountMatch {
                 account_id,
                 malo_id,
-                lf_mp_id,
+                mp_id,
                 matched_by,
             })
         }
@@ -1518,7 +1523,7 @@ pub async fn list_overdue_accounts(
 pub async fn upsert_vorauszahlung(
     pool: &PgPool,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     tenant: &str,
     vzahlung: serde_json::Value,
     abschlag_ct_override: Option<i64>,
@@ -1528,10 +1533,10 @@ pub async fn upsert_vorauszahlung(
           SET vorauszahlung = $4,
               abschlag_ct   = COALESCE($5, abschlag_ct),
               updated_at    = now()
-          WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
+          WHERE malo_id = $1 AND mp_id = $2 AND tenant = $3",
     )
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .bind(&vzahlung)
     .bind(abschlag_ct_override)
@@ -1548,15 +1553,15 @@ pub async fn upsert_vorauszahlung(
 pub async fn fetch_vorauszahlung(
     pool: &PgPool,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     tenant: &str,
 ) -> anyhow::Result<Option<(serde_json::Value, i64)>> {
     let row = sqlx::query(
         r"SELECT vorauszahlung, abschlag_ct FROM accounts
-          WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
+          WHERE malo_id = $1 AND mp_id = $2 AND tenant = $3",
     )
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .fetch_optional(pool)
     .await
@@ -1627,13 +1632,13 @@ pub async fn list_ledger(
     ledger: &PgLedger,
     pool: &PgPool,
     tenant: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     malo_id: &str,
     query: &doubleentry::BalanceQuery,
     limit: i64,
 ) -> anyhow::Result<LedgerWindow> {
     use doubleentry::Side;
-    let Some(statement) = ledger.statement(lf_mp_id, malo_id, query).await? else {
+    let Some(statement) = ledger.statement(mp_id, malo_id, query).await? else {
         return Ok(LedgerWindow {
             opening_ct: 0,
             lines: Vec::new(),
@@ -1840,7 +1845,7 @@ pub async fn create_mandate(
     // CAMT.054 matching resolves the account by, so it must be written here too.
     sqlx::query(
         "UPDATE accounts SET iban = $4, iban_hash = $5, mandatsref = $6, updated_at = now()
-         WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
+         WHERE malo_id = $1 AND mp_id = $2 AND tenant = $3",
     )
     .bind(&req.malo_id)
     .bind(&req.lf_mp_id)
@@ -2106,7 +2111,7 @@ pub async fn list_accounts_with_mandates(
                  sm.debtor_country_subdivision,
                  sm.updated_at  AS sm_updated_at,
                  a.sparte,
-                 a.account_id, a.malo_id, a.lf_mp_id, a.tenant,
+                 a.account_id, a.malo_id, a.mp_id, a.tenant,
                  a.kunden_nr,
                  a.iban         AS a_iban,
                  a.mandatsref   AS a_mandatsref,
@@ -2154,7 +2159,7 @@ pub async fn list_accounts_with_mandates(
         let account = AccountRow {
             account_id: r.try_get("account_id")?,
             malo_id: r.try_get("malo_id")?,
-            lf_mp_id: r.try_get("lf_mp_id")?,
+            mp_id: r.try_get("mp_id")?,
             tenant: r.try_get("tenant")?,
             kunden_nr: r.try_get("kunden_nr").ok(),
             iban: r.try_get("a_iban")?,
@@ -2224,7 +2229,7 @@ pub async fn find_accounts_due_for_sepa(
                  sm.debtor_country_subdivision,
                  sm.updated_at  AS sm_updated_at,
                  a.sparte,
-                 a.account_id, a.malo_id, a.lf_mp_id, a.tenant,
+                 a.account_id, a.malo_id, a.mp_id, a.tenant,
                  a.kunden_nr,
                  a.iban         AS a_iban,
                  a.mandatsref   AS a_mandatsref,
@@ -2274,7 +2279,7 @@ pub async fn find_accounts_due_for_sepa(
         let account = AccountRow {
             account_id: r.try_get("account_id")?,
             malo_id: r.try_get("malo_id")?,
-            lf_mp_id: r.try_get("lf_mp_id")?,
+            mp_id: r.try_get("mp_id")?,
             tenant: r.try_get("tenant")?,
             kunden_nr: r.try_get("kunden_nr").ok(),
             iban: r.try_get("a_iban")?,
@@ -2387,19 +2392,19 @@ pub async fn reconcile_balance(
     ledger: &PgLedger,
     pool: &PgPool,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     tenant: &str,
     repair: bool,
 ) -> anyhow::Result<BalanceReconcileResult> {
     // The authoritative balance is the doubleentry Kontokorrent net.
-    let recomputed = ledger.balance_ct(lf_mp_id, malo_id).await?;
+    let recomputed = ledger.balance_ct(mp_id, malo_id).await?;
 
     let acct = sqlx::query(
         "SELECT account_id, balance_ct FROM accounts \
-         WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
+         WHERE malo_id = $1 AND mp_id = $2 AND tenant = $3",
     )
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .fetch_optional(pool)
     .await
@@ -2455,10 +2460,10 @@ pub async fn reconcile_balance(
 /// reflects what has actually been paid, not a gross list.
 pub async fn list_open_items(
     ledger: &PgLedger,
-    lf_mp_id: &str,
+    mp_id: &str,
     malo_id: &str,
 ) -> anyhow::Result<Vec<crate::ledger::OpenReceivable>> {
-    Ok(ledger.open_receivables(lf_mp_id, malo_id).await?)
+    Ok(ledger.open_receivables(mp_id, malo_id).await?)
 }
 
 // ── GDPR Art. 17 anonymization ─────────────────────────────────────────
@@ -2554,7 +2559,8 @@ pub async fn anonymize_account(
         "sepa_mandates.bic",
         "sepa_mandates.debtor_*",
         "eeg_belege.bank_iban",
-        "eeg_belege.zahlungsempfaenger"
+        "eeg_belege.zahlungsempfaenger",
+        "eeg_belege.creditor_*"
     ]);
 
     let mut tx = pool.begin().await.context("anonymize: begin tx")?;
@@ -2604,12 +2610,16 @@ pub async fn anonymize_account(
     .await
     .context("anonymize: update sepa_mandates")?;
 
-    // 3. The creditor einsd forwarded with each EEG receipt. It is a routing
-    //    hint, not a Buchungsbeleg — the order snapshots what was sent — so it
-    //    is erased with the account; an outstanding chain then waits for a
+    // 3. The creditor einsd forwarded with each EEG receipt, its address
+    //    included. It is a routing hint, not a Buchungsbeleg — the order
+    //    snapshots what was sent — so it is erased with the account; an outstanding chain then waits for a
     //    new zahlungsinformation.
     sqlx::query(
-        "UPDATE eeg_belege SET bank_iban = NULL, zahlungsempfaenger = NULL
+        "UPDATE eeg_belege
+            SET bank_iban = NULL, zahlungsempfaenger = NULL,
+                creditor_town = NULL, creditor_country = NULL, creditor_street = NULL,
+                creditor_building_number = NULL, creditor_post_code = NULL,
+                creditor_country_subdivision = NULL
          WHERE account_id = $1 AND tenant = $2",
     )
     .bind(account_id)
@@ -2780,7 +2790,7 @@ pub async fn financial_metrics(pool: &PgPool, tenant: &str) -> anyhow::Result<Fi
     })
 }
 
-/// Rows returned by every §§41f/41g phase query: `(case_id, malo_id, lf_mp_id, amount_ct)`.
+/// Rows returned by every §§41f/41g phase query: `(case_id, malo_id, mp_id, amount_ct)`.
 type SperrCandidate = (Uuid, String, String, i64);
 
 fn to_sperr_candidates(rows: Vec<sqlx::postgres::PgRow>) -> Vec<SperrCandidate> {
@@ -2789,7 +2799,7 @@ fn to_sperr_candidates(rows: Vec<sqlx::postgres::PgRow>) -> Vec<SperrCandidate> 
             (
                 r.get::<Uuid, _>("id"),
                 r.get::<String, _>("malo_id"),
-                r.get::<String, _>("lf_mp_id"),
+                r.get::<String, _>("mp_id"),
                 r.get::<i64, _>("amount_due_ct"),
             )
         })
@@ -2893,7 +2903,7 @@ async fn phase_candidates(
     extra_binds: &[i64],
 ) -> anyhow::Result<Vec<SperrCandidate>> {
     let sql = format!(
-        r"SELECT dc.id, a.malo_id, a.lf_mp_id, a.verzug_ct AS amount_due_ct
+        r"SELECT dc.id, a.malo_id, a.mp_id, a.verzug_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
@@ -3026,7 +3036,7 @@ pub async fn list_entsperrauftrag_candidates(
     tenant: &str,
 ) -> anyhow::Result<Vec<SperrCandidate>> {
     let rows = sqlx::query(
-        r"SELECT dc.id, a.malo_id, a.lf_mp_id, 0::BIGINT AS amount_due_ct
+        r"SELECT dc.id, a.malo_id, a.mp_id, 0::BIGINT AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
@@ -3614,7 +3624,7 @@ pub async fn list_einwaende(
     .context("list_einwaende")
 }
 
-/// The `(account_id, malo_id, lf_mp_id)` of the account a dunning case belongs to.
+/// The `(account_id, malo_id, mp_id)` of the account a dunning case belongs to.
 ///
 /// The §§41f/41g endpoints act on a case id but announce on the supply point and
 /// refresh its Verzug cache, so they need all three.
@@ -3628,7 +3638,7 @@ pub async fn dunning_case_account(
     tenant: &str,
 ) -> anyhow::Result<Option<(Uuid, String, String)>> {
     let row = sqlx::query(
-        r"SELECT a.account_id, a.malo_id, a.lf_mp_id
+        r"SELECT a.account_id, a.malo_id, a.mp_id
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.id = $1 AND dc.tenant = $2",
@@ -3642,7 +3652,7 @@ pub async fn dunning_case_account(
         Some(r) => Ok(Some((
             r.try_get("account_id")?,
             r.try_get("malo_id")?,
-            r.try_get("lf_mp_id")?,
+            r.try_get("mp_id")?,
         ))),
         None => Ok(None),
     }
@@ -3683,7 +3693,7 @@ pub async fn escalate_dunning_case_announced(
     tenant: &str,
     account_id: Uuid,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     stufe: i16,
     amount_due_ct: i64,
     due_date: Date,
@@ -3695,7 +3705,7 @@ pub async fn escalate_dunning_case_announced(
         tenant,
         account_id,
         malo_id,
-        lf_mp_id,
+        mp_id,
         stufe,
         amount_due_ct,
         due_date,
@@ -3725,7 +3735,7 @@ pub async fn create_dunning_case_announced(
     tenant: &str,
     account_id: Uuid,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     stufe: i16,
     amount_due_ct: i64,
     due_date: Date,
@@ -3737,7 +3747,7 @@ pub async fn create_dunning_case_announced(
         tenant,
         account_id,
         malo_id,
-        lf_mp_id,
+        mp_id,
         stufe,
         amount_due_ct,
         due_date,
@@ -3758,7 +3768,7 @@ async fn open_dunning_case_announced(
     tenant: &str,
     account_id: Uuid,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     stufe: i16,
     amount_due_ct: i64,
     due_date: Date,
@@ -3774,7 +3784,7 @@ async fn open_dunning_case_announced(
         Some(f) if f.fee_ct > 0 => {
             let d = draft(
                 malo_id,
-                lf_mp_id,
+                mp_id,
                 "MAHNGEBUEHR",
                 f.fee_ct,
                 &format!("mahngebuehr:{case_id}:{stufe}"),
@@ -3794,7 +3804,7 @@ async fn open_dunning_case_announced(
     let pauschalen = match &fee {
         Some(f) => {
             stage_verzugspauschale(
-                &mut tx, f.ledger, tenant, account_id, malo_id, lf_mp_id, case_id, f.on,
+                &mut tx, f.ledger, tenant, account_id, malo_id, mp_id, case_id, f.on,
             )
             .await?
         }
@@ -3807,7 +3817,7 @@ async fn open_dunning_case_announced(
         malo_id,
         serde_json::json!({
             "malo_id":       malo_id,
-            "lf_mp_id":      lf_mp_id,
+            "lf_mp_id":      mp_id,
             "mahnstufe":     stufe,
             "amount_due_ct": amount_due_ct,
             "amount_eur":    crate::handlers::format_ct_as_eur(amount_due_ct),
@@ -3898,7 +3908,7 @@ pub async fn stage_verzugspauschale(
     tenant: &str,
     account_id: Uuid,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     case_id: Uuid,
     on: Date,
 ) -> anyhow::Result<Vec<String>> {
@@ -3915,7 +3925,7 @@ pub async fn stage_verzugspauschale(
         return Ok(Vec::new());
     }
     let claims: Vec<_> = ledger
-        .open_receivables(lf_mp_id, malo_id)
+        .open_receivables(mp_id, malo_id)
         .await?
         .into_iter()
         .filter(|r| {
@@ -3949,7 +3959,7 @@ pub async fn stage_verzugspauschale(
             .unwrap_or_else(|| claim.entry_id.to_string());
         let d = draft(
             malo_id,
-            lf_mp_id,
+            mp_id,
             "VERZUGSPAUSCHALE",
             VERZUGSPAUSCHALE_CT,
             &key,
@@ -3970,12 +3980,12 @@ pub async fn stage_verzugspauschale(
     let rows = sqlx::query(
         r"SELECT key, entwurf FROM booking_drafts
           WHERE tenant = $1 AND status IN ('offen', 'gebucht')
-            AND entwurf->>'malo_id' = $2 AND entwurf->>'lf_mp_id' = $3
+            AND entwurf->>'malo_id' = $2 AND entwurf->>'mp_id' = $3
             AND entwurf->>'entry_type' IN ('VERZUGSPAUSCHALE', 'MAHNGEBUEHR')",
     )
     .bind(tenant)
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .fetch_all(&mut *conn)
     .await
     .context("stage_verzugspauschale: Verzugsschaden")?;
@@ -3998,7 +4008,7 @@ pub async fn stage_verzugspauschale(
         let key = format!("verzugspauschale-anrechnung:{case_id}");
         let d = draft(
             malo_id,
-            lf_mp_id,
+            mp_id,
             "VERZUGSPAUSCHALE",
             -anrechnung,
             &key,
@@ -4041,10 +4051,10 @@ pub async fn compute_verzug_ct(
     pool: &PgPool,
     tenant: &str,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
 ) -> anyhow::Result<i64> {
     let offen: i64 = ledger
-        .open_receivables(lf_mp_id, malo_id)
+        .open_receivables(mp_id, malo_id)
         .await?
         .iter()
         .filter(|r| {
@@ -4059,12 +4069,12 @@ pub async fn compute_verzug_ct(
         r"SELECT COALESCE(SUM(e.betrag_ct), 0)::BIGINT
           FROM forderungs_einwaende e
           JOIN accounts a ON a.account_id = e.account_id
-          WHERE e.tenant = $1 AND a.malo_id = $2 AND a.lf_mp_id = $3
+          WHERE e.tenant = $1 AND a.malo_id = $2 AND a.mp_id = $3
             AND e.erledigt_at IS NULL",
     )
     .bind(tenant)
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .fetch_one(pool)
     .await
     .context("compute_verzug_ct: open objections")?;
@@ -4089,16 +4099,16 @@ pub async fn refresh_verzug(
     pool: &PgPool,
     tenant: &str,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
 ) -> anyhow::Result<i64> {
-    let verzug = compute_verzug_ct(ledger, pool, tenant, malo_id, lf_mp_id).await?;
+    let verzug = compute_verzug_ct(ledger, pool, tenant, malo_id, mp_id).await?;
     sqlx::query(
         "UPDATE accounts SET verzug_ct = $1, updated_at = now() \
-         WHERE malo_id = $2 AND lf_mp_id = $3 AND tenant = $4",
+         WHERE malo_id = $2 AND mp_id = $3 AND tenant = $4",
     )
     .bind(verzug)
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(tenant)
     .execute(pool)
     .await
@@ -4131,7 +4141,7 @@ pub async fn refresh_verzug_for_open_cases(
     tenant: &str,
 ) -> anyhow::Result<u64> {
     let rows = sqlx::query(
-        r"SELECT DISTINCT a.malo_id, a.lf_mp_id
+        r"SELECT DISTINCT a.malo_id, a.mp_id
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1 AND dc.resolved_at IS NULL",
@@ -4145,13 +4155,13 @@ pub async fn refresh_verzug_for_open_cases(
     let mut n = 0u64;
     for r in rows {
         let malo_id: String = r.try_get("malo_id")?;
-        let lf_mp_id: String = r.try_get("lf_mp_id")?;
+        let mp_id: String = r.try_get("mp_id")?;
         // Idempotent: `apply_fifo_clearing` returns `None` when nothing is left
         // to match, so a re-run on an already-cleared account is a no-op.
-        if let Err(e) = ledger.apply_fifo_clearing(&lf_mp_id, &malo_id, today).await {
+        if let Err(e) = ledger.apply_fifo_clearing(&mp_id, &malo_id, today).await {
             tracing::warn!(malo = %malo_id, error = %e, "FIFO re-clearing failed");
         }
-        if let Err(e) = refresh_verzug(ledger, pool, tenant, &malo_id, &lf_mp_id).await {
+        if let Err(e) = refresh_verzug(ledger, pool, tenant, &malo_id, &mp_id).await {
             tracing::warn!(malo = %malo_id, error = %e, "Verzug refresh failed");
         } else {
             n += 1;
@@ -4322,7 +4332,7 @@ pub async fn run_auto_dunning(
     // has touched.
     let prefiltered: Vec<(Uuid, String, String, i64)> =
         sqlx::query(mako_service::sql::dynamic(format!(
-            r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
+            r"SELECT a.account_id, a.malo_id, a.mp_id, a.balance_ct
           FROM accounts a
           WHERE a.tenant = $1
             AND a.verzug_ct > 0
@@ -4345,7 +4355,7 @@ pub async fn run_auto_dunning(
             (
                 r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
                 r.try_get::<String, _>("malo_id").unwrap_or_default(),
-                r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
+                r.try_get::<String, _>("mp_id").unwrap_or_default(),
                 r.try_get::<i64, _>("balance_ct").unwrap_or(0),
             )
         })
@@ -4364,13 +4374,13 @@ pub async fn run_auto_dunning(
 
     let stufe1_due_date = stufen.faellig(1, today);
 
-    for (account_id, malo_id, lf_mp_id, balance_ct) in &candidates {
+    for (account_id, malo_id, mp_id, balance_ct) in &candidates {
         create_dunning_case_announced(
             pool,
             tenant,
             *account_id,
             malo_id,
-            lf_mp_id,
+            mp_id,
             1,
             *balance_ct,
             stufe1_due_date,
@@ -4396,7 +4406,7 @@ pub async fn run_auto_dunning(
     // **now**, so a partial payment between two Stufen has to reduce it.
     let overdue_stufe1: Vec<(Uuid, Uuid, String, String, i64)> =
         sqlx::query(mako_service::sql::dynamic(format!(
-            r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
+            r"SELECT dc.id, dc.account_id, a.malo_id, a.mp_id, a.balance_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
@@ -4423,7 +4433,7 @@ pub async fn run_auto_dunning(
                 r.try_get::<Uuid, _>("id").unwrap_or(Uuid::nil()),
                 r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
                 r.try_get::<String, _>("malo_id").unwrap_or_default(),
-                r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
+                r.try_get::<String, _>("mp_id").unwrap_or_default(),
                 r.try_get::<i64, _>("amount_due_ct").unwrap_or(0),
             )
         })
@@ -4431,7 +4441,7 @@ pub async fn run_auto_dunning(
 
     let stufe2_due_date = stufen.faellig(2, today);
 
-    for (old_case_id, account_id, malo_id, lf_mp_id, amount_due_ct) in &overdue_stufe1 {
+    for (old_case_id, account_id, malo_id, mp_id, amount_due_ct) in &overdue_stufe1 {
         // The old Mahnstufe is resolved in the transaction that opens the
         // next one.
         escalate_dunning_case_announced(
@@ -4440,7 +4450,7 @@ pub async fn run_auto_dunning(
             tenant,
             *account_id,
             malo_id,
-            lf_mp_id,
+            mp_id,
             2,
             *amount_due_ct,
             stufe2_due_date,
@@ -4462,7 +4472,7 @@ pub async fn run_auto_dunning(
     // **now**, so a partial payment between two Stufen has to reduce it.
     let overdue_stufe2: Vec<(Uuid, Uuid, String, String, i64)> =
         sqlx::query(mako_service::sql::dynamic(format!(
-            r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
+            r"SELECT dc.id, dc.account_id, a.malo_id, a.mp_id, a.balance_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
@@ -4489,7 +4499,7 @@ pub async fn run_auto_dunning(
                 r.try_get::<Uuid, _>("id").unwrap_or(Uuid::nil()),
                 r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
                 r.try_get::<String, _>("malo_id").unwrap_or_default(),
-                r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
+                r.try_get::<String, _>("mp_id").unwrap_or_default(),
                 r.try_get::<i64, _>("amount_due_ct").unwrap_or(0),
             )
         })
@@ -4497,7 +4507,7 @@ pub async fn run_auto_dunning(
 
     let stufe3_due_date = stufen.faellig(3, today);
 
-    for (old_case_id, account_id, malo_id, lf_mp_id, amount_due_ct) in &overdue_stufe2 {
+    for (old_case_id, account_id, malo_id, mp_id, amount_due_ct) in &overdue_stufe2 {
         // The old Mahnstufe is resolved in the transaction that opens the
         // next one.
         escalate_dunning_case_announced(
@@ -4506,7 +4516,7 @@ pub async fn run_auto_dunning(
             tenant,
             *account_id,
             malo_id,
-            lf_mp_id,
+            mp_id,
             3,
             *amount_due_ct,
             stufe3_due_date,
@@ -4771,7 +4781,7 @@ pub async fn create_interest_charge(
     account_id: Uuid,
     tenant: &str,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     invoice_reference: Option<&str>,
     principal_ct: i64,
     period_from: time::Date,
@@ -4846,7 +4856,7 @@ pub async fn create_interest_charge(
     // accounts. Deterministic idempotency key per malo + period.
     let interest = draft(
         malo_id,
-        lf_mp_id,
+        mp_id,
         "VERZUGSZINSEN",
         interest_ct,
         &format!("interest:{malo_id}:{period_from}:{period_to}"),
@@ -4914,7 +4924,7 @@ pub async fn create_interest_charge(
         malo_id,
         serde_json::json!({
             "malo_id":           malo_id,
-            "lf_mp_id":          lf_mp_id,
+            "lf_mp_id":          mp_id,
             "principal_ct":      principal_ct,
             "interest_ct":       interest_ct,
             "interest_eur":      crate::handlers::format_ct_as_eur(interest_ct),
@@ -5051,8 +5061,8 @@ pub async fn create_payment_plan(
     let first_due = time::Date::parse(&req.first_due_date, &Iso8601::DEFAULT)
         .context("parse first_due_date")?;
 
-    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(default_lf_mp_id);
-    let account_id = upsert_account(pool, &req.malo_id, lf_mp_id, tenant).await?;
+    let mp_id = req.lf_mp_id.as_deref().unwrap_or(default_lf_mp_id);
+    let account_id = upsert_account(pool, &req.malo_id, mp_id, tenant).await?;
 
     // ceil(total/installment) without the `total + installment - 1` form,
     // which overflows near `i64::MAX`. Both operands are positive here.
@@ -5282,7 +5292,7 @@ async fn settle_plan(
 ) -> anyhow::Result<()> {
     // Locked, and re-checked ACTIVE: a concurrent cancel wins or waits.
     let Some(plan) = sqlx::query(
-        r"SELECT p.account_id, p.abwendung_lock_id, a.malo_id, a.lf_mp_id,
+        r"SELECT p.account_id, p.abwendung_lock_id, a.malo_id, a.mp_id,
                  (p.created_at AT TIME ZONE 'Europe/Berlin')::date AS beginn
           FROM payment_plans p
           JOIN accounts a ON a.account_id = p.account_id
@@ -5300,20 +5310,20 @@ async fn settle_plan(
     let account_id: Uuid = plan.try_get("account_id")?;
     let lock_id: Option<Uuid> = plan.try_get("abwendung_lock_id")?;
     let malo_id: String = plan.try_get("malo_id")?;
-    let lf_mp_id: String = plan.try_get("lf_mp_id")?;
+    let mp_id: String = plan.try_get("mp_id")?;
     let beginn: Date = plan.try_get("beginn")?;
 
     // The cash, oldest first: (entry, booking date, money in).
     let rows = sqlx::query(
         r"SELECT entry_id, entwurf FROM booking_drafts
           WHERE tenant = $1 AND status = 'gebucht'
-            AND entwurf->>'malo_id' = $2 AND entwurf->>'lf_mp_id' = $3
+            AND entwurf->>'malo_id' = $2 AND entwurf->>'mp_id' = $3
             AND entwurf->>'entry_type' = ANY($4)
           ORDER BY created_at",
     )
     .bind(tenant)
     .bind(&malo_id)
-    .bind(&lf_mp_id)
+    .bind(&mp_id)
     .bind(PLAN_CASH_KINDS)
     .fetch_all(&mut *conn)
     .await
@@ -5459,22 +5469,21 @@ pub async fn vereinbarung_gebrochen(
         return Ok(None);
     };
     clear_ankuendigung(&mut *conn, account_id, tenant).await?;
-    let ids: Option<(String, String)> = sqlx::query_as(
-        "SELECT malo_id, lf_mp_id FROM accounts WHERE account_id = $1 AND tenant = $2",
-    )
-    .bind(account_id)
-    .bind(tenant)
-    .fetch_optional(&mut *conn)
-    .await
-    .context("vereinbarung_gebrochen: account")?;
-    if let Some((malo_id, lf_mp_id)) = ids {
+    let ids: Option<(String, String)> =
+        sqlx::query_as("SELECT malo_id, mp_id FROM accounts WHERE account_id = $1 AND tenant = $2")
+            .bind(account_id)
+            .bind(tenant)
+            .fetch_optional(&mut *conn)
+            .await
+            .context("vereinbarung_gebrochen: account")?;
+    if let Some((malo_id, mp_id)) = ids {
         let ce = mako_service::CloudEvent::new(
             mako_service::source("accountingd", tenant),
             mako_events::accounting::ABWENDUNG_GEBROCHEN,
             &malo_id,
             serde_json::json!({
                 "malo_id":         malo_id,
-                "lf_mp_id":        lf_mp_id,
+                "lf_mp_id":        mp_id,
                 "lock_id":         lock_id.to_string(),
                 "rechtsgrundlage": "\u{a7}41g Abs. 1 S. 11 EnWG",
                 "folge": "Unterbrechung wieder zul\u{e4}ssig; \u{a7}41f Abs. 1 S. 2 und \
@@ -5632,7 +5641,7 @@ pub async fn raise_abschlagsforderung(
     let reference = abschlag_reference(&account.malo_id, periode);
     let demand = draft(
         &account.malo_id,
-        &account.lf_mp_id,
+        &account.mp_id,
         "ABSCHLAG",
         // DEBIT: the customer owes the advance until they pay it.
         account.abschlag_ct,
@@ -5664,7 +5673,7 @@ pub async fn raise_abschlagsforderung(
     .bind(&reference)
     .bind(account.account_id)
     .bind(&account.malo_id)
-    .bind(&account.lf_mp_id)
+    .bind(&account.mp_id)
     .bind(periode)
     .bind(faellig_am)
     .bind(account.abschlag_ct)
@@ -5856,7 +5865,7 @@ pub async fn list_undocumented_dunning_cases(
     let rows = sqlx::query(
         r"SELECT dc.id, dc.account_id, dc.stufe, dc.due_date, dc.issued_at,
                  dc.sperrandrohung_at, dc.geplantes_sperrdatum,
-                 a.malo_id, a.lf_mp_id, a.kunden_nr, a.iban
+                 a.malo_id, a.mp_id, a.kunden_nr, a.iban
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
@@ -5878,7 +5887,7 @@ pub async fn list_undocumented_dunning_cases(
                 case_id: r.try_get("id")?,
                 account_id: r.try_get("account_id")?,
                 malo_id: r.try_get("malo_id")?,
-                lf_mp_id: r.try_get("lf_mp_id")?,
+                mp_id: r.try_get("mp_id")?,
                 kunden_nr: r.try_get("kunden_nr")?,
                 stufe: r.try_get("stufe")?,
                 due_date: r.try_get("due_date")?,
@@ -5941,10 +5950,14 @@ pub async fn list_jahresabschluss_candidates(
     limit: i64,
 ) -> anyhow::Result<Vec<(String, String)>> {
     let rows = sqlx::query(
-        r"SELECT a.malo_id, a.lf_mp_id
+        r"SELECT a.malo_id, a.mp_id
           FROM accounts a
           WHERE a.tenant = $1
             AND a.anonymized_at IS NULL
+            -- An EEG plant account is the Netzbetreiber's: its credit is an
+            -- EEG payout owed, never a supply Guthaben to refund.
+            AND NOT EXISTS (SELECT 1 FROM eeg_belege b
+                             WHERE b.tenant = a.tenant AND b.account_id = a.account_id)
             AND NOT EXISTS (
                 SELECT 1 FROM jahresabschluss_runs r
                 WHERE r.tenant = a.tenant AND r.malo_id = a.malo_id
@@ -5960,6 +5973,6 @@ pub async fn list_jahresabschluss_candidates(
     .await
     .context("list_jahresabschluss_candidates")?;
     rows.iter()
-        .map(|r| Ok((r.try_get("malo_id")?, r.try_get("lf_mp_id")?)))
+        .map(|r| Ok((r.try_get("malo_id")?, r.try_get("mp_id")?)))
         .collect()
 }

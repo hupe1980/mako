@@ -38,7 +38,7 @@ const GEPARKT: GeparkteBuchung = {
   key: "rechnung:9900357000004:51238696012:R-2026-0815",
   art: "RECHNUNG",
   malo_id: "51238696012",
-  lf_mp_id: "9900357000004",
+  mp_id: "9900357000028",
   betrag_ct: 900,
   buchungsdatum: "2026-10-31" as BusinessDate,
   beleg: "R-2026-0815",

@@ -44,6 +44,8 @@ pub struct AccountingdMcpState {
     /// The configured Lieferant MP-ID — the account key a tool call that
     /// names none reads and books under.
     pub lf_mp_id: String,
+    /// `[eeg] nb_mp_id` — the account owner of an `EEG_*` booking.
+    pub eeg_nb_mp_id: Option<String>,
     pub auth: mako_service::mcp_auth::McpAuth,
     /// SEPA creditor identity from config — pain.008 needs all three.
     pub creditor_iban: Option<String>,
@@ -91,9 +93,10 @@ pub struct ParkedParams {
 pub struct MaloParams {
     /// 11-digit MaLo-ID.
     pub malo_id: String,
-    /// The LF MP-ID the account is held under. Defaults to the configured
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant. Defaults to the configured
     /// `lf_mp_id`, as on the REST route.
-    pub lf_mp_id: Option<String>,
+    pub mp_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -115,9 +118,10 @@ pub struct DunningParams {
 pub struct LedgerParams {
     /// 11-digit MaLo-ID.
     pub malo_id: String,
-    /// The LF MP-ID the account is held under. Defaults to the configured
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, `[eeg] nb_mp_id` for an EEG plant. Defaults to the configured
     /// `lf_mp_id`.
-    pub lf_mp_id: Option<String>,
+    pub mp_id: Option<String>,
     /// Maximum movements, newest first (default 100, at most 1000).
     pub limit: Option<i64>,
 }
@@ -193,6 +197,9 @@ pub struct ManualBuchungParams {
     pub reference_id: Option<String>,
     /// Human-readable description for the Kontoauszug.
     pub description: Option<String>,
+    /// The own MP-ID the account is kept under; defaults to `[eeg] nb_mp_id`
+    /// for an `EEG_*` entry and the Lieferant's for every other.
+    pub mp_id: Option<String>,
 }
 
 // ── Typed answers ─────────────────────────────────────────────────────────────
@@ -254,7 +261,7 @@ impl AccountingdMcpHandler {
                 &self.state.pool,
                 &self.state.tenant,
                 &p.malo_id,
-                p.lf_mp_id.as_deref().unwrap_or(&self.state.lf_mp_id),
+                p.mp_id.as_deref().unwrap_or(&self.state.lf_mp_id),
             )
             .await,
         )
@@ -307,7 +314,7 @@ impl AccountingdMcpHandler {
                 &self.state.ledger,
                 &self.state.tenant,
                 &p.malo_id,
-                p.lf_mp_id.as_deref().unwrap_or(&self.state.lf_mp_id),
+                p.mp_id.as_deref().unwrap_or(&self.state.lf_mp_id),
                 p.limit,
             )
             .await,
@@ -445,7 +452,6 @@ Also sets the SEPA billing_day (day of month for direct debit).",
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::UpdateAccountRequest;
         use crate::pg::{fetch_account, update_account_tenanted};
-        // Fetch to get lf_mp_id (required for update_account's composite key).
         let acct = match fetch_account(
             &self.state.pool,
             &p.malo_id,
@@ -466,7 +472,7 @@ Also sets the SEPA billing_day (day of month for direct debit).",
         match update_account_tenanted(
             &self.state.pool,
             &p.malo_id,
-            &acct.lf_mp_id,
+            &acct.mp_id,
             &self.state.tenant,
             None,
             UpdateAccountRequest {
@@ -547,7 +553,7 @@ Returns `booked` (written to the ledger), `unmatched` (no such account) and `fai
                 &self.state.pool,
                 &self.state.tenant,
                 &acct.malo_id,
-                &acct.lf_mp_id,
+                &acct.mp_id,
                 "ZAHLUNG",
                 -amt,
                 &format!("mcp-camt:{reference}"),
@@ -702,7 +708,7 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
         let sums = match self
             .state
             .ledger
-            .year_kind_sums(&acct.lf_mp_id, &acct.malo_id, year)
+            .year_kind_sums(&acct.mp_id, &acct.malo_id, year)
             .await
         {
             Ok(s) => s,
@@ -913,14 +919,16 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::{post_entry, upsert_account};
 
-        upsert_account(
-            &self.state.pool,
-            &p.malo_id,
+        let konto = crate::ledger::buchungskonto(
+            &p.entry_type,
+            p.mp_id.as_deref(),
             &self.state.lf_mp_id,
-            &self.state.tenant,
+            self.state.eeg_nb_mp_id.as_deref(),
         )
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        .map_err(|grund| McpError::invalid_params(grund.to_owned(), None))?;
+        upsert_account(&self.state.pool, &p.malo_id, &konto, &self.state.tenant)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let today = mako_fristen::heute();
         // reference_id (when given) makes the post idempotent; else a fresh key.
@@ -933,7 +941,7 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
             &self.state.pool,
             &self.state.tenant,
             &p.malo_id,
-            &self.state.tenant,
+            &konto,
             &p.entry_type,
             p.amount_ct,
             &idempotency,
@@ -1309,7 +1317,7 @@ mod tests {
             "get_balance",
             &Kontostand {
                 malo_id: "51238696012".into(),
-                lf_mp_id: "9900357000004".into(),
+                mp_id: "9900357000004".into(),
                 status: Saldostatus::Credit,
                 balance_ct: -1250,
                 balance_eur: crate::handlers::format_ct_as_eur(-1250),

@@ -1051,7 +1051,7 @@ url = "postgres://localhost/agentd"
 
         // Spot-check the keys most likely to be swallowed by a table above
         // them — the ones that were.
-        assert_eq!(cfg.tenant, "9900357000004");
+        assert_eq!(cfg.tenant, "stadtwerke-musterstadt");
         assert!(
             cfg.quota.max_concurrent_runs.is_none(),
             "the documented example states no ceiling, and absent means unbounded"

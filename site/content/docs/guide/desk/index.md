@@ -94,7 +94,9 @@ same read, fewer rows.
 
 Its **Verlauf** threads the market messages: received on the left, sent on the
 right, each with PID, Berlin time and document number, as the workflow
-recorded them. An answer also states its code and the BDEW's wording from the
+recorded them. The heading names the role the process acts in — „als
+Lieferant" — and a message between two of your own roles, the NB's invoice to
+its own LF, carries „im Haus". An answer also states its code and the BDEW's wording from the
 list that defines it („A02 — Marktlokation … nimmt nicht an der
 Marktkommunikation teil"); where that list publishes no wording for the code,
 the line names the list alone. Steps between two messages fold into one quiet
@@ -668,8 +670,8 @@ view shows one pane at a time, and no view scrolls sideways.
 Holding several market roles, a person wears one at a time — **Netz** (NB),
 **Lieferant** (LF), **Messstelle** (MSB), **Energieservice** (ESA) — in the
 toolbar or with <kbd>⌃1</kbd>–<kbd>⌃4</kbd>. The badge names the role you
-wear, and each role has its own start page; switching shows no data of the role left. What a role may read is each
-service's Cedar policy.
+wear, and each role has its own start page; switching shows no data of the role left. The switcher offers the roles your
+sign-in names; what a role may read is each service's Cedar policy.
 
 [![The role switcher in the toolbar](rolle-light.png)](rolle-light.png)
 [![The role switcher in the toolbar](rolle-dark.png)](rolle-dark.png)

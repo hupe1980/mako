@@ -227,12 +227,14 @@ pub struct ProcessResource<'a> {
     /// Operator tenant (`[deployment] tenant`).
     pub tenant: &'a str,
     /// Workflow name of the process being read (e.g. `"gpke-lf-anmeldung"`).
-    ///
-    /// The workflow name encodes the Marktrolle side of the process, so a
-    /// VIU deployment can write Cedar policies that keep an NB-scoped
-    /// principal out of LF process state (§ 6a EnWG Informatorisches
-    /// Unbundling) by matching on `context.workflow`.
     pub workflow: &'a str,
+    /// The Marktrolle the process acts in (`NB`, `LF`, `MSB`, …), as its spawn
+    /// recorded it; `None` where it is not known. A workflow such as `gpke-eog`
+    /// or `gpke-abrechnung` runs on both sides, so this — not the name — is
+    /// what keeps an NB-scoped principal out of the LF's process state
+    /// (§ 6a Abs. 1 EnWG: „die Vertraulichkeit wirtschaftlich sensibler
+    /// Informationen … gewahrt wird").
+    pub rolle: Option<&'a str>,
 }
 
 /// Resource descriptor for Rechnung read checks.
@@ -641,8 +643,9 @@ impl CedarAuthorizer {
 
     /// Evaluate authorization for a process-state read.
     ///
-    /// The `workflow` context lets § 6a EnWG VIU deployments deny an NB-scoped
-    /// principal access to LF process state and vice versa.
+    /// The `rolle` context — the Marktrolle the process acts in, `""` when
+    /// unknown — lets a deployment deny an NB-scoped principal the LF's
+    /// process state and vice versa (§ 6a Abs. 1 EnWG).
     pub fn authorize_process_read(
         &self,
         identity: &CallerIdentity,
@@ -654,6 +657,7 @@ impl CedarAuthorizer {
             std::collections::HashMap::from([
                 ("tenant".to_owned(), cedar_str(res.tenant)),
                 ("workflow".to_owned(), cedar_str(res.workflow)),
+                ("rolle".to_owned(), cedar_str(res.rolle.unwrap_or_default())),
             ]),
             std::collections::HashSet::new(),
         ) {
@@ -671,7 +675,11 @@ impl CedarAuthorizer {
             MakoAction::ReadProcess,
             resource_uid,
             vec![principal_entity(identity), resource],
-            serde_json::json!({ "tenant": res.tenant, "workflow": res.workflow }),
+            serde_json::json!({
+                "tenant": res.tenant,
+                "workflow": res.workflow,
+                "rolle": res.rolle.unwrap_or_default(),
+            }),
         )
     }
 
@@ -1361,8 +1369,9 @@ when { context.workflow like "gpke-sperrung*" };
             a.authorize_process_read(
                 &id("nb-operator"),
                 &ProcessResource {
-                    tenant: "9900357000004",
+                    tenant: "stadtwerke-musterstadt",
                     workflow: "gpke-sperrung",
+                    rolle: Some("NB"),
                 },
             ),
             "the NB arm must still read its own Sperrung processes"
@@ -1371,11 +1380,49 @@ when { context.workflow like "gpke-sperrung*" };
             !a.authorize_process_read(
                 &id("nb-operator"),
                 &ProcessResource {
-                    tenant: "9900357000004",
+                    tenant: "stadtwerke-musterstadt",
                     workflow: "gpke-lieferbeginn",
+                    rolle: Some("LF"),
                 },
             ),
             "§ 6a EnWG: the grid arm must not see supply-side process state"
         );
+    }
+
+    /// A workflow that runs on both sides — `gpke-eog`: the NB announces, the
+    /// LF answers — is told apart by the role its process acts in. An
+    /// LF-scoped principal reads the LF's process and not the NB's on the same
+    /// workflow, and a process whose role is unknown is read by neither.
+    #[test]
+    fn the_acting_role_separates_both_sides_of_one_workflow() {
+        let extra = r#"
+permit(
+  principal == MaKo::Principal::"lf-sachbearbeitung",
+  action    == MaKo::Action::"ReadProcess",
+  resource  is MaKo::ProcessRecord
+)
+when { context.rolle == "LF" };
+        "#;
+        let a = CedarAuthorizer::new(
+            vec![],
+            Some(extra.to_owned()),
+            None,
+            None,
+            DefaultPolicy::Deny,
+        )
+        .unwrap();
+        let read = |rolle| {
+            a.authorize_process_read(
+                &id("lf-sachbearbeitung"),
+                &ProcessResource {
+                    tenant: "stadtwerke-musterstadt",
+                    workflow: "gpke-eog",
+                    rolle,
+                },
+            )
+        };
+        assert!(read(Some("LF")), "the LF's own side of gpke-eog");
+        assert!(!read(Some("NB")), "§ 6a EnWG: never the NB's side");
+        assert!(!read(None), "an unknown role fails closed");
     }
 }

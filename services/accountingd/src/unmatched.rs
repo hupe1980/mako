@@ -118,19 +118,19 @@ pub async fn close_by_import(
     tenant: &str,
     bank_transaction_id: &str,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     ledger_entry_id: Uuid,
 ) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE unmatched_payments \
-            SET assigned_at = now(), malo_id = $3, lf_mp_id = $4, ledger_entry_id = $5, \
+            SET assigned_at = now(), malo_id = $3, mp_id = $4, ledger_entry_id = $5, \
                 assigned_by = 'import' \
           WHERE tenant = $1 AND bank_transaction_id = $2 AND assigned_at IS NULL",
     )
     .bind(tenant)
     .bind(bank_transaction_id)
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(mp_id)
     .bind(ledger_entry_id)
     .execute(conn)
     .await
@@ -356,7 +356,7 @@ pub async fn assign(
     let today = mako_fristen::heute();
     let draft = crate::pg::draft(
         &account.malo_id,
-        &account.lf_mp_id,
+        &account.mp_id,
         entry_type,
         ledger_ct,
         &key,
@@ -387,14 +387,14 @@ pub async fn assign(
     .map_err(ApiError::internal)?;
     sqlx::query(
         "UPDATE unmatched_payments \
-            SET assigned_at = now(), malo_id = $3, lf_mp_id = $4, ledger_entry_id = $5, \
+            SET assigned_at = now(), malo_id = $3, mp_id = $4, ledger_entry_id = $5, \
                 assigned_by = $6 \
           WHERE tenant = $1 AND payment_id = $2",
     )
     .bind(tenant)
     .bind(payment_id)
     .bind(&account.malo_id)
-    .bind(&account.lf_mp_id)
+    .bind(&account.mp_id)
     .bind(ledger_id)
     .bind(actor)
     .execute(&mut *tx)
@@ -411,7 +411,7 @@ pub async fn assign(
         &account.malo_id,
         serde_json::json!({
             "malo_id":      account.malo_id,
-            "lf_mp_id":     account.lf_mp_id,
+            "lf_mp_id":     account.mp_id,
             "amount_ct":    amount_ct,
             "amount_eur":   crate::handlers::format_ct_as_eur(amount_ct),
             "is_return":    is_return,
@@ -435,7 +435,7 @@ pub async fn assign(
     Ok(ZahlungZugeordnet {
         payment_id: payment_id.to_string(),
         malo_id: account.malo_id,
-        lf_mp_id: account.lf_mp_id,
+        lf_mp_id: account.mp_id,
         ledger_entry_id: ledger_id.to_string(),
         entry_type: entry_type.to_owned(),
         amount_ct,

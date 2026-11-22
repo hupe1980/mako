@@ -176,18 +176,19 @@ permit(
 // Grant MaKo::Action::"AdminMigrations" to a dedicated break-glass principal
 // in your site policy for the FV-cutover window, then remove it.
 
-// ── Process reads: workflow-scoped (§ 6a EnWG Informatorisches Unbundling) ──────
-// The context carries the process's workflow name, so a VIU site running with
-// a default-deny deployment can split process reads into role-scoped
-// principals — an NB operator sees grid-side workflows and nothing else:
+// ── Process reads per Marktrolle — the access policy of § 6a Abs. 1 EnWG ──────
+// The context carries the Marktrolle the process acts in (`rolle`: NB, LF,
+// MSB, …; "" when unknown) and its workflow name. A workflow such as
+// `gpke-eog` or `gpke-abrechnung` runs on both sides, so a deployment that is
+// NB and LF at once scopes its people by role:
 //
-//   permit(principal == MaKo::Principal::"nb-operator",
+//   permit(principal == MaKo::Principal::"lf-sachbearbeitung",
 //          action == MaKo::Action::"ReadProcess", resource)
-//   when { context.workflow like "gpke-sperrung*" };
+//   when { context.rolle == "LF" };
 //
-// This governs both MCP `get_process` and `list_overdue_deadlines`, which name
-// workflows and their pending deadlines.  Without the flag the grant
-// above adds nothing and both tools stay fully readable by every principal.
+// This governs `get_process`, `get_process_history` and
+// `list_overdue_deadlines`. A process whose role is unknown matches no such
+// rule.
 permit(
   principal == MaKo::Principal::"mcp-agent",
   action    == MaKo::Action::"ReadProcess",

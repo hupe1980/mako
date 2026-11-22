@@ -597,6 +597,7 @@ mod tests {
             verlauf: None,
             antwort: None,
             akteur: crate::envelope::Akteur::System,
+            intern: false,
         }
     }
 

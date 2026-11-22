@@ -23,7 +23,7 @@
 //! addr = "0.0.0.0:8180"
 //!
 //! [markt]
-//! tenant = "9900357000004"
+//! tenant = "stadtwerke-musterstadt"
 //!
 //! [oidc]
 //! issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"

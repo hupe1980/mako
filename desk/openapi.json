@@ -23,9 +23,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -70,9 +70,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -276,9 +276,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -355,9 +355,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -465,7 +465,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The Lieferant's MP-ID the customer account is kept under; defaults to\nthe configured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -527,9 +527,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -588,7 +588,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The Lieferant's MP-ID the customer account is kept under; defaults to\nthe configured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -704,8 +704,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -780,9 +781,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -840,7 +841,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The Lieferant's MP-ID the customer account is kept under; defaults to\nthe configured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -918,9 +919,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -969,7 +970,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The Lieferant's MP-ID the customer account is kept under; defaults to\nthe configured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1076,8 +1077,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1136,7 +1138,7 @@
           {
             "name": "lf_mp_id",
             "in": "query",
-            "description": "The Lieferant's MP-ID the account is kept under; defaults to the\nconfigured `lf_mp_id`.",
+            "description": "The Lieferant's MP-ID the customer account is kept under; defaults to\nthe configured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1319,8 +1321,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1376,8 +1379,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant; defaults to the\nconfigured `lf_mp_id`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2693,6 +2697,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "`eeg_debtor_not_configured` — `[eeg] debtor_iban` or `debtor_name` is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/accountingd.ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -3712,9 +3726,9 @@
             }
           },
           {
-            "name": "lf_mp_id",
+            "name": "mp_id",
             "in": "query",
-            "description": "The Lieferant the Kontokorrent belongs to.",
+            "description": "The own MP-ID the Kontokorrent is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant.",
             "required": true,
             "schema": {
               "type": "string"
@@ -14578,6 +14592,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "`zahlungsempfaenger_anschrift` refused — `incomplete_postal_address` (town or country missing) or `invalid_country_code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/einsd.ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -21557,11 +21581,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "description": "The day asked about, `YYYY-MM-DD`; today when absent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The gMSB MP-ID of the grid: `{ nb_mp_id, gmsb_mp_id }`",
+            "description": "The gMSB MP-ID of the grid that day: `{ nb_mp_id, gmsb_mp_id, valid_from, valid_to }`",
             "content": {
               "application/json": {
                 "schema": {}
@@ -21589,7 +21622,7 @@
             }
           },
           "404": {
-            "description": "No gMSB recorded for this Netzbetreiber",
+            "description": "No gMSB recorded for this Netzbetreiber on that day",
             "content": {
               "application/json": {
                 "schema": {
@@ -21618,7 +21651,7 @@
           }
         ],
         "requestBody": {
-          "description": "`PutGrundzustaendigerMsbBody`: `{ gmsb_mp_id }`",
+          "description": "`PutGrundzustaendigerMsbBody`: `{ gmsb_mp_id, valid_from }`",
           "content": {
             "application/json": {
               "schema": {}
@@ -21651,7 +21684,7 @@
             }
           },
           "422": {
-            "description": "`mp_id_ungueltig`: a value is no MP-ID",
+            "description": "`mp_id_ungueltig`: a value is no MP-ID; or `valid_from` is no date",
             "content": {
               "application/json": {
                 "schema": {
@@ -39708,11 +39741,12 @@
             "type": "string",
             "description": "Buchungsart. Must be a valid `entry_type` value.\nAllowed: `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `EEG_GUTSCHRIFT`,\n`EEG_MARKTPRAEMIE`, `EEG_AUSZAHLUNG`, `EEG_RUECKZAHLUNG`, `BANKRUECKLAST`,\n`MAHNGEBUEHR`, `VERZUGSZINSEN`, `ABSCHLAG`, `ABSCHLAG_VERRECHNUNG`,\n`SEPA_STORNO`, `JAHRESABSCHLUSS`, `KORREKTUR`, `STORNO`.\n\nThe same list [`crate::ledger::ENTRY_TYPES`] holds, so an automated path\nand the operator interface accept exactly the same kinds."
           },
-          "lf_mp_id": {
+          "mp_id": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The own MP-ID the account is kept under; defaults to `[eeg] nb_mp_id`\nfor an `EEG_*` entry and the configured `lf_mp_id` for every other."
           },
           "reference_id": {
             "type": [
@@ -40291,15 +40325,11 @@
         "description": "A statement window (`list_ledger`, `GET /api/v1/accounts/{malo_id}/ledger`):\n`opening_ct` plus every `signed_ct` is the newest line's `running_ct`.",
         "required": [
           "malo_id",
-          "lf_mp_id",
+          "mp_id",
           "opening_ct",
           "lines"
         ],
         "properties": {
-          "lf_mp_id": {
-            "type": "string",
-            "description": "The Lieferant's MP-ID the account is kept under."
-          },
           "lines": {
             "type": "array",
             "items": {
@@ -40310,6 +40340,10 @@
           "malo_id": {
             "type": "string",
             "description": "11-digit Marktlokations-ID."
+          },
+          "mp_id": {
+            "type": "string",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, the Netzbetreiber's for an EEG plant."
           },
           "opening_ct": {
             "type": "integer",
@@ -40379,7 +40413,7 @@
         "description": "The account's open-items balance (`get_balance`,\n`GET /api/v1/accounts/{malo_id}/balance`).",
         "required": [
           "malo_id",
-          "lf_mp_id",
+          "mp_id",
           "balance_ct",
           "balance_eur",
           "status",
@@ -40401,13 +40435,13 @@
             "format": "decimal",
             "description": "`balance_ct` as a decimal EUR string, e.g. `\"-12.50\"`."
           },
-          "lf_mp_id": {
-            "type": "string",
-            "description": "The Lieferant's MP-ID the account is kept under."
-          },
           "malo_id": {
             "type": "string",
             "description": "11-digit Marktlokations-ID."
+          },
+          "mp_id": {
+            "type": "string",
+            "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, the Netzbetreiber's for an EEG plant."
           },
           "status": {
             "$ref": "#/components/schemas/accountingd.Saldostatus",
@@ -43883,6 +43917,55 @@
           }
         }
       },
+      "einsd.Anschrift": {
+        "type": "object",
+        "description": "The Zahlungsempfänger's postal address, in the structured ISO 20022\n`PstlAdr` form accountingd's pain.001 emits as `Cdtr/PstlAdr`.\n\nThe field names are accountingd's `sepa::AddressParts`, which reads this\nobject from the settlement event unchanged.",
+        "properties": {
+          "building_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`BldgNb`."
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`Ctry` — ISO 3166-1 alpha-2, required whenever an address is given."
+          },
+          "country_subdivision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`CtrySubDvsn` (Bundesland)."
+          },
+          "post_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`PstCd`."
+          },
+          "street": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`StrtNm`."
+          },
+          "town": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`TwnNm` — required whenever an address is given."
+          }
+        },
+        "additionalProperties": false
+      },
       "einsd.ApiError": {
         "type": "object",
         "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
@@ -44048,6 +44131,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "zahlungsempfaenger_anschrift": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/einsd.Anschrift",
+                "description": "The Zahlungsempfänger's postal address (`Cdtr/PstlAdr` of the payout);\n`None` where none is registered."
+              }
             ]
           }
         }
@@ -44571,6 +44665,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "zahlungsempfaenger_anschrift": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/einsd.Anschrift",
+                "description": "The Zahlungsempfänger's postal address. Given, it replaces the stored\none whole — town and country required — and omitted keeps it."
+              }
             ]
           }
         },

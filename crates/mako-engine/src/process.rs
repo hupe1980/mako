@@ -79,6 +79,7 @@ pub struct Process<W: Workflow, S: EventStore> {
     process_id: ProcessId,
     tenant_id: TenantId,
     workflow_id: WorkflowId,
+    rolle: Option<Box<str>>,
     store: S,
     _phantom: PhantomData<fn() -> W>,
 }
@@ -99,9 +100,18 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
             process_id,
             tenant_id,
             workflow_id,
+            rolle: None,
             store,
             _phantom: PhantomData,
         }
+    }
+
+    /// The process acting in `rolle` — recorded on its identity, which the
+    /// spawn writes with its first events.
+    #[must_use]
+    pub fn with_rolle(mut self, rolle: Option<Box<str>>) -> Self {
+        self.rolle = rolle;
+        self
     }
 
     /// Attach to an existing process stream.
@@ -121,6 +131,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
             process_id,
             tenant_id,
             workflow_id,
+            rolle: None,
             store,
             _phantom: PhantomData,
         }
@@ -171,6 +182,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     #[must_use]
     pub fn identity(&self) -> ProcessIdentity {
         ProcessIdentity::new(self.process_id, self.tenant_id, self.workflow_id.clone())
+            .with_rolle(self.rolle.clone())
     }
 
     /// Build a [`CommandContext`] for an inbound EDIFACT message dispatch.
@@ -215,6 +227,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
             process_id: identity.process_id,
             tenant_id: identity.tenant_id,
             workflow_id: identity.workflow_id,
+            rolle: identity.rolle,
             store,
             _phantom: PhantomData,
         }
@@ -572,6 +585,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
                     acknowledgement: opts.acknowledgement,
                     lapse,
                     akteur: &opts.akteur,
+                    intern: opts.intern,
                 },
             )
             .await
@@ -697,6 +711,7 @@ pub struct RunOptions<'a, Snap = NoSnapshot> {
     acknowledgement: Option<&'a crate::outbox::PendingOutbox>,
     snapshot: Option<(&'a Snap, u64)>,
     akteur: Akteur,
+    intern: bool,
 }
 
 /// The attempts [`RunOptions::by`] allows a command before a version
@@ -720,6 +735,7 @@ impl RunOptions<'_, NoSnapshot> {
             acknowledgement: None,
             snapshot: None,
             akteur,
+            intern: false,
         }
     }
 
@@ -779,6 +795,13 @@ impl<'a, Snap> RunOptions<'a, Snap> {
         self
     }
 
+    /// Mark the run's message events as passed between two of the
+    /// deployment's own Marktrollen — delivered in-process, not over AS4.
+    pub fn intern(mut self, intern: bool) -> Self {
+        self.intern = intern;
+        self
+    }
+
     /// Enqueue `ack` in the same write when the command records events and
     /// enqueues no message of `ack`'s type itself — the acknowledgement a host
     /// owes every processable message it receives, which a workflow that
@@ -820,6 +843,7 @@ impl<'a, Snap> RunOptions<'a, Snap> {
             acknowledgement: self.acknowledgement,
             snapshot: Some((store, interval)),
             akteur: self.akteur,
+            intern: self.intern,
         }
     }
 }
@@ -876,6 +900,7 @@ impl<W: Workflow, S: EventStore + Clone> Clone for Process<W, S> {
             process_id: self.process_id,
             tenant_id: self.tenant_id,
             workflow_id: self.workflow_id.clone(),
+            rolle: self.rolle.clone(),
             store: self.store.clone(),
             _phantom: PhantomData,
         }
@@ -1531,6 +1556,7 @@ mod tests {
             verlauf: None,
             antwort: None,
             akteur: crate::envelope::Akteur::System,
+            intern: false,
         };
         store
             .append(AppendBatch::new(

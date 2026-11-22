@@ -89,7 +89,7 @@ async fn approval_queue_enqueue_list_approve() {
                     Some("12345678989".to_owned()),
                     "test E_0624 event".to_owned(),
                     now + time::Duration::minutes(45),
-                    "9900357000004".to_owned(),
+                    mako_service::oidc::demo::TENANT.to_owned(),
                     "test-regel",
                 )
             }
@@ -113,7 +113,12 @@ async fn approval_queue_enqueue_list_approve() {
 
     // List pending
     let pending = queue
-        .list("9900357000004", Some(QueueStatus::Pending), None, 50)
+        .list(
+            mako_service::oidc::demo::TENANT,
+            Some(QueueStatus::Pending),
+            None,
+            50,
+        )
         .await
         .expect("list pending");
     assert_eq!(pending.len(), 1, "expected 1 pending entry");
@@ -123,7 +128,7 @@ async fn approval_queue_enqueue_list_approve() {
 
     // Find by ID
     let entry = queue
-        .find_by_id(id, "9900357000004")
+        .find_by_id(id, mako_service::oidc::demo::TENANT)
         .await
         .expect("find_by_id")
         .expect("entry exists");
@@ -137,7 +142,7 @@ async fn approval_queue_enqueue_list_approve() {
     let claimed = queue
         .claim(
             id,
-            "9900357000004",
+            mako_service::oidc::demo::TENANT,
             QueueStatus::Approved,
             "operator@example.com",
             Some("sha-of-the-sent-body"),
@@ -173,7 +178,7 @@ async fn approval_queue_enqueue_list_approve() {
         queue
             .claim(
                 id,
-                "9900357000004",
+                mako_service::oidc::demo::TENANT,
                 QueueStatus::Rejected,
                 "operator@example.com",
                 None,
@@ -185,9 +190,12 @@ async fn approval_queue_enqueue_list_approve() {
     );
 
     // Releasing the claim (dispatch failed) makes it retryable.
-    queue.unclaim(id, "9900357000004").await.expect("unclaim");
+    queue
+        .unclaim(id, mako_service::oidc::demo::TENANT)
+        .await
+        .expect("unclaim");
     let released = queue
-        .find_by_id(id, "9900357000004")
+        .find_by_id(id, mako_service::oidc::demo::TENANT)
         .await
         .expect("find released")
         .expect("entry still exists");
@@ -198,7 +206,7 @@ async fn approval_queue_enqueue_list_approve() {
     queue
         .claim(
             id,
-            "9900357000004",
+            mako_service::oidc::demo::TENANT,
             QueueStatus::Approved,
             "operator@example.com",
             Some("sha-of-the-sent-body"),
@@ -224,7 +232,7 @@ async fn approval_queue_lists_by_expires_at_and_keeps_its_ebd() {
     use processd::pg::approval::{ApprovalQueueEntry, QueueStatus};
     let (pool, _pg) = pg_pool().await;
     let queue = processd::pg::PgApprovalQueue::new(pool.clone());
-    let tenant = "9900357000004";
+    let tenant = mako_service::oidc::demo::TENANT;
     let now = time::OffsetDateTime::now_utc();
 
     let entry = |hours: i64, rolle: &str| {
@@ -347,13 +355,13 @@ async fn anmeldung_decisions_insert_and_list() {
         detail: None,
         initiator_is_affiliate: false,
         decided_at: now,
-        tenant: "9900357000004".to_owned(),
+        tenant: mako_service::oidc::demo::TENANT.to_owned(),
     })
     .await
     .expect("insert Accept decision");
 
     let records = repo
-        .list("9900357000004", 50)
+        .list(mako_service::oidc::demo::TENANT, 50)
         .await
         .expect("list decisions");
     assert_eq!(records.len(), 1);
@@ -364,7 +372,7 @@ async fn anmeldung_decisions_insert_and_list() {
     assert_eq!(records[0].antwortcode.as_deref(), Some("A51"));
     assert_eq!(records[0].antwortcode_ebd.as_deref(), Some("E_0623"));
     let one = repo
-        .find_by_process_id(process_id, "9900357000004")
+        .find_by_process_id(process_id, mako_service::oidc::demo::TENANT)
         .await
         .expect("find_by_process_id")
         .expect("the decision");
@@ -372,7 +380,7 @@ async fn anmeldung_decisions_insert_and_list() {
 
     // STP rate: 1 accept out of 1 → 100%
     let rate = repo
-        .stp_rate("9900357000004", 7)
+        .stp_rate(mako_service::oidc::demo::TENANT, 7)
         .await
         .expect("stp_rate")
         .unwrap_or(0.0);
@@ -404,7 +412,7 @@ async fn neuanlage_pruflauf_defers_records_and_resolves() {
     };
 
     let (pool, _pg) = pg_pool().await;
-    const TENANT: &str = "9900357000004";
+    const TENANT: &str = mako_service::oidc::demo::TENANT;
     let process_id = Uuid::new_v4();
 
     let ut = time::Date::from_calendar_date(2026, time::Month::March, 4).expect("valid");
@@ -549,7 +557,7 @@ async fn a_closed_neuanlage_case_must_state_its_antwortcode() {
 async fn a_tranchierte_anmeldung_waits_for_every_lfa() {
     let (pool, _pg) = pg_pool().await;
     let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);
-    let tenant = "9900357000004";
+    let tenant = mako_service::oidc::demo::TENANT;
     let process_id = Uuid::new_v4();
     let lfa = ["9900111000002", "9900111000003", "9900111000004"];
 
@@ -612,7 +620,7 @@ async fn a_tranchierte_anmeldung_waits_for_every_lfa() {
 async fn a_lapsed_frist_resolves_a_tranchierte_anmeldung_at_once() {
     let (pool, _pg) = pg_pool().await;
     let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);
-    let tenant = "9900357000004";
+    let tenant = mako_service::oidc::demo::TENANT;
     let process_id = Uuid::new_v4();
 
     repo.record(&processd::pg::abmeldeanfrage::AbmeldeanfrageRecord {
@@ -659,7 +667,7 @@ async fn a_lapsed_frist_resolves_a_tranchierte_anmeldung_at_once() {
 async fn a_waiting_anmeldung_carries_its_meldepflicht_facts() {
     let (pool, _pg) = pg_pool().await;
     let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);
-    let tenant = "9900357000004";
+    let tenant = mako_service::oidc::demo::TENANT;
     let process_id = Uuid::new_v4();
 
     let meldung = serde_json::json!({
@@ -808,7 +816,7 @@ async fn a_refused_agent_proposal_is_not_approvable_unchanged_over_rest() {
     let base = stand_in(app).await;
 
     use processd::pg::approval::{ApprovalQueueEntry, QueueStatus};
-    let tenant = "9900357000004";
+    let tenant = mako_service::oidc::demo::TENANT;
     let entry = ApprovalQueueEntry::pending(
         Uuid::new_v4(),
         55_001,
@@ -902,7 +910,7 @@ async fn an_approval_stores_the_fingerprint_of_what_it_sent() {
     let base = stand_in(app).await;
 
     use processd::pg::approval::{ApprovalQueueEntry, QueueStatus};
-    let tenant = "9900357000004";
+    let tenant = mako_service::oidc::demo::TENANT;
     let entry = ApprovalQueueEntry::pending(
         Uuid::new_v4(),
         55_001,
@@ -1016,7 +1024,7 @@ async fn a_resent_decision_dispatches_once() {
         Some("51238696012".to_owned()),
         "held for a person".to_owned(),
         time::OffsetDateTime::now_utc() + time::Duration::hours(2),
-        "9900357000004".to_owned(),
+        mako_service::oidc::demo::TENANT.to_owned(),
         "test-regel",
     )
     .with_commands(

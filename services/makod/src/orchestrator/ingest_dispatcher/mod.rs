@@ -260,6 +260,12 @@ pub(crate) struct Inbound<'a> {
     /// Anerkennungs- or Verarbeitbarkeitsfehlermeldung — enqueued with the run
     /// unless the workflow answers with its own.
     anerkennung: Option<&'a mako_engine::outbox::PendingOutbox>,
+    /// The Marktrolle of the own MP-ID the message is addressed to — what a
+    /// process it spawns acts in. `None` where the door reads no `NAD+MR`.
+    rolle: Option<&'static str>,
+    /// Sent by one of the deployment's own MP-IDs to another — a message
+    /// between its own Marktrollen.
+    intern: bool,
 }
 
 impl<'a> Inbound<'a> {
@@ -270,6 +276,8 @@ impl<'a> Inbound<'a> {
             received_at,
             aperak: None,
             anerkennung: None,
+            rolle: None,
+            intern: false,
         }
     }
 
@@ -1125,6 +1133,8 @@ impl EdifactIngestDispatcher {
                 received_at,
                 aperak,
                 anerkennung: anerkennung.as_ref(),
+                rolle: self.rolle_des_empfaengers(msg),
+                intern: self.zwischen_eigenen_rollen(msg),
             };
             self.dispatch_inner(msg, effective_name, pid, inbound).await
         };
@@ -1318,10 +1328,27 @@ impl EdifactIngestDispatcher {
     /// necessary the moment a second domain crate owns its own invoices' Storno,
     /// because the static route would then send half the Stornos to the wrong
     /// family.
+    /// The Marktrolle of the own MP-ID `msg` is addressed to (`NAD+MR`): one
+    /// MP-ID names one role (Allgemeine Festlegungen 6.1d Kap. 2.13).
+    fn rolle_des_empfaengers(&self, msg: &AnyMessage) -> Option<&'static str> {
+        let registry = self.mp_id_registry.as_ref()?;
+        registry.ahb_rolle(msg.nad_receiver()?)
+    }
+
+    /// Whether `msg` passes between two of the deployment's own MP-IDs.
+    fn zwischen_eigenen_rollen(&self, msg: &AnyMessage) -> bool {
+        let Some(registry) = self.mp_id_registry.as_ref() else {
+            return false;
+        };
+        [msg.nad_sender(), msg.nad_receiver()]
+            .into_iter()
+            .all(|mp| mp.is_some_and(|mp| registry.is_own_mp_id(mp)))
+    }
+
     async fn correlation_route(&self, msg: &AnyMessage, static_name: &str) -> Option<String> {
         let key = match msg {
-            AnyMessage::Remadv(_) => extract_invoice_ref_from_remadv(msg),
-            AnyMessage::Comdis(_) => extract_invoice_ref_from_comdis(msg),
+            AnyMessage::Remadv(_) => rechnungssteller_key(&extract_invoice_ref_from_remadv(msg)),
+            AnyMessage::Comdis(_) => rechnungsempfaenger_key(&extract_invoice_ref_from_comdis(msg)),
             // Not a shared reply PID — the static route is authoritative.
             _ => return None,
         };
@@ -1333,8 +1360,8 @@ impl EdifactIngestDispatcher {
             .lookup_correlated(self.tenant_id, &key)
             .await
             .ok()?;
-        // The invoice ref keys exactly one billing process (the invoicer that sent
-        // it); route the reply to that family.
+        // The side-qualified key names exactly one billing process; route the
+        // reply to that family.
         let owner = identities.first()?;
         let name = owner.workflow_id.name.as_ref();
         (name != static_name).then(|| name.to_owned())
@@ -1579,6 +1606,7 @@ impl EdifactIngestDispatcher {
                     cmd,
                     RunOptions::system()
                         .received_at(inbound.received_at)
+                        .intern(inbound.intern)
                         .acknowledgement_opt(inbound.anerkennung::<W>())
                         .deadlines(&windows)
                         .delivery_windows(&owed_with_aperak)
@@ -1598,7 +1626,8 @@ impl EdifactIngestDispatcher {
             Arc::clone(&self.store),
             self.tenant_id,
             workflow_id.clone(),
-        );
+        )
+        .with_rolle(inbound.rolle.map(Box::from));
         let process_id = process.process_id();
 
         // Persist events, the APERAK/process Frist deadlines, *and* the
@@ -1633,6 +1662,7 @@ impl EdifactIngestDispatcher {
                 cmd,
                 RunOptions::system()
                     .received_at(inbound.received_at)
+                    .intern(inbound.intern)
                     .acknowledgement_opt(inbound.anerkennung::<W>())
                     .deadlines(&deadlines)
                     .delivery_windows(&owed_with_aperak)
@@ -1780,6 +1810,7 @@ impl EdifactIngestDispatcher {
                 cmd,
                 RunOptions::system()
                     .received_at(inbound.received_at)
+                    .intern(inbound.intern)
                     .acknowledgement_opt(inbound.anerkennung::<W>())
                     .deadlines(&windows)
                     .delivery_windows(&owed_with_aperak)
@@ -1872,6 +1903,7 @@ impl EdifactIngestDispatcher {
                 cmd,
                 RunOptions::system()
                     .received_at(inbound.received_at)
+                    .intern(inbound.intern)
                     .acknowledgement_opt(inbound.anerkennung::<W>())
                     .deadlines(&pending)
                     .delivery_windows(&owed_with_aperak)
@@ -1945,6 +1977,35 @@ pub fn extract_melo_from_orders(msg: &AnyMessage) -> String {
         .and_then(|s| s.component_str(1, 0))
         .unwrap_or("")
         .to_owned()
+}
+
+/// The key the **Rechnungssteller's** process of an invoice runs under: the
+/// one that sent it and that a REMADV answers.
+///
+/// An invoice's two sides are two processes. On a deployment that both sends
+/// and receives one — the NB's Netznutzungsrechnung to its own LF, delivered
+/// in-process — a bare document number would name both, and the payer's
+/// INVOIC would resume the invoicer's process.
+#[must_use]
+pub fn rechnungssteller_key(invoice_ref: &str) -> String {
+    seitenschluessel("rechnung-steller", invoice_ref)
+}
+
+/// The key the **Rechnungsempfänger's** process of an invoice runs under: the
+/// one that received it, answers it with a REMADV and receives the COMDIS.
+#[must_use]
+pub fn rechnungsempfaenger_key(invoice_ref: &str) -> String {
+    seitenschluessel("rechnung-empfaenger", invoice_ref)
+}
+
+/// An invoice without a document number has no key on either side — empty,
+/// as the unread reference was, so no two such invoices share one.
+fn seitenschluessel(seite: &str, invoice_ref: &str) -> String {
+    if invoice_ref.trim().is_empty() {
+        String::new()
+    } else {
+        format!("{seite}:{invoice_ref}")
+    }
 }
 
 /// The Rechnungsnummer of an inbound INVOIC — `BGM` DE1004 (INVOIC MIG,

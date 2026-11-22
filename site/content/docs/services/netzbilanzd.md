@@ -1208,7 +1208,7 @@ dispatch" are one grant. Denials are logged with `sub` and action.
 
 ```toml
 # netzbilanzd.toml
-tenant = "9900357000004"
+tenant = "stadtwerke-musterstadt"
 
 marktd_url     = "http://marktd:8180"
 marktd_api_key = "env:NETZBILANZD_MARKTD_API_KEY"

@@ -182,13 +182,14 @@ where
     // Held across the lookup and the spawn: the ingest dispatcher spawns under
     // the same lock, so a concurrent command for the same invoice waits rather
     // than passing the lookup beside this one.
+    let key = crate::ingest_dispatcher::rechnungssteller_key(&invoice_ref);
     let _guard = crate::ingest_dispatcher::business_key_locks()
-        .acquire(&invoice_ref)
+        .acquire(&key)
         .await;
     if let Some(existing) = state
         .store
         .as_process_registry()
-        .lookup_correlated(state.tenant_id, &invoice_ref)
+        .lookup_correlated(state.tenant_id, &key)
         .await
         .map_err(DispatchError::Engine)?
         .into_iter()
@@ -200,7 +201,7 @@ where
         });
     }
     let workflow_id = WorkflowId::new(workflow_name, latest_format_version());
-    let keys = [invoice_ref.as_str()];
+    let keys = [key.as_str()];
     let process_id = if ist_storno {
         spawn_process::<WimInvoicWorkflow>(
             &state.store,

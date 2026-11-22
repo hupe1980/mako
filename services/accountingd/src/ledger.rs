@@ -332,9 +332,35 @@ impl Chart {
 
     /// The Kontokorrent path of a Marktlokation.
     #[must_use]
-    pub fn kontokorrent(lf_mp_id: &str, malo_id: &str) -> String {
-        format!("{}:{lf_mp_id}:{malo_id}", Self::KONTOKORRENT)
+    pub fn kontokorrent(mp_id: &str, malo_id: &str) -> String {
+        format!("{}:{mp_id}:{malo_id}", Self::KONTOKORRENT)
     }
+}
+
+/// The own MP-ID a manual booking of `entry_type` is kept under: the one named,
+/// else the Netzbetreiber's for an `EEG_*` entry — the Anlagenbetreiber's
+/// claim runs „gegen den Netzbetreiber" (§ 19 Abs. 1 EEG 2023) — and the
+/// Lieferant's for every other.
+///
+/// # Errors
+///
+/// An `EEG_*` entry with none named and no `[eeg] nb_mp_id` configured: it
+/// would otherwise land on the Lieferant's account.
+pub fn buchungskonto(
+    entry_type: &str,
+    benannt: Option<&str>,
+    lf_mp_id: &str,
+    eeg_nb_mp_id: Option<&str>,
+) -> Result<String, &'static str> {
+    if let Some(mp_id) = benannt.map(str::trim).filter(|m| !m.is_empty()) {
+        return Ok(mp_id.to_owned());
+    }
+    if entry_type.starts_with("EEG_") {
+        return eeg_nb_mp_id
+            .map(str::to_owned)
+            .ok_or("an EEG booking is the Netzbetreiber's: name its mp_id or set [eeg] nb_mp_id");
+    }
+    Ok(lf_mp_id.to_owned())
 }
 
 /// Every Buchungsart accountingd books.
@@ -382,8 +408,10 @@ pub mod axis {
 pub struct PostEntry {
     /// Marktlokation — identifies the customer Kontokorrent.
     pub malo_id: String,
-    /// The LF's own market-partner id — namespaces the Kontokorrent path.
-    pub lf_mp_id: String,
+    /// The own MP-ID the account is kept under — the Lieferant's for a customer,
+    /// the Netzbetreiber's for an Anlagenbetreiber (`accounts.mp_id`). Namespaces
+    /// the Kontokorrent path.
+    pub mp_id: String,
     /// The accountingd entry type (`RECHNUNG`, `ZAHLUNG`, `EEG_GUTSCHRIFT`, …).
     pub entry_type: String,
     /// Signed minor units: positive increases the receivable, negative reduces it.
@@ -410,7 +438,7 @@ impl PostEntry {
     #[must_use]
     pub fn new(
         malo_id: impl Into<String>,
-        lf_mp_id: impl Into<String>,
+        mp_id: impl Into<String>,
         entry_type: impl Into<String>,
         amount_ct: i64,
         idempotency: impl Into<String>,
@@ -418,7 +446,7 @@ impl PostEntry {
     ) -> Self {
         Self {
             malo_id: malo_id.into(),
-            lf_mp_id: lf_mp_id.into(),
+            mp_id: mp_id.into(),
             entry_type: entry_type.into(),
             amount_ct,
             idempotency: idempotency.into(),
@@ -500,7 +528,7 @@ impl PostEntry {
         } else {
             Side::Credit
         };
-        let kontokorrent = Chart::kontokorrent(&self.lf_mp_id, &self.malo_id);
+        let kontokorrent = Chart::kontokorrent(&self.mp_id, &self.malo_id);
         let mut customer = match customer_side {
             Side::Debit => Posting::debit(kontokorrent.as_str(), amount, EUR),
             Side::Credit => Posting::credit(kontokorrent.as_str(), amount, EUR),
@@ -684,8 +712,8 @@ impl<S: Store<P>> Ledger<S> {
 
     /// The Kontokorrent path of a Marktlokation, refused when either id would
     /// leave an empty or invalid path segment.
-    fn konto(lf_mp_id: &str, malo_id: &str) -> LedgerResult<String> {
-        let path = Chart::kontokorrent(lf_mp_id, malo_id);
+    fn konto(mp_id: &str, malo_id: &str) -> LedgerResult<String> {
+        let path = Chart::kontokorrent(mp_id, malo_id);
         path.parse::<doubleentry::AccountPath>()
             .map_err(|e| LedgerError::refused(format!("Kontokorrent {path:?}: {e}")))?;
         Ok(path)
@@ -756,7 +784,7 @@ impl<S: Store<P>> Ledger<S> {
         // A booking into next year's calendar extends it; the calendar is
         // contiguous, so every year between is defined too.
         self.define_through(req.booking_date.year()).await?;
-        self.ensure_kontokorrent(&Self::konto(&req.lf_mp_id, &req.malo_id)?)
+        self.ensure_kontokorrent(&Self::konto(&req.mp_id, &req.malo_id)?)
             .await?;
         let recorded = self
             .books
@@ -779,20 +807,15 @@ impl<S: Store<P>> Ledger<S> {
     /// # Errors
     ///
     /// A store failure.
-    pub async fn balance_ct(&self, lf_mp_id: &str, malo_id: &str) -> LedgerResult<i64> {
-        self.balance(lf_mp_id, malo_id, &BalanceQuery::all()).await
+    pub async fn balance_ct(&self, mp_id: &str, malo_id: &str) -> LedgerResult<i64> {
+        self.balance(mp_id, malo_id, &BalanceQuery::all()).await
     }
 
     /// The customer's signed balance over `query`; zero for an account never booked.
-    async fn balance(
-        &self,
-        lf_mp_id: &str,
-        malo_id: &str,
-        query: &BalanceQuery,
-    ) -> LedgerResult<i64> {
+    async fn balance(&self, mp_id: &str, malo_id: &str, query: &BalanceQuery) -> LedgerResult<i64> {
         match self
             .books
-            .balance(Self::konto(lf_mp_id, malo_id)?.as_str(), EUR, query)
+            .balance(Self::konto(mp_id, malo_id)?.as_str(), EUR, query)
             .await
         {
             Ok(balance) => Ok(ct(balance.net())),
@@ -809,13 +832,13 @@ impl<S: Store<P>> Ledger<S> {
     /// A store failure.
     pub async fn open_items(
         &self,
-        lf_mp_id: &str,
+        mp_id: &str,
         malo_id: &str,
     ) -> LedgerResult<Vec<doubleentry::report::OpenItem<P>>> {
         match self
             .books
             .open_items(
-                Self::konto(lf_mp_id, malo_id)?.as_str(),
+                Self::konto(mp_id, malo_id)?.as_str(),
                 EUR,
                 &BalanceQuery::all(),
             )
@@ -844,11 +867,11 @@ impl<S: Store<P>> Ledger<S> {
     /// A refusal or a store failure.
     pub async fn apply_fifo_clearing(
         &self,
-        lf_mp_id: &str,
+        mp_id: &str,
         malo_id: &str,
         on: Date,
     ) -> LedgerResult<Vec<u64>> {
-        let open = self.open_items(lf_mp_id, malo_id).await?;
+        let open = self.open_items(mp_id, malo_id).await?;
         let order = |i: &&doubleentry::report::OpenItem<P>| (i.booking_date, i.position);
         let mut debits: Vec<_> = open
             .iter()
@@ -934,11 +957,11 @@ impl<S: Store<P>> Ledger<S> {
     /// A store failure.
     pub async fn open_receivables(
         &self,
-        lf_mp_id: &str,
+        mp_id: &str,
         malo_id: &str,
     ) -> LedgerResult<Vec<OpenReceivable>> {
         let mut out = Vec::new();
-        for item in self.open_items(lf_mp_id, malo_id).await? {
+        for item in self.open_items(mp_id, malo_id).await? {
             if item.side != Side::Debit || !item.residual.is_positive() {
                 continue;
             }
@@ -1031,13 +1054,13 @@ impl<S: Store<P>> Ledger<S> {
     /// A store failure.
     pub async fn statement(
         &self,
-        lf_mp_id: &str,
+        mp_id: &str,
         malo_id: &str,
         query: &BalanceQuery,
     ) -> LedgerResult<Option<doubleentry::report::Statement<P>>> {
         match self
             .books
-            .statement(Self::konto(lf_mp_id, malo_id)?.as_str(), EUR, query)
+            .statement(Self::konto(mp_id, malo_id)?.as_str(), EUR, query)
             .await
         {
             Ok(statement) => Ok(Some(statement)),
@@ -1054,14 +1077,14 @@ impl<S: Store<P>> Ledger<S> {
     /// A store failure.
     pub async fn has_debit_on_or_before(
         &self,
-        lf_mp_id: &str,
+        mp_id: &str,
         malo_id: &str,
         cutoff: Date,
     ) -> LedgerResult<bool> {
         match self
             .books
             .balance(
-                Self::konto(lf_mp_id, malo_id)?.as_str(),
+                Self::konto(mp_id, malo_id)?.as_str(),
                 EUR,
                 &BalanceQuery::through(cutoff),
             )
@@ -1086,7 +1109,7 @@ impl<S: Store<P>> Ledger<S> {
     /// A store failure.
     pub async fn year_kind_sums(
         &self,
-        lf_mp_id: &str,
+        mp_id: &str,
         malo_id: &str,
         year: i32,
     ) -> LedgerResult<std::collections::HashMap<String, i64>> {
@@ -1099,7 +1122,7 @@ impl<S: Store<P>> Ledger<S> {
         let mut sums = std::collections::HashMap::new();
         for kind in ENTRY_TYPES {
             let query = BalanceQuery::between(from, to).of_kind(kind);
-            let net = self.balance(lf_mp_id, malo_id, &query).await?;
+            let net = self.balance(mp_id, malo_id, &query).await?;
             if net != 0 {
                 sums.insert((*kind).to_owned(), net);
             }
@@ -1210,7 +1233,7 @@ impl<S: Store<P>> Ledger<S> {
     pub async fn prove_period_balance(
         &self,
         period: &str,
-        lf_mp_id: &str,
+        mp_id: &str,
         malo_id: &str,
     ) -> LedgerResult<(
         doubleentry::log::SealedBalanceProof<P>,
@@ -1218,7 +1241,7 @@ impl<S: Store<P>> Ledger<S> {
     )> {
         let proof = self
             .books
-            .prove_balance(Self::konto(lf_mp_id, malo_id)?, EUR, Layer::Settled, period)
+            .prove_balance(Self::konto(mp_id, malo_id)?, EUR, Layer::Settled, period)
             .await
             .map_err(LedgerError::from_ledger(format!("prove balance {period}")))?;
         let head = self
@@ -1303,6 +1326,30 @@ impl Ledger<SqlStore<Postgres, P>> {
 
 #[cfg(test)]
 mod tests {
+    use super::buchungskonto;
+
+    /// An EEG booking is the Netzbetreiber's, every other the Lieferant's; a
+    /// named account wins, and an EEG booking with no NB to name is refused
+    /// rather than put on the Lieferant's account.
+    #[test]
+    fn a_manual_booking_finds_the_account_of_its_role() {
+        let lf = "9900357000028";
+        let nb = "9900357000004";
+        assert_eq!(
+            buchungskonto("EEG_RUECKZAHLUNG", None, lf, Some(nb)),
+            Ok(nb.to_owned())
+        );
+        assert_eq!(
+            buchungskonto("ZAHLUNG", None, lf, Some(nb)),
+            Ok(lf.to_owned())
+        );
+        assert_eq!(
+            buchungskonto("EEG_GUTSCHRIFT", Some(lf), lf, Some(nb)),
+            Ok(lf.to_owned())
+        );
+        assert!(buchungskonto("EEG_AUSZAHLUNG", None, lf, None).is_err());
+    }
+
     use super::*;
     use doubleentry::store::MemoryStore;
     use time::macros::date;

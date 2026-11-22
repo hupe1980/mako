@@ -3,5 +3,12 @@
   "ust_status": "KLEINUNTERNEHMER",
   "bank_iban": "DE89370400440532013000",
   "bank_bic": "COBADEFFXXX",
-  "zahlungsempfaenger": "Max Mustermann"
+  "zahlungsempfaenger": "Max Mustermann",
+  "zahlungsempfaenger_anschrift": {
+    "street": "Lindenweg",
+    "building_number": "7",
+    "post_code": "12345",
+    "town": "Musterstadt",
+    "country": "DE"
+  }
 }

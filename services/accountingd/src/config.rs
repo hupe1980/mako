@@ -18,13 +18,26 @@ use serde::Deserialize;
 /// §25 Abs. 1 EEG 2023: Vergütung must be credited *"unverzüglich nach Ende des Monats"*.
 /// SCT Inst satisfies this stronger than CORE (D+1 effectively means D+2 across weekends).
 ///
+/// ## Who pays
+///
+/// § 19 Abs. 1 EEG 2023: Anlagenbetreiber „haben für den in diesen Anlagen
+/// erzeugten Strom gegen den Netzbetreiber einen Anspruch auf 1. die
+/// Marktprämie nach § 20, 2. eine Einspeisevergütung …, 3. einen
+/// Mieterstromzuschlag …". Every EEG payout is therefore the Netzbetreiber's:
+/// its account with the Anlagenbetreiber is kept under `nb_mp_id`, and the
+/// pain.001 debits `debtor_iban` in the name `debtor_name`. Neither falls back
+/// to the Lieferant's `lf_mp_id` or `creditor_name` — the Netzbetreiber is
+/// often a legal entity of its own.
+///
 /// ## Example config
 ///
 /// ```toml
 /// [eeg]
+/// nb_mp_id       = "9900357000004"      # the Netzbetreiber that owes the payouts
+/// debtor_name    = "Stadtwerke Musterstadt GmbH"
 /// sepa_instant   = true
 /// auto_payout    = true
-/// debtor_iban    = "env:LF_BANK_IBAN"   # LF's own bank account (debit side)
+/// debtor_iban    = "env:NB_BANK_IBAN"   # the Netzbetreiber's bank account (debit side)
 /// bank_submit_url = "https://banking-adapter.internal/api/v1/pain001"
 /// bank_api_key   = "env:BANK_API_KEY"
 /// ```
@@ -46,7 +59,24 @@ pub struct EegConfig {
     #[serde(default)]
     pub auto_payout: bool,
 
-    /// IBAN of the LF's bank account (debtor / sending account for EEG payouts).
+    /// The Netzbetreiber whose EEG payables this ledger keeps — its BDEW- or
+    /// DVGW-Codenummer, the `accounts.mp_id` every EEG plant account is kept
+    /// under. Absent, an EEG receipt is refused (`503 eeg_nb_not_configured`)
+    /// and redelivered once it is set.
+    pub nb_mp_id: Option<String>,
+
+    /// The Netzbetreiber's legal name as SEPA debtor (`Dbtr/Nm` of every EEG
+    /// pain.001). Absent, a payout is refused (`503 eeg_debtor_not_configured`).
+    pub debtor_name: Option<String>,
+
+    /// The Netzbetreiber's postal address (`Dbtr/PstlAdr` of every EEG
+    /// pain.001), in the structured ISO 20022 form of `[creditor_address]`.
+    /// Absent, the pain.001 carries no debtor address.
+    #[serde(default)]
+    pub debtor_address: crate::sepa::AddressParts,
+
+    /// IBAN of the Netzbetreiber's bank account (debtor / sending account for
+    /// EEG payouts).
     ///
     /// **Required** when `auto_payout = true`.  Must be a valid SEPA IBAN.
     /// The service validates this at startup and refuses to auto-generate pain.001
@@ -181,8 +211,8 @@ pub struct AccountingdConfig {
     /// pain.008 XML when this is absent or contains an invalid IBAN.
     pub creditor_iban: Option<String>,
 
-    /// The LF's legal name: `<Cdtr><Nm>` of a pain.008, `<Dbtr><Nm>` of an EEG
-    /// pain.001 and the sender of a Mahnung. Absent, each of them is refused —
+    /// The LF's legal name: `<Cdtr><Nm>` of a pain.008 and the sender of a
+    /// Mahnung. Absent, each of them is refused —
     /// the tenant is an isolation key, not a name a bank or customer may read.
     pub creditor_name: Option<String>,
 
@@ -216,9 +246,9 @@ pub struct AccountingdConfig {
 
     /// The operator's own postal address (`[creditor_address]`).
     ///
-    /// Emitted as `Cdtr/PstlAdr` in pain.008 and `Dbtr/PstlAdr` in pain.001 —
-    /// both are the same party, the LF's own legal entity, so one block
-    /// configures both sides.
+    /// Emitted as `Cdtr/PstlAdr` in pain.008 — the LF's own legal entity. The
+    /// EEG pain.001 is the Netzbetreiber's and names its own debtor address
+    /// (`[eeg] debtor_address`).
     ///
     /// ## Structured, or absent
     ///
@@ -346,6 +376,35 @@ pub struct AccountingdConfig {
 /// The refusal every SEPA message gives when `creditor_name` is not set.
 pub const CREDITOR_NAME_FEHLT: &str = "creditor_name is not configured — a SEPA message names \
      the Lieferant by its legal name; set creditor_name in accountingd.toml";
+
+/// The refusal an EEG receipt gives when `[eeg] nb_mp_id` is not set.
+pub const EEG_NB_FEHLT: &str = "[eeg] nb_mp_id is not configured — an EEG payout is owed by the \
+     Netzbetreiber (§ 19 Abs. 1 EEG 2023), so its plant accounts are kept under the \
+     Netzbetreiber's MP-ID; set [eeg] nb_mp_id in accountingd.toml";
+
+/// The refusal an EEG payout gives when `[eeg] debtor_iban` or `debtor_name` is not set.
+pub const EEG_DEBTOR_FEHLT: &str = "[eeg] debtor_iban and [eeg] debtor_name must both be set — \
+     the EEG pain.001 debits the Netzbetreiber's account in the Netzbetreiber's name";
+
+impl EegConfig {
+    /// The configured Netzbetreiber MP-ID, `None` when absent or blank.
+    #[must_use]
+    pub fn nb_mp_id(&self) -> Option<&str> {
+        self.nb_mp_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The configured debtor name, `None` when absent or blank.
+    #[must_use]
+    pub fn debtor_name(&self) -> Option<&str> {
+        self.debtor_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+}
 
 impl AccountingdConfig {
     /// The configured creditor name, `None` when absent or blank.

@@ -424,8 +424,10 @@ impl Negativpreis {
 ///   EIGENVERBRAUCH, KWKG_ZUSCHLAG, FLEXIBILITAET
 /// - `de.mako.eeg.marktpraemie.berechnet` — DIREKTVERMARKTUNG, AUSSCHREIBUNG
 ///
-/// `bank_iban` and `bank_bic` are included when present so `accountingd` can
-/// generate a SEPA Credit Transfer pain.001 without a secondary DB lookup.
+/// `bank_iban`, `bank_bic`, `zahlungsempfaenger` and
+/// `zahlungsempfaenger_anschrift` are the operator's payee as registered, so
+/// `accountingd` can generate a SEPA Credit Transfer pain.001 without a
+/// secondary DB lookup.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a separate input of this operation; a parameter struct would exist for this one call"
@@ -442,6 +444,7 @@ pub fn build_settlement_ce(
     bank_iban: Option<&str>,
     bank_bic: Option<&str>,
     zahlungsempfaenger: Option<&str>,
+    zahlungsempfaenger_anschrift: Option<&crate::pg_einspeiser::Anschrift>,
 ) -> Option<mako_service::CloudEvent> {
     // Gate on webhook configuration — no ERP endpoint means nothing to enqueue.
     cfg.erp_webhook_url.as_deref()?;
@@ -479,6 +482,10 @@ pub fn build_settlement_ce(
             "bank_iban": bank_iban,
             "bank_bic": bank_bic,
             "zahlungsempfaenger": zahlungsempfaenger,
+            // The payee's structured `PstlAdr` (`town`, `country`, `street`,
+            // `building_number`, `post_code`, `country_subdivision`) —
+            // accountingd's `Cdtr/PstlAdr`. Null where none is registered.
+            "zahlungsempfaenger_anschrift": zahlungsempfaenger_anschrift,
             // §52 Abs. 2 — the **cumulative** claim against the operator, not
             // this month's increment: §52 charges per Kilowatt and Kalendermonat,
             // so the figure grows while the breach subsists and a later receipt
@@ -562,6 +569,7 @@ pub async fn enqueue_settlement_ce(
         einspeiser.bank_iban.as_deref(),
         einspeiser.bank_bic.as_deref(),
         einspeiser.zahlungsempfaenger.as_deref(),
+        einspeiser.zahlungsempfaenger_anschrift.as_ref(),
     ) {
         mako_service::outbox::enqueue(tx, &ce).await?;
     }
@@ -3464,6 +3472,7 @@ pub async fn get_einspeiser(
         (status = 204, description = "Stored"),
         (status = 400, description = "A refusal", body = ApiError),
         (status = 403, description = "Cedar `write-einspeiser` refused", body = ApiError),
+        (status = 422, description = "`zahlungsempfaenger_anschrift` refused — `incomplete_postal_address` (town or country missing) or `invalid_country_code`", body = ApiError),
     )
 )]
 pub async fn put_einspeiser(
@@ -3480,7 +3489,25 @@ pub async fn put_einspeiser(
     {
         return ApiError::Forbidden.into_response();
     }
-    match crate::pg_einspeiser::upsert(&pool, &cfg.tenant, &einspeiser_id, &body).await {
+    // A given address is checked before anything is stored: one the payout
+    // could not carry would leave every Gutschrift paid without it.
+    let anschrift = match body.anschrift() {
+        Ok(a) => a,
+        Err(e) => {
+            return ApiError::unprocessable(e.to_string())
+                .with_code(e.code())
+                .into_response();
+        }
+    };
+    match crate::pg_einspeiser::upsert(
+        &pool,
+        &cfg.tenant,
+        &einspeiser_id,
+        &body,
+        anschrift.as_ref(),
+    )
+    .await
+    {
         Ok(()) => (StatusCode::NO_CONTENT).into_response(),
         Err(e) => ApiError::bad_request(e.to_string()).into_response(),
     }

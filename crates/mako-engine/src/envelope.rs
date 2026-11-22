@@ -296,6 +296,9 @@ pub struct NewEvent {
     pub antwort: Option<Antwortcode>,
     /// Who caused the event.
     pub akteur: Akteur,
+    /// The message passed between two of the deployment's own Marktrollen —
+    /// delivered in-process, not over AS4.
+    pub intern: bool,
 }
 
 impl NewEvent {
@@ -336,6 +339,7 @@ impl NewEvent {
             verlauf: None,
             antwort: None,
             akteur,
+            intern: false,
         }
     }
 
@@ -436,6 +440,10 @@ pub struct EventEnvelope {
 
     /// Who caused the event. Required: an envelope without it does not load.
     pub akteur: Akteur,
+    /// The message passed between two of the deployment's own Marktrollen —
+    /// delivered in-process, not over AS4.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub intern: bool,
 }
 
 impl EventEnvelope {
@@ -495,6 +503,7 @@ impl EventEnvelope {
             verlauf: new.verlauf,
             antwort: new.antwort,
             akteur: new.akteur,
+            intern: new.intern,
         }
     }
 }

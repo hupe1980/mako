@@ -333,7 +333,7 @@ impl EdifactIngestDispatcher {
                 31011 => {
                     let cmd =
                         adapters::geli_gas_sperrprozesse_invoic_registry().dispatch(raw, &fv)?;
-                    let malo_id = extract_invoice_ref_from_invoic(msg);
+                    let malo_id = rechnungsempfaenger_key(&extract_invoice_ref_from_invoic(msg));
                     // The Zahlungsziel the invoice states (`SG8 DTM+265`, Muss
                     // on 31011 — INVOIC AHB 1.0b Kap. 3.1.5).
                     let due_at = zahlungsziel_due(msg, pid)?;

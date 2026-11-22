@@ -10,6 +10,8 @@ import { useQuery } from "@tanstack/react-query";
 export interface Persona {
   id: string;
   name: string;
+  /** The Marktrollen the persona's token carries (`NB`, `LF`, …). */
+  rollen?: string[];
 }
 
 /** The demo sign-in (deploy/demo/desk/config.json); absent in every real deployment. */

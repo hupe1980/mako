@@ -907,10 +907,24 @@ async fn a_put_cannot_rewrite_a_contract_price() {
     assert_eq!(alt.data, data, "the agreed version still prices its period");
 }
 
-/// A marktd that serves the fixture's three sheets for any NB.
+/// A marktd that serves the fixture's three sheets for any NB, and names a
+/// grundzuständiger MSB for its grid on any day.
 async fn marktd_attrappe() -> String {
     use axum::routing::get;
     let app = axum::Router::new()
+        .route(
+            "/api/v1/netzbetreiber/{nb}/grundzustaendiger-msb",
+            get(
+                |axum::extract::Path(nb): axum::extract::Path<String>| async move {
+                    axum::Json(serde_json::json!({
+                        "nb_mp_id": nb,
+                        "gmsb_mp_id": "9900357000035",
+                        "valid_from": "2020-01-01",
+                        "valid_to": null,
+                    }))
+                },
+            ),
+        )
         .route(
             "/api/v1/preisblaetter/{nb}",
             get(|| async { axum::Json(serde_json::json!({ "data": netznutzung() })) }),

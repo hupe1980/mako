@@ -60,6 +60,19 @@ CREATE TABLE einspeiser (
     bank_iban          TEXT,
     bank_bic           TEXT,
     zahlungsempfaenger TEXT,
+    -- The Zahlungsempfänger's postal address (ISO 20022 structured `PstlAdr`,
+    -- the `Cdtr/PstlAdr` of accountingd's pain.001). Town and country are set
+    -- together or not at all, and no other part stands without them.
+    addr_town          TEXT,
+    addr_country       TEXT CHECK (addr_country IS NULL OR addr_country ~ '^[A-Z]{2}$'),
+    addr_street        TEXT,
+    addr_building_number TEXT,
+    addr_post_code     TEXT,
+    addr_country_subdivision TEXT,
+    CHECK ((addr_town IS NULL) = (addr_country IS NULL)),
+    CHECK (addr_town IS NOT NULL
+           OR (addr_street IS NULL AND addr_building_number IS NULL
+               AND addr_post_code IS NULL AND addr_country_subdivision IS NULL)),
 
     version            BIGINT      NOT NULL DEFAULT 1,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),

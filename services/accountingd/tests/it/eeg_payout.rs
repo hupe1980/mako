@@ -17,7 +17,7 @@ use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 /// The demo configuration's tenant.
-const TENANT: &str = "9900357000004";
+const TENANT: &str = "stadtwerke-musterstadt";
 /// The plant operator's account — a valid German IBAN.
 const CREDITOR_IBAN: &str = "DE02120300000000202051";
 /// The Netzbetreiber's own account the payouts are debited from.
@@ -25,6 +25,14 @@ const DEBTOR_IBAN: &str = "DE89370400440532013000";
 
 /// The dev router with `[eeg]` set as given, over a throwaway PostgreSQL.
 async fn app(auto_payout: bool) -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgres>)> {
+    app_with(auto_payout, |_| {}).await
+}
+
+/// [`app`], with `anpassen` changing the `[eeg]` table last.
+async fn app_with(
+    auto_payout: bool,
+    anpassen: impl FnOnce(&mut toml::map::Map<String, toml::Value>),
+) -> Option<(axum::Router, sqlx::PgPool, ContainerAsync<Postgres>)> {
     let pg = Postgres::default()
         .with_tag("17-alpine")
         .start()
@@ -44,15 +52,20 @@ async fn app(auto_payout: bool) -> Option<(axum::Router, sqlx::PgPool, Container
     if let Some(db) = cfg["database"].as_table_mut() {
         db.remove("migration_url");
     }
-    let mut eeg = toml::map::Map::new();
+    // The demo's `[eeg]` names the Netzbetreiber; the test adds how it pays.
+    let eeg = cfg
+        .as_table_mut()
+        .expect("table")
+        .entry("eeg")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .expect("[eeg] is a table");
     eeg.insert("auto_payout".into(), toml::Value::Boolean(auto_payout));
     eeg.insert(
         "debtor_iban".into(),
         toml::Value::String(DEBTOR_IBAN.into()),
     );
-    cfg.as_table_mut()
-        .expect("table")
-        .insert("eeg".into(), toml::Value::Table(eeg));
+    anpassen(eeg);
     let cfg = cfg.try_into().expect("an accountingd configuration");
     let app = mako_service::build_for_test_on::<accountingd::Accountingd>(cfg, pool.clone())
         .await
@@ -494,6 +507,113 @@ async fn a_payout_that_cannot_be_ordered_is_not_acknowledged() {
         recorded, 1,
         "the receipt is kept for the redelivery and the run"
     );
+}
+
+/// § 19 Abs. 1 EEG 2023: the Anspruch is „gegen den Netzbetreiber". The plant
+/// account is kept under `[eeg] nb_mp_id` — not the Lieferant's `lf_mp_id` —
+/// and the pain.001 debits the Netzbetreiber's account in `[eeg] debtor_name`.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_payout_is_the_netzbetreibers() {
+    let Some((app, pool, _pg)) = app_with(true, |eeg| {
+        eeg.insert(
+            "debtor_name".into(),
+            toml::Value::String("Musterstadt Netz GmbH".into()),
+        );
+    })
+    .await
+    else {
+        return;
+    };
+    let p = Periode::new();
+    deliver(
+        &app,
+        &p.receipt("ce-nb-1", 1, Uuid::new_v4(), None, "100.00"),
+    )
+    .await;
+    let konten: Vec<String> =
+        sqlx::query_scalar("SELECT mp_id FROM accounts WHERE tenant = $1 AND malo_id = $2")
+            .bind(TENANT)
+            .bind(&p.malo_id)
+            .fetch_all(&pool)
+            .await
+            .expect("accounts");
+    assert_eq!(konten, ["9900357000004"], "one plant account, the NB's");
+    let xml: String = sqlx::query_scalar(
+        "SELECT pain001_xml FROM eeg_payout_orders WHERE tenant = $1 AND malo_id = $2",
+    )
+    .bind(TENANT)
+    .bind(&p.malo_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the payout order");
+    let dbtr = xml
+        .split("<Dbtr>")
+        .nth(1)
+        .and_then(|d| d.split("</Dbtr>").next())
+        .expect("a Dbtr block");
+    assert!(dbtr.contains("Musterstadt Netz GmbH"), "{dbtr}");
+    assert!(!xml.contains("Stadtwerke Musterstadt GmbH"), "{xml}");
+}
+
+/// Without `[eeg] nb_mp_id` an EEG receipt is refused `503
+/// eeg_nb_not_configured` — einsd redelivers it once the Netzbetreiber is
+/// configured — and nothing is booked on the Lieferant's account in its place.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_receipt_without_the_netzbetreiber_is_refused() {
+    let Some((app, pool, _pg)) = app_with(false, |eeg| {
+        eeg.remove("nb_mp_id");
+    })
+    .await
+    else {
+        return;
+    };
+    let p = Periode::new();
+    let ce = p.receipt("ce-nb-2", 1, Uuid::new_v4(), None, "100.00");
+    let (status, body) = call(&app, post_json("/webhook", &ce)).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "{body}"
+    );
+    assert_eq!(body["code"], "eeg_nb_not_configured", "{body}");
+    let konten: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM accounts WHERE tenant = $1 AND malo_id = $2")
+            .bind(TENANT)
+            .bind(&p.malo_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(konten, 0, "no account is opened under any other MP-ID");
+}
+
+/// Without `[eeg] debtor_name` the payout run is refused `503
+/// eeg_debtor_not_configured`, never paid in the Lieferant's name.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_payout_run_without_the_debtor_name_is_refused() {
+    let Some((app, _pool, _pg)) = app_with(false, |eeg| {
+        eeg.remove("debtor_name");
+    })
+    .await
+    else {
+        return;
+    };
+    let (status, body) = call(
+        &app,
+        post_json(
+            "/api/v1/eeg/payouts/run",
+            &serde_json::json!({ "billing_year": 2026, "billing_month": 10 }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "{body}"
+    );
+    assert_eq!(body["code"], "eeg_debtor_not_configured", "{body}");
 }
 
 /// A receipt that cannot be placed in its chain is refused, not defaulted: a
@@ -966,4 +1086,153 @@ async fn an_eeg_rueckforderung_is_never_dunned() {
         p.rueckforderung(&app).await.is_some(),
         "the claim is still listed as a Rückforderung"
     );
+}
+
+/// The plant's pain.001 for `p`, the only order of its period.
+async fn pain001_of(pool: &sqlx::PgPool, p: &Periode) -> String {
+    sqlx::query_scalar(
+        "SELECT pain001_xml FROM eeg_payout_orders WHERE tenant = $1 AND malo_id = $2",
+    )
+    .bind(TENANT)
+    .bind(&p.malo_id)
+    .fetch_one(pool)
+    .await
+    .expect("the payout order")
+}
+
+/// The `<Cdtr>` block of a pain.001.
+fn cdtr(xml: &str) -> &str {
+    xml.split("<Cdtr>")
+        .nth(1)
+        .and_then(|d| d.split("</Cdtr>").next())
+        .unwrap_or_else(|| panic!("a Cdtr block: {xml}"))
+}
+
+/// `Cdtr/PstlAdr` is the Anlagenbetreiber's address as the current receipt
+/// states it (`zahlungsempfaenger_anschrift`, einsd's Einspeiser), and it wins
+/// over an address on the plant account: the receipt is the payee's current
+/// registration. It is snapshotted on the receipt and on the order.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_payout_carries_the_receipts_payee_address() {
+    let Some((app, pool, _pg)) = app(false).await else {
+        return;
+    };
+    let p = Periode::new();
+    let mut ce = p.receipt("ce-adr-1", 1, Uuid::new_v4(), None, "100.00");
+    ce["data"]["zahlungsempfaenger_anschrift"] = serde_json::json!({
+        "town": "München",
+        "country": "DE",
+        "street": "Sonnenweg",
+        "building_number": "7",
+        "post_code": "80331",
+        "country_subdivision": null,
+    });
+    deliver(&app, &ce).await;
+    sqlx::query(
+        "UPDATE accounts SET addr_town = 'Altstadt', addr_country = 'DE'
+          WHERE tenant = $1 AND malo_id = $2",
+    )
+    .bind(TENANT)
+    .bind(&p.malo_id)
+    .execute(&pool)
+    .await
+    .expect("an account address");
+
+    let run = serde_json::json!({ "billing_year": p.year, "billing_month": p.month });
+    let (status, body) = call(&app, post_json("/api/v1/eeg/payouts/run", &run)).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let xml = pain001_of(&pool, &p).await;
+    let cdtr = cdtr(&xml);
+    for teil in [
+        "<StrtNm>Sonnenweg</StrtNm>",
+        "<BldgNb>7</BldgNb>",
+        "<PstCd>80331</PstCd>",
+        // The pain.001 is written in the EPC SEPA character set, so „ü" goes
+        // out as „ue"; the order's snapshot keeps the address as received.
+        "<TwnNm>Muenchen</TwnNm>",
+        "<Ctry>DE</Ctry>",
+    ] {
+        assert!(cdtr.contains(teil), "{teil} in {cdtr}");
+    }
+    assert!(!cdtr.contains("Altstadt"), "{cdtr}");
+    let (town, street): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT creditor_town, creditor_street FROM eeg_payout_orders
+          WHERE tenant = $1 AND malo_id = $2",
+    )
+    .bind(TENANT)
+    .bind(&p.malo_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the order");
+    assert_eq!(town.as_deref(), Some("München"));
+    assert_eq!(street.as_deref(), Some("Sonnenweg"));
+}
+
+/// A receipt stating no address is paid to the plant account's own address —
+/// the account is the Anlagenbetreiber's, so it is the same party's.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_receipt_without_an_address_is_paid_to_the_accounts() {
+    let Some((app, pool, _pg)) = app(false).await else {
+        return;
+    };
+    let p = Periode::new();
+    deliver(
+        &app,
+        &p.receipt("ce-adr-2", 1, Uuid::new_v4(), None, "100.00"),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE accounts SET addr_town = 'Altstadt', addr_country = 'DE'
+          WHERE tenant = $1 AND malo_id = $2",
+    )
+    .bind(TENANT)
+    .bind(&p.malo_id)
+    .execute(&pool)
+    .await
+    .expect("an account address");
+    let run = serde_json::json!({ "billing_year": p.year, "billing_month": p.month });
+    let (status, body) = call(&app, post_json("/api/v1/eeg/payouts/run", &run)).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let xml = pain001_of(&pool, &p).await;
+    assert!(cdtr(&xml).contains("<TwnNm>Altstadt</TwnNm>"), "{xml}");
+}
+
+/// A receipt whose address the pain.001 could not carry — no country, a
+/// country that is none, a field `AddressParts` does not have — is refused
+/// `422`, and einsd dead-letters it, rather than recorded with a chain whose
+/// every payout would then fail.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_receipt_with_an_unusable_address_is_refused() {
+    let Some((app, pool, _pg)) = app(true).await else {
+        return;
+    };
+    let p = Periode::new();
+    for (i, anschrift) in [
+        serde_json::json!({ "town": "München" }),
+        serde_json::json!({ "town": "Atlantis", "country": "ZZ" }),
+        serde_json::json!({ "town": "München", "country": "DE", "city": "x" }),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut ce = p.receipt(&format!("ce-adr-x{i}"), 1, Uuid::new_v4(), None, "1.00");
+        ce["data"]["zahlungsempfaenger_anschrift"] = anschrift.clone();
+        let (status, body) = call(&app, post_json("/webhook", &ce)).await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "{anschrift}: {body}"
+        );
+    }
+    let recorded: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM eeg_belege WHERE tenant = $1 AND tr_id = $2")
+            .bind(TENANT)
+            .bind(&p.tr_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+    assert_eq!(recorded, 0);
 }

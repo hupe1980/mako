@@ -24,7 +24,7 @@
 //! |---|---|
 //! | Netzbetreiber | the caller's `nb_mp_id`, or `marktd` `GET /api/v1/malos/{id}/grid` for the MaLo |
 //! | Netzentgelt Arbeits- und Grundpreis | `marktd` `GET /api/v1/preisblaetter/{nb}?date=` — positions `ARBEITSPREIS_WIRKARBEIT`, `GRUNDPREIS` |
-//! | Grundzuständiger Messstellenbetreiber | `marktd` `GET /api/v1/netzbetreiber/{nb}/grundzustaendiger-msb` — the MP-ID the gMSB of the NB's grid acts under, its own and not the NB's |
+//! | Grundzuständiger Messstellenbetreiber | `marktd` `GET /api/v1/netzbetreiber/{nb}/grundzustaendiger-msb?at=` — the MP-ID the gMSB of the NB's grid acts under on the day, its own and not the NB's |
 //! | Messstellenbetrieb | `marktd` `GET /api/v1/preisblaetter-messung/{gmsb}?date=` — the gMSB's sheet, position `MESSSTELLENBETRIEB` |
 //! | Konzessionsabgabe | `marktd` `GET /api/v1/preisblaetter-ka/{nb}?date=&sparte=&kundengruppe=` — position `KONZESSIONS_ABGABE` |
 //! | Strom: § 19 StromNEV-, Offshore-Netz-, KWKG-Umlage | `grid_billing::umlagen`, Letztverbrauchergruppe A′ |
@@ -1140,12 +1140,14 @@ impl MarktdQuelle {
             .map_err(|e| ApiError::upstream("marktd", e))
     }
 
-    /// The MP-ID the grundzuständige MSB of `nb`'s grid acts under, or none.
-    async fn grundzustaendiger_msb(&self, nb: &str) -> Result<Option<String>, ApiError> {
+    /// The MP-ID the grundzuständige MSB of `nb`'s grid acts under on `tag`,
+    /// or none.
+    async fn grundzustaendiger_msb(&self, nb: &str, tag: Date) -> Result<Option<String>, ApiError> {
         let up = self.up()?;
         Ok(up
             .json::<Grundzustaendigkeit>(
-                up.get(&format!("/api/v1/netzbetreiber/{nb}/grundzustaendiger-msb")),
+                up.get(&format!("/api/v1/netzbetreiber/{nb}/grundzustaendiger-msb"))
+                    .query(&[("at", tag.to_string())]),
             )
             .await
             .map_err(|e| ApiError::upstream("marktd", e))?
@@ -1291,7 +1293,7 @@ pub async fn erstelle(
         .await?;
     // The Messung sheet is the gMSB's, filed under its own MP-ID; without the
     // recorded link the offer names it as missing.
-    let gmsb_mp_id = marktd.grundzustaendiger_msb(&nb_mp_id).await?;
+    let gmsb_mp_id = marktd.grundzustaendiger_msb(&nb_mp_id, tag).await?;
     let messung = match &gmsb_mp_id {
         None => None,
         Some(gmsb) => {

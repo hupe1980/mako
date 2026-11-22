@@ -435,7 +435,7 @@ pins it.
 
 ```toml
 # outputd.toml
-tenant = "9900357000004"   # data-isolation key — every template row is scoped to it
+tenant = "stadtwerke-musterstadt"   # data-isolation key — every template row is scoped to it
 
 [http]
 addr = "0.0.0.0:9880"

@@ -160,11 +160,14 @@ pub(super) fn cmd_wim_rechnung_annehmen<'a>(
     Box::pin(async move {
         let invoice_ref = extract_invoice_ref(p)?;
         let message_ref = remadv_message_ref(p);
-        dispatch_to_process::<WimInvoicWorkflow, _>(s, &invoice_ref, "wim-invoic", || {
-            InvoicCommand::SettleInvoice {
+        dispatch_to_process::<WimInvoicWorkflow, _>(
+            s,
+            &crate::ingest_dispatcher::rechnungsempfaenger_key(&invoice_ref),
+            "wim-invoic",
+            || InvoicCommand::SettleInvoice {
                 message_ref: message_ref.clone(),
-            }
-        })
+            },
+        )
         .await
     })
 }
@@ -188,13 +191,16 @@ pub(super) fn cmd_wim_rechnung_ablehnen<'a>(
         // all three and puts them in the payload.
         let message_ref = remadv_message_ref(p);
         let antwort = remadv_antwort(p);
-        dispatch_to_process::<WimInvoicWorkflow, _>(s, &invoice_ref, "wim-invoic", || {
-            InvoicCommand::DisputeInvoice {
+        dispatch_to_process::<WimInvoicWorkflow, _>(
+            s,
+            &crate::ingest_dispatcher::rechnungsempfaenger_key(&invoice_ref),
+            "wim-invoic",
+            || InvoicCommand::DisputeInvoice {
                 message_ref: message_ref.clone(),
                 reason: reason.clone(),
                 antwort: antwort.clone(),
-            }
-        })
+            },
+        )
         .await
     })
 }

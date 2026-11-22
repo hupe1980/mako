@@ -611,7 +611,8 @@ impl EdifactIngestDispatcher {
             "gpke-abrechnung" => match pid {
                 31001 | 31002 | 31005 | 31006 => {
                     let cmd = adapters::gpke_abrechnung_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_invoice_ref_from_invoic(msg);
+                    let invoice_ref =
+                        rechnungsempfaenger_key(&extract_invoice_ref_from_invoic(msg));
                     // The settlement window of an INVOIC is its **Zahlungsziel**
                     // (`SG8 DTM+265`), which the sender states on the document —
                     // the receiver must answer „zum Zahlungsziel". Ten Werktage
@@ -639,7 +640,7 @@ impl EdifactIngestDispatcher {
                 33001..=33004 => {
                     // REMADV from payer — resume the invoicer-side billing process.
                     let cmd = adapters::gpke_abrechnung_remadv_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_invoice_ref_from_remadv(msg);
+                    let invoice_ref = rechnungssteller_key(&extract_invoice_ref_from_remadv(msg));
                     self.resume_by_key::<GpkeAbrechnungWorkflow>(
                         inbound,
                         &invoice_ref,
@@ -651,7 +652,8 @@ impl EdifactIngestDispatcher {
                 29001 => {
                     // COMDIS from invoicer — resume the payer-side billing process.
                     let cmd = adapters::gpke_abrechnung_comdis_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_invoice_ref_from_comdis(msg);
+                    let invoice_ref =
+                        rechnungsempfaenger_key(&extract_invoice_ref_from_comdis(msg));
                     self.resume_by_key::<GpkeAbrechnungWorkflow>(
                         inbound,
                         &invoice_ref,

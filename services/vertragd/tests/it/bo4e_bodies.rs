@@ -18,7 +18,7 @@
 use uuid::Uuid;
 
 /// The tenant of `deploy/demo/vertragd.toml`.
-const TENANT: &str = "9900357000004";
+const TENANT: &str = mako_service::oidc::demo::TENANT;
 
 fn demo_config() -> vertragd::config::VertragdConfig {
     toml::from_str(include_str!("../../../../deploy/demo/vertragd.toml"))

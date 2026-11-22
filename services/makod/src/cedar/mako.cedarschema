@@ -72,6 +72,8 @@ namespace MaKo {
   entity ProcessRecord = {
     tenant: String,
     workflow: String,
+    // The Marktrolle the process acts in (NB, LF, MSB, …); "" when unknown.
+    rolle: String,
   };
 
   // Action groups — no appliesTo; used as targets for `action in [...]` in policies.
@@ -248,6 +250,7 @@ namespace MaKo {
     context: {
       tenant:   String,
       workflow: String,
+      rolle:    String,
     }
   };
 }

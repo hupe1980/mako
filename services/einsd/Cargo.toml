@@ -47,6 +47,10 @@ tracing      = "0.1"
 anyhow       = "1"
 thiserror    = { workspace = true }
 secrecy      = { version = "0.10" }
+# The Zahlungsempfänger's `PstlAdr` is checked at intake by the rules
+# accountingd's pain.001 applies to it, so a stored address is one the payout
+# can carry.
+sepa         = { workspace = true }
 
 
 [dev-dependencies]

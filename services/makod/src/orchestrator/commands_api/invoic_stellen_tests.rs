@@ -238,7 +238,10 @@ async fn a_storno_through_invoic_nne_stellen_goes_out_as_31004() {
     let ids = state
         .store
         .as_process_registry()
-        .lookup_correlated(state.tenant_id, "STO-2026-0001")
+        .lookup_correlated(
+            state.tenant_id,
+            &crate::ingest_dispatcher::rechnungssteller_key("STO-2026-0001"),
+        )
         .await
         .expect("lookup");
     assert_eq!(ids.len(), 1);
@@ -307,7 +310,10 @@ async fn an_invalid_rechnung_is_refused_and_nothing_is_sent() {
     let ids = state
         .store
         .as_process_registry()
-        .lookup_correlated(state.tenant_id, "NNE-2026-0001")
+        .lookup_correlated(
+            state.tenant_id,
+            &crate::ingest_dispatcher::rechnungssteller_key("NNE-2026-0001"),
+        )
         .await
         .expect("lookup");
     assert!(ids.is_empty(), "{ids:?}");
@@ -328,4 +334,99 @@ async fn an_invoice_ref_that_is_not_the_rechnungsnummer_is_refused() {
     )
     .await;
     assert!(matches!(r, Err(DispatchError::InvalidPayload(_))), "{r:?}");
+}
+
+/// An NB that is also the LF's makod sends its Netznutzungsrechnung to its own
+/// LF. The two sides of the invoice are two processes: the delivered copy opens
+/// the LF's own `gpke-abrechnung` and leaves the NB's invoicer process as it was,
+/// though both carry the same document number. Each records the role it acts
+/// in — the command's, and the role of the own MP-ID the copy is addressed to —
+/// which is what a Cedar policy keeps the two apart by.
+#[tokio::test]
+async fn an_invoice_to_the_own_lf_opens_the_payers_process_beside_the_invoicers() {
+    let state = nb_state().await;
+    let Ok(DispatchOutcome::Spawned {
+        process_id: steller,
+    }) = super::in_rolle(
+        "NB",
+        dispatch_command(
+            &state,
+            mako_engine::envelope::Akteur::System,
+            "invoic.nne.stellen",
+            &payload(&nn_rechnung()),
+        ),
+    )
+    .await
+    else {
+        panic!("the NB's invoice spawns");
+    };
+    let sent = outbox(&state, "INVOIC").await;
+    let wire = wire_valid(&sent[0]);
+    let msg = edi_energy::parse(wire.as_bytes()).expect("parses");
+
+    let parteien = crate::party_registry::MpIdRegistry::from_config(&[
+        crate::core::config::PartyConfig {
+            mp_id: NB.to_owned(),
+            roles: vec!["NB".to_owned()],
+            primary: true,
+            agency: None,
+            as4: None,
+        },
+        crate::core::config::PartyConfig {
+            mp_id: LF.to_owned(),
+            roles: vec!["LF".to_owned()],
+            primary: false,
+            agency: None,
+            as4: None,
+        },
+    ])
+    .expect("NB and LF, one code each");
+    let dispatcher = crate::ingest_dispatcher::EdifactIngestDispatcher::new(
+        Arc::clone(&state.store),
+        state.store.as_snapshot_store(),
+        100,
+        state.tenant_id,
+    )
+    .with_mp_id_registry(Arc::new(parteien));
+    let outcome = dispatcher
+        .dispatch(
+            &msg,
+            "gpke-abrechnung",
+            31002,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("the own LF receives it");
+    assert!(
+        matches!(
+            outcome,
+            crate::ingest_dispatcher::IngestOutcome::Spawned { .. }
+        ),
+        "{outcome:?}"
+    );
+
+    let registry = state.store.as_process_registry();
+    let empfaenger = registry
+        .lookup_correlated(
+            state.tenant_id,
+            &crate::ingest_dispatcher::rechnungsempfaenger_key("NNE-2026-0001"),
+        )
+        .await
+        .expect("lookup");
+    assert_eq!(empfaenger.len(), 1, "{empfaenger:?}");
+    assert_ne!(
+        empfaenger[0].process_id, steller,
+        "two sides, two processes"
+    );
+    assert_eq!(empfaenger[0].rolle.as_deref(), Some("LF"));
+    let steller_side = registry
+        .lookup_correlated(
+            state.tenant_id,
+            &crate::ingest_dispatcher::rechnungssteller_key("NNE-2026-0001"),
+        )
+        .await
+        .expect("lookup");
+    assert_eq!(steller_side.len(), 1);
+    assert_eq!(steller_side[0].process_id, steller);
+    assert_eq!(steller_side[0].rolle.as_deref(), Some("NB"));
 }

@@ -652,6 +652,7 @@ impl CommandContext {
             verlauf: event.verlauf(),
             antwort: event.antwort(),
             akteur,
+            intern: false,
         })
     }
 }
@@ -703,6 +704,7 @@ impl EventEnvelope {
             verlauf: event.verlauf(),
             antwort: event.antwort(),
             akteur,
+            intern: false,
         })
     }
 }
@@ -752,6 +754,8 @@ pub(crate) struct AppendExtras<'a> {
     pub lapse: Option<&'a PendingOutbox>,
     /// Stamped on every event.
     pub akteur: &'a Akteur,
+    /// Stamped on every event that is a message.
+    pub intern: bool,
 }
 
 pub(crate) async fn decide_and_append<W, S>(
@@ -811,7 +815,12 @@ where
     let new_events = output
         .events
         .iter()
-        .map(|event| ctx.new_event(event, extras.akteur.clone()))
+        .map(|event| {
+            ctx.new_event(event, extras.akteur.clone()).map(|mut ne| {
+                ne.intern = extras.intern && ne.verlauf.is_some();
+                ne
+            })
+        })
         .collect::<Result<Vec<NewEvent>, EngineError>>()?;
     for ack in [extras.acknowledgement, extras.lapse].into_iter().flatten() {
         if !output

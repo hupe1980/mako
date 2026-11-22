@@ -21,6 +21,13 @@
 //!   ([`erfasse_rueckzahlung`]). The Vergütung and the Marktprämie are paid by
 //!   the same rule ([`zahle`]).
 //!
+//! Every payout is the Netzbetreiber's: § 19 Abs. 1 EEG 2023 gives the
+//! Anlagenbetreiber its Anspruch „gegen den Netzbetreiber" for the Marktprämie,
+//! the Einspeisevergütung and the Mieterstromzuschlag alike. So the plant's
+//! account is kept under the Netzbetreiber's MP-ID (`[eeg] nb_mp_id`), never the
+//! Lieferant's, and the pain.001 debits the Netzbetreiber's account in its name
+//! (`[eeg] debtor_iban`, `debtor_name`).
+//!
 //! The Kontokorrent follows the money: a receipt credits the operator, a
 //! payout the bank confirms with `ACSC` debits it ([`bestaetige_auszahlung`]),
 //! and a Rückzahlung credits it again — so the account shows what is left
@@ -158,6 +165,9 @@ pub struct Beleg {
     pub ketten_folge: i64,
     pub bank_iban: Option<String>,
     pub zahlungsempfaenger: Option<String>,
+    /// The payee's postal address as the receipt stated it
+    /// (`zahlungsempfaenger_anschrift`); empty where it stated none.
+    pub anschrift: crate::sepa::AddressParts,
     /// The part of a § 52 EEG 2023 Pflichtzahlung einsd set off against this
     /// receipt's claim (§ 52 Abs. 6 Satz 2), in ct; 0 where none was.
     pub sect52_aufgerechnet_ct: i64,
@@ -214,7 +224,8 @@ async fn sperre_kette(
     Ok(())
 }
 
-/// Record `beleg` and stage its ledger entry, in the caller's transaction.
+/// Record `beleg` and stage its ledger entry on the plant account kept under
+/// `nb_mp_id`, in the caller's transaction.
 ///
 /// A replay returns what the first delivery recorded and stages nothing new.
 /// The caller books the staged draft (`booking::book` under the CloudEvent id)
@@ -228,7 +239,7 @@ pub async fn erfasse(
     conn: &mut PgConnection,
     ledger: &crate::ledger::PgLedger,
     tenant: &str,
-    lf_mp_id: &str,
+    nb_mp_id: &str,
     beleg: &Beleg,
     heute: Date,
 ) -> Result<Erfasst, ErfassFehler> {
@@ -296,8 +307,11 @@ pub async fn erfasse(
         "INSERT INTO eeg_belege
              (tenant, source_ce_id, art, receipt_id, korrektur_von, tr_id, malo_id, account_id,
               billing_year, billing_month, anspruch_ct, gutschrift_delta_ct, ketten_folge,
-              bank_iban, zahlungsempfaenger)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+              bank_iban, zahlungsempfaenger,
+              creditor_town, creditor_country, creditor_street, creditor_building_number,
+              creditor_post_code, creditor_country_subdivision)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                 $16, $17, $18, $19, $20, $21)",
     )
     .bind(tenant)
     .bind(&beleg.source_ce_id)
@@ -314,12 +328,18 @@ pub async fn erfasse(
     .bind(beleg.ketten_folge)
     .bind(beleg.bank_iban.as_deref())
     .bind(beleg.zahlungsempfaenger.as_deref())
+    .bind(&beleg.anschrift.town)
+    .bind(&beleg.anschrift.country)
+    .bind(&beleg.anschrift.street)
+    .bind(&beleg.anschrift.building_number)
+    .bind(&beleg.anschrift.post_code)
+    .bind(&beleg.anschrift.country_subdivision)
     .execute(&mut *conn)
     .await?;
     if delta != 0 {
         let draft = crate::pg::draft(
             &beleg.malo_id,
-            lf_mp_id,
+            nb_mp_id,
             beleg.art.entry_type(),
             // The Kontokorrent sign: a credit to the operator is negative.
             delta.saturating_neg(),
@@ -415,6 +435,8 @@ pub struct Kette {
     pub geleistet_ct: i64,
     pub bank_iban: Option<String>,
     pub zahlungsempfaenger: Option<String>,
+    /// The payee's postal address the current receipt stated.
+    pub anschrift: crate::sepa::AddressParts,
 }
 
 impl Kette {
@@ -444,6 +466,14 @@ fn kette(r: &sqlx::postgres::PgRow) -> Result<Kette, sqlx::Error> {
         geleistet_ct: r.try_get("geleistet_ct")?,
         bank_iban: r.try_get("bank_iban")?,
         zahlungsempfaenger: r.try_get("zahlungsempfaenger")?,
+        anschrift: crate::sepa::AddressParts {
+            town: r.try_get("creditor_town")?,
+            country: r.try_get("creditor_country")?,
+            street: r.try_get("creditor_street")?,
+            building_number: r.try_get("creditor_building_number")?,
+            post_code: r.try_get("creditor_post_code")?,
+            country_subdivision: r.try_get("creditor_country_subdivision")?,
+        },
     })
 }
 
@@ -464,7 +494,9 @@ pub async fn ketten_im_monat(
     // prepares it against the schema.
     sqlx::query(
         "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id,
-                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger
+                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger,
+                creditor_town, creditor_country, creditor_street, creditor_building_number,
+                creditor_post_code, creditor_country_subdivision
            FROM eeg_ketten
           WHERE tenant = $1 AND billing_year = $2 AND billing_month = $3
             AND ($4::text IS NULL OR malo_id = $4)
@@ -493,7 +525,9 @@ pub async fn rueckforderungen(
 ) -> Result<Vec<Kette>, sqlx::Error> {
     sqlx::query(
         "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id,
-                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger
+                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger,
+                creditor_town, creditor_country, creditor_street, creditor_building_number,
+                creditor_post_code, creditor_country_subdivision
            FROM eeg_ketten
           WHERE tenant = $1 AND geleistet_ct > anspruch_ct
           ORDER BY billing_year, billing_month, tr_id",
@@ -564,7 +598,9 @@ pub async fn zahle(
     sperre_kette(conn, tenant, tr_id, year, month).await?;
     let Some(row) = sqlx::query(
         "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id,
-                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger
+                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger,
+                creditor_town, creditor_country, creditor_street, creditor_building_number,
+                creditor_post_code, creditor_country_subdivision
            FROM eeg_ketten
           WHERE tenant = $1 AND tr_id = $2 AND billing_year = $3 AND billing_month = $4",
     )
@@ -623,14 +659,24 @@ pub async fn zahle(
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| "EEG Einspeiser".to_owned());
-    // `Cdtr/PstlAdr` — the plant operator's own address, from the account's
-    // master data (BO4E's Zahlungsinformation carries none).
-    let creditor_address = account.map(|acc| acc.postal_address()).unwrap_or_default();
+    // `Cdtr/PstlAdr` — the payee's address the current receipt stated, as
+    // einsd holds it for the Einspeiser. Where it stated none, the account's
+    // own master data: the account is the Anlagenbetreiber's, so this is the
+    // same party's address, not another's (BO4E's Zahlungsinformation carries
+    // none).
+    let creditor_address = if k.anschrift.is_empty() {
+        account.map(|acc| acc.postal_address()).unwrap_or_default()
+    } else {
+        k.anschrift.clone()
+    };
 
-    let debtor_iban =
-        cfg.eeg.debtor_iban.as_deref().ok_or_else(|| {
-            AuszahlungFehler::Konfiguration("[eeg].debtor_iban is not set".into())
-        })?;
+    let (Some(debtor_iban), Some(debtor_name)) =
+        (cfg.eeg.debtor_iban.as_deref(), cfg.eeg.debtor_name())
+    else {
+        return Err(AuszahlungFehler::Konfiguration(
+            crate::config::EEG_DEBTOR_FEHLT.to_owned(),
+        ));
+    };
     let schema = crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref())
         .map_err(|e| AuszahlungFehler::Konfiguration(e.to_string()))?;
 
@@ -643,15 +689,13 @@ pub async fn zahle(
     );
     let payment_type = if instant { "SCT_INST" } else { "SCT_CORE" };
     // §25 Abs. 1 EEG 2023 — "unverzüglich nach Ende des Monats": the payout
-    // leaves today, as the German calendar counts it.
-    let debtor_name = cfg.creditor_name().ok_or_else(|| {
-        AuszahlungFehler::Konfiguration(crate::config::CREDITOR_NAME_FEHLT.to_owned())
-    })?;
+    // leaves today, as the German calendar counts it. The debtor is the
+    // Netzbetreiber (§ 19 Abs. 1 EEG 2023), never the Lieferant.
     let pain001_xml = crate::sepa::build_pain_001(
         &crate::sepa::DebtorIdentity {
             iban: debtor_iban,
             name: debtor_name,
-            address: Some(&cfg.creditor_address),
+            address: Some(&cfg.eeg.debtor_address),
         },
         &[crate::sepa::CreditTransferItem {
             iban: &creditor_iban,
@@ -730,9 +774,13 @@ pub async fn bestaetige_auszahlung(
     payout_id: Uuid,
     heute: Date,
 ) -> anyhow::Result<String> {
+    // The payout debits the Kontokorrent the receipt credited: the order's
+    // account, under whichever MP-ID it is kept.
     let row = sqlx::query(
-        "SELECT malo_id, tr_id, amount_ct, end_to_end_ref FROM eeg_payout_orders
-          WHERE payout_id = $1 AND tenant = $2",
+        "SELECT o.malo_id, o.tr_id, o.amount_ct, o.end_to_end_ref, a.mp_id
+           FROM eeg_payout_orders o
+           JOIN accounts a ON a.account_id = o.account_id AND a.tenant = o.tenant
+          WHERE o.payout_id = $1 AND o.tenant = $2",
     )
     .bind(payout_id)
     .bind(tenant)
@@ -743,10 +791,11 @@ pub async fn bestaetige_auszahlung(
     let tr_id: String = row.try_get("tr_id")?;
     let amount_ct: i64 = row.try_get("amount_ct")?;
     let e2e: String = row.try_get("end_to_end_ref")?;
+    let mp_id: String = row.try_get("mp_id")?;
     let key = format!("eeg-auszahlung:{payout_id}");
     let draft = crate::pg::draft(
         &malo_id,
-        tenant,
+        &mp_id,
         "EEG_AUSZAHLUNG",
         amount_ct,
         &key,
@@ -858,7 +907,9 @@ pub async fn erfasse_rueckzahlung(
     };
     let row = sqlx::query(
         "SELECT tr_id, malo_id, billing_year, billing_month, account_id, art, receipt_id,
-                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger
+                source_ce_id, anspruch_ct, geleistet_ct, bank_iban, zahlungsempfaenger,
+                creditor_town, creditor_country, creditor_street, creditor_building_number,
+                creditor_post_code, creditor_country_subdivision
            FROM eeg_ketten
           WHERE tenant = $1 AND tr_id = $2 AND billing_year = $3 AND billing_month = $4",
     )
@@ -900,10 +951,17 @@ pub async fn erfasse_rueckzahlung(
     .fetch_optional(&mut *conn)
     .await?;
     let id = id.ok_or(RueckzahlungFehler::Doppelt)?;
+    // Credited to the Kontokorrent the chain's receipts were booked on.
+    let mp_id: String =
+        sqlx::query_scalar("SELECT mp_id FROM accounts WHERE account_id = $1 AND tenant = $2")
+            .bind(k.account_id)
+            .bind(tenant)
+            .fetch_one(&mut *conn)
+            .await?;
     let key = format!("eeg-rueckzahlung:{id}");
     let draft = crate::pg::draft(
         &k.malo_id,
-        tenant,
+        &mp_id,
         "EEG_RUECKZAHLUNG",
         // The Kontokorrent sign: money received from the operator is a credit.
         req.amount_ct.saturating_neg(),

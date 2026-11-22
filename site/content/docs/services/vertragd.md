@@ -976,7 +976,7 @@ conditional on a contract, so the party record lives in
 
 ```toml
 # vertragd.toml
-tenant   = "9900357000004"   # data-isolation key (here: the operator's BDEW-Codenummer)
+tenant   = "stadtwerke-musterstadt"   # data-isolation key — any stable string, never an MP-ID
 lf_mp_id = "9900357000004"   # market identity registered on the UTILMD
 
 processd_url    = "http://processd:8580"

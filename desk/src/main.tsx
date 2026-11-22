@@ -1,10 +1,11 @@
 import "./design/tokens.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
-import { StrictMode } from "react";
+import { type ReactNode, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { applyRememberedAppearance } from "./app/appearance";
-import { RolleProvider } from "./app/rollen";
+import { usePersona } from "./app/persona";
+import { heldRollen, RolleProvider } from "./app/rollen";
 import { router } from "./app/router";
 import { applyRememberedSprache } from "./i18n";
 
@@ -19,15 +20,21 @@ const queries = new QueryClient({
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html has no #root");
 
+/** The Rollen the signed-in persona holds — every Rolle outside the demo. */
+function Rollen({ children }: { children: ReactNode }) {
+  const { aktiv } = usePersona();
+  return <RolleProvider held={heldRollen(aktiv?.rollen)}>{children}</RolleProvider>;
+}
+
 const mount = root;
 // An English Desk waits for its catalogue before the first paint; a German one does not wait.
 void applyRememberedSprache().then(() =>
   createRoot(mount).render(
     <StrictMode>
       <QueryClientProvider client={queries}>
-        <RolleProvider>
+        <Rollen>
           <RouterProvider router={router} />
-        </RolleProvider>
+        </Rollen>
       </QueryClientProvider>
     </StrictMode>,
   ),

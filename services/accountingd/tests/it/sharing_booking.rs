@@ -12,7 +12,7 @@ use testcontainers::{ContainerAsync, ImageExt as _, runners::AsyncRunner as _};
 use testcontainers_modules::postgres::Postgres;
 
 /// The demo configuration's tenant.
-const TENANT: &str = "9900357000004";
+const TENANT: &str = "stadtwerke-musterstadt";
 
 const FIXTURE: &str =
     include_str!("../../../billingd/tests/fixtures/sharing_rechnung_erstellt.json");

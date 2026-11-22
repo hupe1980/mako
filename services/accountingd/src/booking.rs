@@ -286,16 +286,16 @@ pub async fn post_booked(
 /// and so runs after the clearing. Best-effort: the booking is the record, and
 /// each step is reconcilable from it.
 async fn settle(ledger: &PgLedger, pool: &PgPool, tenant: &str, draft: &PostEntry) {
-    let (malo, lf) = (draft.malo_id.as_str(), draft.lf_mp_id.as_str());
-    match ledger.balance_ct(lf, malo).await {
+    let (malo, mp) = (draft.malo_id.as_str(), draft.mp_id.as_str());
+    match ledger.balance_ct(mp, malo).await {
         Ok(net) => {
             let updated = sqlx::query(
                 "UPDATE accounts SET balance_ct = $1, updated_at = now() \
-                 WHERE malo_id = $2 AND lf_mp_id = $3 AND tenant = $4",
+                 WHERE malo_id = $2 AND mp_id = $3 AND tenant = $4",
             )
             .bind(net)
             .bind(malo)
-            .bind(lf)
+            .bind(mp)
             .bind(tenant)
             .execute(pool)
             .await;
@@ -313,12 +313,12 @@ async fn settle(ledger: &PgLedger, pool: &PgPool, tenant: &str, draft: &PostEntr
         Err(e) => tracing::warn!(%malo, error = %e, "booking: balance read failed"),
     }
     if let Err(e) = ledger
-        .apply_fifo_clearing(lf, malo, draft.booking_date)
+        .apply_fifo_clearing(mp, malo, draft.booking_date)
         .await
     {
         tracing::warn!(%malo, error = %e, "booking: FIFO clearing skipped");
     }
-    if let Err(e) = crate::pg::refresh_verzug(ledger, pool, tenant, malo, lf).await {
+    if let Err(e) = crate::pg::refresh_verzug(ledger, pool, tenant, malo, mp).await {
         tracing::warn!(%malo, error = %e, "booking: Verzug cache refresh failed");
     }
 }
@@ -384,8 +384,8 @@ pub struct GeparkteBuchung {
     pub art: String,
     /// The Marktlokation.
     pub malo_id: String,
-    /// The Lieferant's MP-ID.
-    pub lf_mp_id: String,
+    /// The own MP-ID the account is kept under (`accounts.mp_id`).
+    pub mp_id: String,
     /// Signed amount in minor units (positive: the customer owes).
     pub betrag_ct: i64,
     /// The booking date the ledger refused.
@@ -524,7 +524,7 @@ fn geparkt(
         key: row.get("key"),
         art: draft.entry_type,
         malo_id: draft.malo_id,
-        lf_mp_id: draft.lf_mp_id,
+        mp_id: draft.mp_id,
         betrag_ct: draft.amount_ct,
         buchungsdatum: draft.booking_date.to_string(),
         beleg: draft.document,

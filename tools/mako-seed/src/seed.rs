@@ -80,7 +80,10 @@ async fn stammdaten(estate: &Estate) -> anyhow::Result<()> {
         .put(
             "marktd",
             &format!("/api/v1/netzbetreiber/{STADTWERK}/grundzustaendiger-msb"),
-            &serde_json::json!({ "gmsb_mp_id": world::STADTWERK_MSB }),
+            &serde_json::json!({
+                "gmsb_mp_id": world::STADTWERK_MSB,
+                "valid_from": "2020-01-01",
+            }),
         )
         .await?
         .ok("PUT grundzuständiger MSB")?;

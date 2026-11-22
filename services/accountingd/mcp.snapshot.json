@@ -37,8 +37,8 @@
           "description": "11-digit MaLo-ID.",
           "type": "string"
         },
-        "lf_mp_id": {
-          "description": "The LF MP-ID the account is held under. Defaults to the configured\n`lf_mp_id`, as on the REST route.",
+        "mp_id": {
+          "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant. Defaults to the configured\n`lf_mp_id`, as on the REST route.",
           "type": [
             "string",
             "null"
@@ -61,7 +61,7 @@
       },
       "required": [
         "malo_id",
-        "lf_mp_id",
+        "mp_id",
         "balance_ct",
         "balance_eur",
         "status",
@@ -73,8 +73,8 @@
           "description": "11-digit Marktlokations-ID.",
           "type": "string"
         },
-        "lf_mp_id": {
-          "description": "The Lieferant's MP-ID the account is kept under.",
+        "mp_id": {
+          "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, the Netzbetreiber's for an EEG plant.",
           "type": "string"
         },
         "balance_ct": {
@@ -125,7 +125,7 @@
         "key",
         "art",
         "malo_id",
-        "lf_mp_id",
+        "mp_id",
         "betrag_ct",
         "buchungsdatum",
         "beleg",
@@ -148,8 +148,8 @@
           "description": "The Marktlokation.",
           "type": "string"
         },
-        "lf_mp_id": {
-          "description": "The Lieferant's MP-ID.",
+        "mp_id": {
+          "description": "The own MP-ID the account is kept under (`accounts.mp_id`).",
           "type": "string"
         },
         "betrag_ct": {
@@ -764,8 +764,8 @@
           "description": "11-digit MaLo-ID.",
           "type": "string"
         },
-        "lf_mp_id": {
-          "description": "The LF MP-ID the account is held under. Defaults to the configured\n`lf_mp_id`.",
+        "mp_id": {
+          "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, `[eeg] nb_mp_id` for an EEG plant. Defaults to the configured\n`lf_mp_id`.",
           "type": [
             "string",
             "null"
@@ -845,7 +845,7 @@
       },
       "required": [
         "malo_id",
-        "lf_mp_id",
+        "mp_id",
         "opening_ct",
         "lines"
       ],
@@ -855,8 +855,8 @@
           "description": "11-digit Marktlokations-ID.",
           "type": "string"
         },
-        "lf_mp_id": {
-          "description": "The Lieferant's MP-ID the account is kept under.",
+        "mp_id": {
+          "description": "The own MP-ID the account is kept under — the Lieferant's for a\ncustomer, the Netzbetreiber's for an EEG plant.",
           "type": "string"
         },
         "opening_ct": {
@@ -1027,8 +1027,8 @@
               "description": "The Marktlokation.",
               "type": "string"
             },
-            "lf_mp_id": {
-              "description": "The Lieferant's MP-ID.",
+            "mp_id": {
+              "description": "The own MP-ID the account is kept under (`accounts.mp_id`).",
               "type": "string"
             },
             "betrag_ct": {
@@ -1084,7 +1084,7 @@
             "key",
             "art",
             "malo_id",
-            "lf_mp_id",
+            "mp_id",
             "betrag_ct",
             "buchungsdatum",
             "beleg",
@@ -1329,6 +1329,13 @@
         },
         "description": {
           "description": "Human-readable description for the Kontoauszug.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mp_id": {
+          "description": "The own MP-ID the account is kept under; defaults to `[eeg] nb_mp_id`\nfor an `EEG_*` entry and the Lieferant's for every other.",
           "type": [
             "string",
             "null"

@@ -149,7 +149,7 @@ async fn an_entry_proof_tells_absence_from_a_store_failure() {
 /// A Zahlungszuordnung the ledger refuses is the caller's to correct, so it
 /// answers `422` with the reason, not a `500` that sends an operator to the
 /// log. The refusal here is a Kontokorrent the ledger cannot name: an empty
-/// `lf_mp_id` leaves an empty segment in the account path.
+/// `mp_id` leaves an empty segment in the account path.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_clearing_the_ledger_refuses_answers_422() {
@@ -157,15 +157,15 @@ async fn a_clearing_the_ledger_refuses_answers_422() {
         return;
     };
     sqlx::query(
-        "INSERT INTO accounts (malo_id, lf_mp_id, tenant) VALUES ('51238696012', '', '9900357000004')",
+        "INSERT INTO accounts (malo_id, mp_id, tenant) VALUES ('51238696012', '', 'stadtwerke-musterstadt')",
     )
     .execute(&pool)
     .await
-    .expect("an account under an empty lf_mp_id");
+    .expect("an account under an empty mp_id");
 
     let (status, body) = call(
         app,
-        axum::http::Request::post("/api/v1/accounts/51238696012/clear?lf_mp_id=")
+        axum::http::Request::post("/api/v1/accounts/51238696012/clear?mp_id=")
             .body(axum::body::Body::empty())
             .expect("request"),
     )

@@ -4,19 +4,37 @@
     "personas": [
       {
         "id": "nb",
-        "name": "Sachbearbeitung Netz"
+        "name": "Sachbearbeitung Netz",
+        "rollen": [
+          "NB"
+        ]
       },
       {
         "id": "lf",
-        "name": "Sachbearbeitung Vertrieb"
+        "name": "Sachbearbeitung Vertrieb",
+        "rollen": [
+          "LF"
+        ]
       },
       {
         "id": "admin",
-        "name": "Administration"
+        "name": "Administration",
+        "rollen": [
+          "NB",
+          "LF",
+          "MSB",
+          "ESA",
+          "ADMIN"
+        ]
       },
       {
         "id": "agent",
-        "name": "Agent"
+        "name": "Agent",
+        "rollen": [
+          "NB",
+          "LF",
+          "MSB"
+        ]
       }
     ],
     "standard": "admin"

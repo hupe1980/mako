@@ -10,7 +10,7 @@
 //! url = "env:DATABASE_URL"
 //!
 //! [identity]
-//! tenant = "9900357000004"
+//! tenant = "stadtwerke-musterstadt"
 //!
 //! [marktd]
 //! url     = "http://marktd:8180"

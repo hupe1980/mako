@@ -84,7 +84,7 @@ pub struct PendingMahnung {
     pub case_id: Uuid,
     pub account_id: Uuid,
     pub malo_id: String,
-    pub lf_mp_id: String,
+    pub mp_id: String,
     pub kunden_nr: Option<String>,
     pub stufe: i16,
     pub due_date: Date,
@@ -159,9 +159,7 @@ pub async fn build_view(
 
     // The live open items, not the total the case opened with: a customer who
     // has part-paid since is owed a list that says so.
-    let open = ledger
-        .open_receivables(&case.lf_mp_id, &case.malo_id)
-        .await?;
+    let open = ledger.open_receivables(&case.mp_id, &case.malo_id).await?;
     let mut posten = Vec::new();
     let mut posten_total = 0i64;
     let mut gebuehr_total = 0i64;

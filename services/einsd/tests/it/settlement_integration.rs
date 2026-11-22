@@ -155,6 +155,7 @@ fn regelbesteuert() -> einsd::pg_einspeiser::Einspeiser {
         bank_iban: Some("DE02120300000000202051".to_owned()),
         bank_bic: Some("BYLADEM1001".to_owned()),
         zahlungsempfaenger: Some("Testbetreiber".to_owned()),
+        zahlungsempfaenger_anschrift: None,
     }
 }
 
@@ -2166,6 +2167,8 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
         return;
     };
 
+    // Each plant is commissioned after 24.02.2025: § 100 Abs. 3b EEG 2023 spares
+    // one commissioned from 01.01.2023 up to that day the cap question at all.
     // `model` decides whether § 9 Abs. 2 Satz 1 Nr. 2 lit. b and Nr. 3 apply at
     // all: they bind „Anlagen, die der Einspeisevergütung oder dem
     // Mieterstromzuschlag … zugeordnet sind". Nr. 1 and Nr. 2 lit. a do not care.
@@ -2179,7 +2182,7 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
                     erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
                     foerderendedatum, sect9_fernsteuerbarkeit, sect9_begrenzung_60,
                     einspeiser_id)
-                 VALUES ($1, $2, '51238696781', 2023, '2024-06-01', $3::numeric,
+                 VALUES ($1, $2, '51238696781', 2023, '2025-06-01', $3::numeric,
                          'SOLAR_FREIFLAECHE', 8.11, $4, 8.11,
                          '2044-12-31', $5, $6, 'EB-1')",
                 )
@@ -5346,4 +5349,112 @@ async fn a_resettle_to_kein_anspruch_announces_the_zero() {
     assert_eq!(daten[1]["receipt_id"], daten[0]["receipt_id"], "{daten:?}");
     assert_eq!(daten[0]["ketten_folge"], 1, "{daten:?}");
     assert_eq!(daten[1]["ketten_folge"], 2, "{daten:?}");
+}
+
+/// The Zahlungsempfänger's postal address is checked at intake, stored, read
+/// back, and carried by the settlement event as `zahlungsempfaenger_anschrift`
+/// — the `Cdtr/PstlAdr` accountingd's pain.001 pays the Anlagenbetreiber with.
+///
+/// A given address without town or country, or with a country that is none,
+/// is refused with a stable code and leaves the stored address as it was: an
+/// address the pain.001 could not carry would see every payout go without it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_payee_address_is_checked_stored_and_announced() {
+    let Some((pool, _pg)) = test_pool("payee_address").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    seed_plant(&pool, "TR-ADR", TENANT, "", "").await;
+    let mut cfg = test_config();
+    cfg.erp_webhook_url = Some("http://127.0.0.1:9/erp".to_owned());
+    let app = test_router_with(pool.clone(), cfg);
+
+    let (status, body) = put_json(
+        &app,
+        "/api/v1/einspeiser/EB-1",
+        serde_json::json!({
+            "name": "Testbetreiber",
+            "zahlungsempfaenger_anschrift": {
+                "street": "Sonnenweg",
+                "building_number": "7",
+                "post_code": "80331",
+                "town": "München",
+                "country": "de",
+            },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let erwartet = serde_json::json!({
+        "town": "München",
+        "country": "DE",
+        "street": "Sonnenweg",
+        "building_number": "7",
+        "post_code": "80331",
+        "country_subdivision": null,
+    });
+
+    for (koerper, code) in [
+        (
+            serde_json::json!({ "street": "Neue Straße", "town": "Berlin" }),
+            "incomplete_postal_address",
+        ),
+        (
+            serde_json::json!({ "town": "  ", "country": "DE" }),
+            "incomplete_postal_address",
+        ),
+        (
+            serde_json::json!({ "town": "Atlantis", "country": "ZZ" }),
+            "invalid_country_code",
+        ),
+    ] {
+        let (status, body) = put_json(
+            &app,
+            "/api/v1/einspeiser/EB-1",
+            serde_json::json!({ "name": "Testbetreiber", "zahlungsempfaenger_anschrift": koerper }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{koerper}: {body}"
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(v["code"], code, "{koerper}: {v}");
+    }
+
+    // A body without an address keeps the stored one.
+    let (status, body) = put_json(
+        &app,
+        "/api/v1/einspeiser/EB-1",
+        serde_json::json!({ "name": "Testbetreiber", "bank_iban": "DE02120300000000202051" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (status, body) = get_json(&app, "/api/v1/einspeiser/EB-1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(v["zahlungsempfaenger_anschrift"], erwartet, "{v}");
+
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/TR-ADR/settle/2026/3",
+        serde_json::json!({ "einspeisemenge_kwh": "500" }),
+    )
+    .await;
+    assert!(status.is_success(), "{status} {body}");
+    let daten: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT envelope->'data' FROM event_outbox ORDER BY created_at, id")
+            .fetch_all(&pool)
+            .await
+            .expect("outbox");
+    assert_eq!(daten.len(), 1, "{daten:?}");
+    assert_eq!(
+        daten[0]["zahlungsempfaenger_anschrift"], erwartet,
+        "{daten:?}"
+    );
+    assert_eq!(daten[0]["bank_iban"], "DE02120300000000202051", "{daten:?}");
 }

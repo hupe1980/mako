@@ -5,7 +5,7 @@ weight = 3
 
 [extra]
 translated_from = "content/docs/guide/desk/index.md"
-source_sha256 = "8758e5fa40dcbe9579be9c7acefebd7dd74895ac1381eb2d7c008fac2bcd9887"
+source_sha256 = "c945d93ae644f528e9e9c4889a4a8c414f5247c98e1015e830844c67aff44e5a"
 
 +++
 **mako Desk** ist deine Arbeitsoberfläche im Betrieb. Er liest die MCP-Tools
@@ -107,7 +107,9 @@ derselbe Lesezugriff, nur mit weniger Zeilen.
 
 Sein **Verlauf** fädelt die Marktnachrichten auf: Empfangene links, gesendete
 rechts, jede mit PID, Berliner Zeit und Dokumentnummer, so wie der Workflow sie
-aufgezeichnet hat. Eine Antwort nennt außerdem ihren Code und den Wortlaut des
+aufgezeichnet hat. Die Überschrift nennt die Rolle, in der der Prozess läuft —
+„als Lieferant" —, und eine Nachricht zwischen zwei deiner eigenen Rollen, die
+Rechnung des eigenen NB an den eigenen LF, trägt „im Haus". Eine Antwort nennt außerdem ihren Code und den Wortlaut des
 BDEW aus der Liste, die ihn definiert („A02 — Marktlokation … nimmt nicht an der
 Marktkommunikation teil"); wo die Liste keinen Wortlaut für den Code
 veröffentlicht, nennt die Zeile nur die Liste. Schritte zwischen zwei
@@ -745,8 +747,8 @@ Wer mehrere Marktrollen innehat, trägt immer eine zur Zeit — **Netz** (NB),
 **Lieferant** (LF), **Messstelle** (MSB), **Energieservice** (ESA) —, gewählt in
 der Werkzeugleiste oder mit <kbd>⌃1</kbd>–<kbd>⌃4</kbd>. Das Abzeichen nennt
 die Rolle, die du trägst, und jede Rolle hat ihre eigene Startseite; beim Wechsel bleiben keine Daten der verlassenen
-Rolle sichtbar. Was eine Rolle lesen darf, ist die Cedar-Policy des jeweiligen
-Dienstes.
+Rolle sichtbar. Angeboten werden die Rollen, die deine Anmeldung nennt; was eine
+Rolle lesen darf, ist die Cedar-Policy des jeweiligen Dienstes.
 
 [![Der Rollenwechsel in der Werkzeugleiste](rolle-light.png)](rolle-light.png)
 [![Der Rollenwechsel in der Werkzeugleiste](rolle-dark.png)](rolle-dark.png)

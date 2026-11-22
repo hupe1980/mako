@@ -12,12 +12,33 @@
 use accountingd::config::AccountingdConfig;
 
 fn config(extra: serde_json::Value) -> AccountingdConfig {
-    let mut cfg = serde_json::json!({"database": {"url": "postgres://localhost/accountingd"}, "tenant": "stadtwerke-musterstadt", "lf_mp_id": "9900357000028", "creditor_name": "Stadtwerke Musterstadt GmbH"});
+    let mut cfg = serde_json::json!({
+        "database": {"url": "postgres://localhost/accountingd"},
+        "tenant": "stadtwerke-musterstadt",
+        "lf_mp_id": "9900357000028",
+        "creditor_name": "Stadtwerke Musterstadt GmbH",
+        "eeg": {"nb_mp_id": "9900357000004", "debtor_name": "Stadtwerke Musterstadt Netz GmbH"},
+    });
     let (Some(base), Some(extra)) = (cfg.as_object_mut(), extra.as_object()) else {
         panic!("both must be JSON objects");
     };
+    // One level deep, so a test's `eeg` adds to the base's rather than
+    // replacing it; a `null` removes the key.
     for (k, v) in extra {
-        base.insert(k.clone(), v.clone());
+        match (base.get_mut(k), v) {
+            (Some(serde_json::Value::Object(b)), serde_json::Value::Object(e)) => {
+                for (ek, ev) in e {
+                    if ev.is_null() {
+                        b.remove(ek);
+                    } else {
+                        b.insert(ek.clone(), ev.clone());
+                    }
+                }
+            }
+            _ => {
+                base.insert(k.clone(), v.clone());
+            }
+        }
     }
     serde_json::from_value(cfg).expect("the test configuration parses")
 }
@@ -194,9 +215,10 @@ fn an_lf_mp_id_that_is_no_mp_id_is_refused() {
     assert_eq!(pfade(tenant_as_lf), [("lf_mp_id".to_owned(), true)]);
 }
 
-/// Every pain.008, EEG pain.001 and Mahnung names the Lieferant by
-/// `creditor_name`; without it each is refused, never filled with the tenant.
-/// The start is refused only where a payout must leave unattended.
+/// Every pain.008 and Mahnung names the Lieferant by `creditor_name`; without
+/// it each is refused, never filled with the tenant. The EEG pain.001 is the
+/// Netzbetreiber's and does not read it, so `[eeg] auto_payout` does not make
+/// it blocking.
 #[test]
 fn a_missing_creditor_name_is_named() {
     use mako_service::Daemon as _;
@@ -216,6 +238,56 @@ fn a_missing_creditor_name_is_named() {
             "creditor_name": "  ",
             "eeg": { "auto_payout": true, "debtor_iban": "DE89370400440532013000" },
         })),
-        [("creditor_name".to_owned(), true)]
+        [("creditor_name".to_owned(), false)]
+    );
+}
+
+/// § 19 Abs. 1 EEG 2023: the EEG payout is owed „gegen den Netzbetreiber", so
+/// its plant accounts are kept under `[eeg] nb_mp_id` and its pain.001 names
+/// `[eeg] debtor_name`. Absent, each is named — a warning, and a refused start
+/// where `auto_payout` would pay unattended — and a value that is no MP-ID is
+/// refused outright. The Lieferant's `lf_mp_id` and `creditor_name` never
+/// stand in.
+#[test]
+fn the_eeg_netzbetreiber_is_a_setting_of_its_own() {
+    use mako_service::Daemon as _;
+    let pfade = |cfg: serde_json::Value| -> Vec<(String, bool)> {
+        accountingd::Accountingd::validate(&config(cfg))
+            .into_iter()
+            .map(|b| (b.pfad.clone(), b.ist_blockiert()))
+            .collect()
+    };
+    let ohne_nb = serde_json::json!({
+        "allow_insecure_no_auth": true,
+        "eeg": { "nb_mp_id": null, "debtor_name": null },
+    });
+    assert_eq!(
+        pfade(ohne_nb),
+        [
+            ("eeg.nb_mp_id".to_owned(), false),
+            ("eeg.debtor_name".to_owned(), false)
+        ]
+    );
+    assert_eq!(
+        pfade(serde_json::json!({
+            "allow_insecure_no_auth": true,
+            "eeg": {
+                "nb_mp_id": null,
+                "debtor_name": "  ",
+                "auto_payout": true,
+                "debtor_iban": "DE89370400440532013000",
+            },
+        })),
+        [
+            ("eeg.nb_mp_id".to_owned(), true),
+            ("eeg.debtor_name".to_owned(), true)
+        ]
+    );
+    assert_eq!(
+        pfade(serde_json::json!({
+            "allow_insecure_no_auth": true,
+            "eeg": { "nb_mp_id": "stadtwerke-musterstadt" },
+        })),
+        [("eeg.nb_mp_id".to_owned(), true)]
     );
 }

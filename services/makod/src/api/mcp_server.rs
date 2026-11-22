@@ -344,6 +344,9 @@ pub struct ProcessHistory {
     pub process_id: String,
     /// The workflow running the process.
     pub workflow_name: String,
+    /// The Marktrolle the process acts in (`NB`, `LF`, `MSB`, …), where its
+    /// spawn recorded one.
+    pub rolle: Option<String>,
     /// Every event of the process, in the order it was recorded.
     pub eintraege: Vec<HistoryEntry>,
 }
@@ -380,6 +383,9 @@ pub struct HistoryEntry {
     /// it) or `person`. Never the principal — who it was is the audit log's.
     #[schemars(extend("enum" = ["system", "freigabe", "freigabe-geaendert", "person"]))]
     pub akteur: String,
+    /// The message passed between two of the deployment's own Marktrollen —
+    /// its own NB and its own LF, say — delivered in-process.
+    pub intern: bool,
 }
 
 /// What kind of deadline a label is: a delivery window `mako_fristen` owns
@@ -404,6 +410,7 @@ fn history(process_id: &str, events: &[mako_engine::envelope::EventEnvelope]) ->
             .first()
             .map(|e| e.workflow_id.name.as_ref().to_owned())
             .unwrap_or_default(),
+        rolle: None,
         eintraege: events
             .iter()
             .map(|e| HistoryEntry {
@@ -426,6 +433,7 @@ fn history(process_id: &str, events: &[mako_engine::envelope::EventEnvelope]) ->
                     mako_pruefung::codes::lies(liste, &a.code).map(|c| c.bedeutung.to_owned())
                 }),
                 akteur: e.akteur.klasse().as_str().to_owned(),
+                intern: e.intern,
             })
             .collect(),
     }
@@ -440,6 +448,9 @@ pub struct ProcessView {
     pub workflow_name: String,
     /// The process identifier within its workflow.
     pub process_id: String,
+    /// The Marktrolle the process acts in (`NB`, `LF`, `MSB`, …), where its
+    /// spawn recorded one.
+    pub rolle: Option<String>,
     /// The deadlines registered on the process's stream.
     pub deadlines: Vec<DeadlineView>,
 }
@@ -470,7 +481,11 @@ pub struct DeadlineView {
 /// indexed apart from the bare MaLo so that on a deployment that is NB and LF
 /// at once the E/G's process on the same Marktlokation is a different one:
 /// [`mako_gpke::eog_nb_anfrage_key`] (Strom) and
-/// [`mako_geli_gas::gnb_anfrage_key`] (Gas). A lookup lists both sides.
+/// [`mako_geli_gas::gnb_anfrage_key`] (Gas). An invoice's document number
+/// names the Rechnungssteller's and the Rechnungsempfänger's process apart
+/// ([`crate::ingest_dispatcher::rechnungssteller_key`],
+/// [`crate::ingest_dispatcher::rechnungsempfaenger_key`]). A lookup lists both
+/// sides.
 async fn processes_named(
     registry: &impl mako_engine::registry::ProcessRegistry,
     tenant: TenantId,
@@ -480,6 +495,8 @@ async fn processes_named(
     for initiator_key in [
         mako_gpke::eog_nb_anfrage_key(key.as_str()),
         mako_geli_gas::gnb_anfrage_key(key.as_str()),
+        crate::ingest_dispatcher::rechnungssteller_key(key.as_str()),
+        crate::ingest_dispatcher::rechnungsempfaenger_key(key.as_str()),
     ] {
         for identity in registry.lookup_correlated(tenant, &initiator_key).await? {
             if !correlated
@@ -637,14 +654,35 @@ impl MakodMcpHandler {
         }
     }
 
+    /// The Marktrolle the process acts in, as its spawn recorded it.
+    async fn rolle_des_prozesses(
+        &self,
+        tenant: TenantId,
+        process_id: mako_engine::ids::ProcessId,
+    ) -> Result<Option<Box<str>>, McpError> {
+        use mako_engine::registry::ProcessRegistry as _;
+        Ok(self
+            .state
+            .process_store
+            .as_process_registry()
+            .lookup(
+                tenant,
+                &mako_engine::registry::RegistryKey::from_process(process_id),
+            )
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .and_then(|i| i.rolle))
+    }
+
     /// Gate a cross-workflow process read on `ReadProcess`.
     ///
-    /// The listing spans every workflow, so it is evaluated against the
-    /// wildcard workflow name. A policy that scopes a principal to one arm of a
-    /// VIU deployment (`context.workflow like "gpke-sperrung*"`) therefore
-    /// denies the unfiltered listing outright — which is the intended § 6a EnWG
-    /// answer: an NB-scoped principal must not receive a cross-workflow view,
-    /// and there is nothing meaningful to filter it down to.
+    /// The listing spans every workflow and every role, so it is evaluated
+    /// against the wildcard workflow name and no role. A policy that scopes a
+    /// principal to one Marktrolle (`context.rolle == "LF"`) or one arm
+    /// (`context.workflow like "gpke-sperrung*"`) therefore denies the
+    /// unfiltered listing outright — the intended § 6a EnWG answer: such a
+    /// principal must not receive a cross-workflow view, and there is nothing
+    /// meaningful to filter it down to.
     fn require_any_process_read(&self, parts: &axum::http::request::Parts) -> Result<(), McpError> {
         let identity = caller(parts)?;
         if self.state.cedar.authorize_process_read(
@@ -652,6 +690,7 @@ impl MakodMcpHandler {
             &crate::cedar_authz::ProcessResource {
                 tenant: &self.state.tenant,
                 workflow: ANY_WORKFLOW,
+                rolle: None,
             },
         ) {
             Ok(())
@@ -861,7 +900,12 @@ impl MakodMcpHandler {
                 .await;
         }
 
-        match dispatch_command(&self.state.commands, akteur, &cmd_lower, &p.payload).await {
+        match crate::commands_api::in_rolle(
+            &effective_role,
+            dispatch_command(&self.state.commands, akteur, &cmd_lower, &p.payload),
+        )
+        .await
+        {
             Ok(outcome) => {
                 let (process_id, status) = match outcome {
                     DispatchOutcome::Spawned { process_id } => (process_id.to_string(), "spawned"),
@@ -1238,6 +1282,7 @@ impl MakodMcpHandler {
                 &crate::cedar_authz::ProcessResource {
                     tenant: &self.state.tenant,
                     workflow: id.workflow_id.name.as_ref(),
+                    rolle: id.rolle.as_deref(),
                 },
             ) {
                 continue;
@@ -1254,6 +1299,7 @@ impl MakodMcpHandler {
                 stream_id: id.stream_id().to_string(),
                 workflow_name: id.workflow_id.name.as_ref().to_owned(),
                 process_id: id.process_id.to_string(),
+                rolle: id.rolle.as_deref().map(str::to_owned),
                 deadlines: deadlines
                     .iter()
                     .map(|d| {
@@ -1337,18 +1383,22 @@ impl MakodMcpHandler {
                     None,
                 )
             })?;
-        // § 6a EnWG: the same per-workflow decision as `get_process`, and a
-        // refusal answers like not-found, so the reply is no oracle.
+        // § 6a EnWG: the same decision as `get_process`, and a refusal answers
+        // like not-found, so the reply is no oracle.
+        let rolle = self.rolle_des_prozesses(tenant, first.process_id).await?;
         if !self.state.cedar.authorize_process_read(
             &caller,
             &crate::cedar_authz::ProcessResource {
                 tenant: &self.state.tenant,
                 workflow: first.workflow_id.name.as_ref(),
+                rolle: rolle.as_deref(),
             },
         ) {
             return Ok(not_found());
         }
-        serde_json::to_value(history(p.process_id.trim(), &events))
+        let mut verlauf = history(p.process_id.trim(), &events);
+        verlauf.rolle = rolle.map(String::from);
+        serde_json::to_value(verlauf)
             .map(CallToolResult::structured)
             .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
@@ -1411,19 +1461,24 @@ Frist is its own outcome — processd `list_overdue_processes`.",
                 )
             })?;
 
-        let visible: Vec<&mako_engine::deadline::Deadline> = result
-            .deadlines
-            .iter()
-            .filter(|d| {
-                self.state.cedar.authorize_process_read(
-                    &caller,
-                    &crate::cedar_authz::ProcessResource {
-                        tenant: &self.state.tenant,
-                        workflow: d.workflow_id().name.as_ref(),
-                    },
-                )
-            })
-            .collect();
+        // A deadline names its workflow, not the role its process acts in:
+        // that is on the process's identity.
+        let mut visible: Vec<&mako_engine::deadline::Deadline> = Vec::new();
+        for d in &result.deadlines {
+            let rolle = self
+                .rolle_des_prozesses(d.tenant_id(), d.process_id())
+                .await?;
+            if self.state.cedar.authorize_process_read(
+                &caller,
+                &crate::cedar_authz::ProcessResource {
+                    tenant: &self.state.tenant,
+                    workflow: d.workflow_id().name.as_ref(),
+                    rolle: rolle.as_deref(),
+                },
+            ) {
+                visible.push(d);
+            }
+        }
 
         // `has_more` must stay truthful after filtering: either the store had
         // more beyond the scan window, or filtering left more than one page.

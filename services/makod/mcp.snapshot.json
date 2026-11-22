@@ -1572,6 +1572,13 @@
               "description": "The process identifier within its workflow.",
               "type": "string"
             },
+            "rolle": {
+              "description": "The Marktrolle the process acts in (`NB`, `LF`, `MSB`, …), where its\nspawn recorded one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "deadlines": {
               "description": "The deadlines registered on the process's stream.",
               "type": "array",
@@ -1584,6 +1591,7 @@
             "stream_id",
             "workflow_name",
             "process_id",
+            "rolle",
             "deadlines"
           ]
         },
@@ -1737,6 +1745,10 @@
                 "freigabe-geaendert",
                 "person"
               ]
+            },
+            "intern": {
+              "description": "The message passed between two of the deployment's own Marktrollen —\nits own NB and its own LF, say — delivered in-process.",
+              "type": "boolean"
             }
           },
           "required": [
@@ -1749,13 +1761,15 @@
             "antwortcode",
             "codeliste",
             "bedeutung",
-            "akteur"
+            "akteur",
+            "intern"
           ]
         }
       },
       "required": [
         "process_id",
         "workflow_name",
+        "rolle",
         "eintraege"
       ],
       "type": "object",
@@ -1766,6 +1780,13 @@
         "workflow_name": {
           "description": "The workflow running the process.",
           "type": "string"
+        },
+        "rolle": {
+          "description": "The Marktrolle the process acts in (`NB`, `LF`, `MSB`, …), where its\nspawn recorded one.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "eintraege": {
           "description": "Every event of the process, in the order it was recorded.",

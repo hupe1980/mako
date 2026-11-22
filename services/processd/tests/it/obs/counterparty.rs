@@ -34,7 +34,7 @@ mod db_scenarios {
         Some((pool, container))
     }
 
-    const TENANT: &str = "9900357000004";
+    const TENANT: &str = mako_service::oidc::demo::TENANT;
     const NB: &str = "9900000000003";
 
     async fn insert(

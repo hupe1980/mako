@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use base64::Engine as _;
 use tokio::sync::mpsc;
 
-const TENANT: &str = "9900357000004";
+const TENANT: &str = mako_service::oidc::demo::TENANT;
 
 fn config(db: &str, receiver: &str, secret: &str) -> vertragd::config::VertragdConfig {
     let mut cfg: vertragd::config::VertragdConfig =

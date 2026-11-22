@@ -37,7 +37,6 @@ graph TB
     billingd -->|"de.mako.billing.rechnung.erstellt → RECHNUNG / STORNO"| accountingd
     einsd -->|"de.mako.eeg.verguetung.berechnet → EEG_GUTSCHRIFT + pain.001"| accountingd
     einsd -->|"de.mako.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE + pain.001"| accountingd
-    invoicd -->|"de.mako.invoic.receipt.settled → ZAHLUNG"| accountingd
     vertragd -->|"recipient of a Mahnung"| accountingd
     accountingd -->|"MAHNUNG document"| outputd
     accountingd -->|"paid Abschläge"| billingd
@@ -101,7 +100,7 @@ contra account. Money is `i64` cents throughout; no `f64` touches it.
 | `KORREKTUR` | by sign | Erlöse | operator `POST /buchen` |
 | `ABSCHLAG` | Debit | Erhaltene Anzahlungen (SKR 03 1718 / SKR 04 3272) | the Abschlagslauf — a demand, not a receipt |
 | `ABSCHLAG_VERRECHNUNG` | Credit | Erhaltene Anzahlungen | the settling invoice discharges the advances it deducted |
-| `ZAHLUNG` | Credit | Bank (SKR 1200) | camt import, `de.mako.invoic.receipt.settled` |
+| `ZAHLUNG` | Credit | Bank (SKR 1200) | camt import |
 | `BANKRUECKLAST` | Debit | Bank | a returned direct debit |
 | `SEPA_STORNO` | Debit | Bank | a pain.007 reversal |
 | `MAHNGEBUEHR` | Debit | Mahnerlöse (SKR 4003) | dunning fee per Mahnstufe |
@@ -184,6 +183,15 @@ only when it carries a `reference_id`.
 Every `/api/v1/*` route requires a JWT and a Cedar action — see
 [Authorization](#authorization). `/webhook` is signature-authenticated instead.
 
+An account is addressed by its MaLo and the MP-ID it is kept under. The routes
+that serve every account — master data, balance, ledger, Kontoauszug, open
+items, clearing, Zahlungsinformation, reconcile, anonymize, balance proof — take
+`?mp_id=` (the Lieferant's for a customer, `[eeg] nb_mp_id` for an EEG plant);
+the Lieferant's customer features — Verbraucher status, Abschlag,
+Vorauszahlung, payment plans, locks, interest, Jahresabschluss, payment
+assignment — take `?lf_mp_id=`. Both default to the configured `lf_mp_id`, and
+a key a route does not take is refused rather than ignored.
+
 `GET /api/v1/openapi.json` serves the OpenAPI 3.1 document of every `/api/v1`
 route below, committed as `services/accountingd/openapi.json`. The routes marked
 **(OpenAPI)** answer a typed body; each read among them is shared with an MCP
@@ -220,7 +228,7 @@ the same type.
 | `GET` | `/api/v1/periods/seals` | Sealed months, `sealed_through`, `verified` (a full `audit`) |
 | `POST` | `/api/v1/bookings/{key}/rebook` · `/discard` | Resolve a parked booking |
 | `GET` | `/api/v1/entries/{entry_id}/proof` | Merkle inclusion proof |
-| `GET` | `/api/v1/periods/{period_id}/balance-proof` | Closing balance of a Kontokorrent in a sealed period (`?malo_id=&lf_mp_id=`) |
+| `GET` | `/api/v1/periods/{period_id}/balance-proof` | Closing balance of a Kontokorrent in a sealed period (`?malo_id=&mp_id=`) |
 | `GET` | `/api/v1/entries/consistency-proof` | Append-only proof since `?since=<tree_size>` |
 | `GET` | `/api/v1/dunning` | **(OpenAPI)** `Mahnfaelle`: open dunning cases, newest first (`?limit=`) |
 | `POST` | `/api/v1/payments/match` | **(OpenAPI)** `Zahlungszuordnung`: the accounts a transfer may belong to (body `amount_ct`, `reference`, `iban`, `end_to_end_id`); a read posted as a body so no access log holds the IBAN; books nothing |
@@ -642,7 +650,7 @@ balance, clearing and seal compared with it.
 | Question | Endpoint | Returns |
 |---|---|---|
 | Is this booking in the books? | `GET /entries/{entry_id}/proof` | `leaf_hash`, `tree_size`, `tree_root`, `verified`, `proof` |
-| What did this customer owe at the balance-sheet date (§ 147 AO)? | `GET /periods/{id}/balance-proof?malo_id=&lf_mp_id=` | `balance_ct`, `debits_ct`, `credits_ct`, `verified`, `tree_size/root`, `proof` |
+| What did this customer owe at the balance-sheet date (§ 147 AO)? | `GET /periods/{id}/balance-proof?malo_id=&mp_id=` | `balance_ct`, `debits_ct`, `credits_ct`, `verified`, `tree_size/root`, `proof` |
 | Has the journal only been appended to? | `GET /entries/consistency-proof?since=<tree_size>` | `archived_size/root`, `current_size/root`, `verified`, `proof` |
 
 All three verify against a head alone, without this service; each is verified
@@ -780,8 +788,10 @@ building number, post code and subdivision — or no `PstlAdr` at all.
 
 | Party | Element | Source |
 |---|---|---|
-| The operator | `Cdtr/PstlAdr` (pain.008, pain.007) · `Dbtr/PstlAdr` (pain.001) | `[creditor_address]` |
+| The Lieferant | `Cdtr/PstlAdr` (pain.008, pain.007) · `Dbtr/PstlAdr` (Jahresabschluss-Erstattung pain.001) | `[creditor_address]` |
+| The Netzbetreiber | `Dbtr/PstlAdr` (EEG pain.001) | `[eeg.debtor_address]` |
 | A direct-debit customer | `Dbtr/PstlAdr` (pain.008) | `sepa_mandates.debtor_*` |
+| An EEG Anlagenbetreiber | `Cdtr/PstlAdr` (EEG pain.001) | the current receipt's `zahlungsempfaenger_anschrift` (einsd's Einspeiser, snapshotted in `eeg_belege.creditor_*`), else `accounts.addr_*` |
 | A payee | `Cdtr/PstlAdr` (pain.001) | `accounts.addr_*` (BO4E `Zahlungsinformation` has no address) |
 
 A half-filled address is refused (`AddressParts::to_postal_address`); `Ctry` is
@@ -935,6 +945,21 @@ Revoke a mandate (§ 58 ZAG) with `DELETE /api/v1/sepa/mandates/{mandate_id}`.
 
 ### pain.001 — EEG payout (§ 25 EEG 2023)
 
+**The Netzbetreiber pays, the Anlagenbetreiber is paid.** § 19 Abs. 1 EEG 2023:
+Betreiber von Anlagen „haben für den in diesen Anlagen erzeugten Strom gegen den
+Netzbetreiber einen Anspruch auf 1. die Marktprämie nach § 20, 2. eine
+Einspeisevergütung …, 3. einen Mieterstromzuschlag …". The
+Direktvermarktungsunternehmer is not the payee, and no Lieferant is a party. So
+the plant account is kept under `[eeg] nb_mp_id` — not the Lieferant's
+`lf_mp_id` — and the pain.001 debits `[eeg] debtor_iban` in the name
+`[eeg] debtor_name`, with `[eeg.debtor_address]` as `Dbtr/PstlAdr`; neither
+falls back to `lf_mp_id` or `creditor_name`, because the Netzbetreiber is often
+a legal entity of its own. Without `nb_mp_id` an EEG receipt is refused
+`503 eeg_nb_not_configured`, so einsd redelivers it once it is set; without
+`debtor_iban` or `debtor_name` the payout run is refused
+`503 eeg_debtor_not_configured`. The payout confirmation and a Rückzahlung book
+on the account the receipt credited.
+
 einsd announces every settlement receipt as `de.mako.eeg.verguetung.berechnet` or
 `de.mako.eeg.marktpraemie.berechnet` — a zero included — carrying `receipt_id`,
 `korrektur_von` (the receipt a § 147 AO correction supersedes), the period and
@@ -973,16 +998,22 @@ more than is owed is `422`.
 With `[eeg] auto_payout = true` each receipt is paid as it arrives;
 otherwise, and to pay a chain again after a rejected order,
 `POST /api/v1/eeg/payouts/run` pays the billing month's chains by the same rule.
-`auto_payout = true` without a valid `debtor_iban`, or an unparseable
-`pain001_schema`, is refused at startup. A payout that is owed but cannot be
+`auto_payout = true` without a valid `debtor_iban`, `debtor_name` or
+`nb_mp_id`, or with an unparseable `pain001_schema`, is refused at startup;
+without `auto_payout` a missing `nb_mp_id` or `debtor_name` is a warning, and a
+`nb_mp_id` that is no MP-ID is refused either way. A payout that is owed but cannot be
 ordered — a pain.001 that does not build, an invalid creditor IBAN — answers the
 event `500`, so einsd redelivers it; the receipt stays recorded and the run pays
 it once the cause is fixed. A receipt missing its plant, billing month, receipt
-id, amount or `ketten_folge` is refused `422`, never defaulted.
+id, amount or `ketten_folge` is refused `422`, never defaulted, and so is one
+whose `zahlungsempfaenger_anschrift` the pain.001 could not carry (no town or
+country, a country that is none, a field the address does not have).
 
 The creditor is the event's `bank_iban` / `zahlungsempfaenger` from einsd's
 Einspeiser record, else the account's `zahlungsinformation`; with neither the
-chain stays outstanding and the run counts it under `skipped_no_iban`. § 25
+chain stays outstanding and the run counts it under `skipped_no_iban`. Its
+`Cdtr/PstlAdr` is the current receipt's `zahlungsempfaenger_anschrift`, else the
+plant account's `addr_*` — the account is the Anlagenbetreiber's own. § 25
 Abs. 1 EEG 2023 requires payment „unverzüglich nach Ende des Monats".
 
 | Mode | `[eeg] sepa_instant` | `LclInstrm` | Settlement |
@@ -1082,7 +1113,7 @@ curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/anonymize" \
 Pseudonymized: `accounts.iban` and `sepa_mandates.iban`/`kontoinhaber` →
 `ANONYMIZED`; `mandatsref`, `zahlungsinformation`, `vorauszahlung`, `addr_*`,
 `bic`, `debtor_*` and the creditor einsd forwarded on each EEG receipt
-(`eeg_belege.bank_iban` / `zahlungsempfaenger`) → `NULL`. The ledger is untouched (Art. 17(3)(b); § 257
+(`eeg_belege.bank_iban` / `zahlungsempfaenger` / `creditor_*`) → `NULL`. The ledger is untouched (Art. 17(3)(b); § 257
 Abs. 1, 4 HGB and § 147 Abs. 1, 3 AO — ten years for the books, eight for the
 Buchungsbelege), as are the address snapshots on `eeg_payout_orders`, which
 are Buchungsbelege. Each erasure is logged in `anonymization_log`; a repeat is
@@ -1117,7 +1148,7 @@ Emitted through the outbox to `erp_webhook_url`:
 
 | Table | Purpose |
 |---|---|
-| `accounts` | One per `(malo_id, lf_mp_id, tenant)`: `balance_ct` and `verzug_ct` caches, `abschlag_ct`, `billing_day` (1–28), `iban` (ciphertext when `iban_encrypted`), `iban_hash`, `mandatsref`, `sparte`, `addr_*`, `vorauszahlung`, `zahlungsinformation`, `anonymized_at` |
+| `accounts` | One per `(malo_id, mp_id, tenant)` — `mp_id` the Lieferant's for a customer, `[eeg] nb_mp_id` for an EEG plant: `balance_ct` and `verzug_ct` caches, `abschlag_ct`, `billing_day` (1–28), `iban` (ciphertext when `iban_encrypted`), `iban_hash`, `mandatsref`, `sparte`, `addr_*`, `vorauszahlung`, `zahlungsinformation`, `anonymized_at` |
 | `ledger.*` | Journal, postings, Merkle log, seals, clearings — doubleentry's own tables, created by the migration role |
 | `booking_drafts` | Every booking, staged with its business change: `entwurf`, `status` (`offen`/`gebucht`/`geparkt`/`verworfen`), rejection `code` and `meldung`, `entry_id` |
 | `abschlag_forderungen` | USt rate and absorbing invoice per Abschlag |
@@ -1126,7 +1157,7 @@ Emitted through the outbox to `erp_webhook_url`:
 | `sepa_collection_entries` | One per collected mandate — the attribution key for replies |
 | `sepa_reversals` | One per pain.007; `UNIQUE (collection_entry_id)` |
 | `sepa_recalls` | One per camt.055, with its camt.029 outcome |
-| `eeg_belege` | Every EEG settlement receipt einsd announced, per receipt chain, with what its booking changed; `PRIMARY KEY (tenant, source_ce_id)`, one per `ketten_folge` |
+| `eeg_belege` | Every EEG settlement receipt einsd announced, per receipt chain, with what its booking changed and the creditor it named (`bank_iban`, `zahlungsempfaenger`, `creditor_*` address); `PRIMARY KEY (tenant, source_ce_id)`, one per `ketten_folge` |
 | `eeg_ketten` (view) | Each chain's current receipt beside what was paid or ordered for it, less repayments |
 | `eeg_payout_orders` | pain.001 payouts, each for one chain's outstanding difference |
 | `eeg_aufrechnungen` | EEG claims extinguished by Aufrechnung, with the Gegenforderung; `UNIQUE (tenant, tr_id, billing_year, billing_month, gegenforderung, erklaert_am)` |
@@ -1193,7 +1224,7 @@ that table.
 
 ```toml
 tenant                = "stadtwerke-musterstadt"   # isolation key, not an MP-ID
-lf_mp_id              = "9900357000028"     # required: the Lieferant whose accounts these are
+lf_mp_id              = "9900357000028"     # required: the Lieferant whose customer accounts these are
 erp_webhook_url       = "http://erp:8000/webhooks/accounting"
 erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
 iban_hash_secret      = "env:ACCOUNTINGD_IBAN_HASH_SECRET"
@@ -1230,7 +1261,7 @@ jahresabschluss_auto_enabled = false
 # SEPA
 creditor_iban         = "DE89370400440532013000"   # required for pain.008 (500 otherwise)
 creditor_id           = "DE74ZZZ09999999999"       # Gläubiger-ID, required
-creditor_name         = "Muster Energie GmbH"      # required to issue pain.008, pain.001, Mahnung
+creditor_name         = "Muster Energie GmbH"      # required to issue pain.008, Erstattung pain.001, Mahnung
 # debtor_agent_bic    = "…"                        # required for camt.055 recalls
 # pain008_schema      = "pain.008.001.02"          # default pain.008.001.08
 # pain001_schema      = "pain.001.001.03"          # default pain.001.001.09
@@ -1247,11 +1278,17 @@ town            = "Berlin"
 country         = "DE"
 
 [eeg]
+nb_mp_id        = "9900357000004"   # the Netzbetreiber the EEG plant accounts are kept under
+debtor_name     = "Muster Netz GmbH"   # the Netzbetreiber as SEPA debtor of every EEG pain.001
+debtor_iban     = "env:NB_BANK_IBAN"   # the Netzbetreiber's account the payouts are debited from
 sepa_instant    = true
 auto_payout     = true
-debtor_iban     = "env:LF_BANK_IBAN"
 bank_submit_url = "https://banking-adapter.internal/api/v1/pain001"
 bank_api_key    = "env:BANK_API_KEY"
+
+[eeg.debtor_address]   # optional; never half-filled
+town            = "Berlin"
+country         = "DE"
 
 [database]
 url           = "postgresql://accountingd_app:secret@db:5432/accountingd?sslmode=verify-full"

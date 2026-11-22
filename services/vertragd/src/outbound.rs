@@ -659,9 +659,11 @@ pub fn command(tenant: &str, task: &Task) -> Result<Command> {
             task.payload.clone(),
         ),
         TaskKind::Abrechnungskonto | TaskKind::Verbraucher => {
-            // `PUT /api/v1/accounts/{malo_id}[/verbraucher]?lf_mp_id=…`: both
-            // identifiers are addressing, not body fields — accountingd denies
-            // unknown fields, so sending them would be a 422.
+            // `PUT /api/v1/accounts/{malo_id}?mp_id=…` and
+            // `…/verbraucher?lf_mp_id=…`: both identifiers are addressing, not
+            // body fields. The account route serves every own role's account,
+            // the Verbraucher status only the Lieferant's; accountingd refuses
+            // a key either does not know.
             let malo_id = task
                 .payload
                 .get("malo_id")
@@ -678,7 +680,7 @@ pub fn command(tenant: &str, task: &Task) -> Result<Command> {
                 "accountingd identifiers must be alphanumeric \
                  (malo_id={malo_id}, lf_mp_id={lf_mp_id})",
             );
-            let (pfad, body) = if task.kind == TaskKind::Verbraucher {
+            let (pfad, schluessel, body) = if task.kind == TaskKind::Verbraucher {
                 // `verbraucher` always: `null` clears a status an earlier
                 // contract on the MaLo recorded.
                 let v = task
@@ -686,14 +688,18 @@ pub fn command(tenant: &str, task: &Task) -> Result<Command> {
                     .get("verbraucher")
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
-                ("/verbraucher", serde_json::json!({ "verbraucher": v }))
+                (
+                    "/verbraucher",
+                    "lf_mp_id",
+                    serde_json::json!({ "verbraucher": v }),
+                )
             } else {
-                ("", serde_json::json!({}))
+                ("", "mp_id", serde_json::json!({}))
             };
             (
                 "accountingd",
                 CommandMethod::Put,
-                format!("/api/v1/accounts/{malo_id}{pfad}?lf_mp_id={lf_mp_id}"),
+                format!("/api/v1/accounts/{malo_id}{pfad}?{schluessel}={lf_mp_id}"),
                 body,
             )
         }

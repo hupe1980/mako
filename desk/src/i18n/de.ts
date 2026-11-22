@@ -105,6 +105,9 @@ export const de = {
     fehler: "Der Verlauf ließ sich nicht lesen",
     eingang: "Eingang",
     ausgang: "Ausgang",
+    imHaus: "im Haus",
+    imHausHinweis: "Zwischen zwei eigenen Marktrollen, im Haus zugestellt — nicht über AS4.",
+    alsRolle: (rolle: string) => `als ${rolle}`,
     ohneZeitpunkt: "ohne Zeitpunkt",
     schritte: (n: number, text: string) =>
       n === 1 ? "1 interner Schritt" : `${text} interne Schritte`,
@@ -1476,6 +1479,10 @@ export const de = {
     malo_not_found: "Diese MaLo ist nicht bekannt.",
     creditor_name_not_configured:
       "Für SEPA fehlt der Name des Zahlungsempfängers — trag `creditor_name` in die Konfiguration von accountingd ein.",
+    eeg_nb_not_configured:
+      "Die EEG-Zahlung schuldet der Netzbetreiber, und für ihn fehlt die Marktpartner-ID — trag `[eeg] nb_mp_id` in die Konfiguration von accountingd ein.",
+    eeg_debtor_not_configured:
+      "Für die EEG-Auszahlung fehlt das Konto oder der Name des Netzbetreibers — trag `[eeg] debtor_iban` und `[eeg] debtor_name` in die Konfiguration von accountingd ein.",
     foreign_catalogue: "Dieser Katalog gehört zu einem anderen Lieferanten als diesem Dienst.",
     mp_id_ungueltig: "Das ist keine gültige Marktpartner-ID — 13 Ziffern, Strom 99…, Gas 98….",
     partner_not_found: "Dieser Marktpartner ist nicht bekannt.",

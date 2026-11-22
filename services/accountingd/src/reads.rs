@@ -46,8 +46,9 @@ impl Saldostatus {
 pub struct Kontostand {
     /// 11-digit Marktlokations-ID.
     pub malo_id: String,
-    /// The Lieferant's MP-ID the account is kept under.
-    pub lf_mp_id: String,
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, the Netzbetreiber's for an EEG plant.
+    pub mp_id: String,
     /// Open-items balance in cents: positive is owed, negative a Guthaben.
     pub balance_ct: i64,
     /// `balance_ct` as a decimal EUR string, e.g. `"-12.50"`.
@@ -89,8 +90,9 @@ pub struct Kontobewegung {
 pub struct Kontoauszug {
     /// 11-digit Marktlokations-ID.
     pub malo_id: String,
-    /// The Lieferant's MP-ID the account is kept under.
-    pub lf_mp_id: String,
+    /// The own MP-ID the account is kept under — the Lieferant's for a
+    /// customer, the Netzbetreiber's for an EEG plant.
+    pub mp_id: String,
     /// The signed balance the window opens at, in cents — what was booked
     /// before it and what `limit` cut off its front.
     pub opening_ct: i64,
@@ -99,10 +101,10 @@ pub struct Kontoauszug {
 }
 
 impl Kontoauszug {
-    pub(crate) fn new(malo_id: String, lf_mp_id: String, window: crate::pg::LedgerWindow) -> Self {
+    pub(crate) fn new(malo_id: String, mp_id: String, window: crate::pg::LedgerWindow) -> Self {
         Self {
             malo_id,
-            lf_mp_id,
+            mp_id,
             opening_ct: window.opening_ct,
             lines: window
                 .lines
@@ -206,7 +208,7 @@ impl From<crate::pg::AccountRow> for UeberfaelligesKonto {
             account_id: a.account_id.to_string(),
             balance_eur: format_ct_as_eur(a.balance_ct),
             malo_id: a.malo_id,
-            lf_mp_id: a.lf_mp_id,
+            lf_mp_id: a.mp_id,
             kunden_nr: a.kunden_nr,
             balance_ct: a.balance_ct,
             abschlag_ct: a.abschlag_ct,
@@ -324,7 +326,7 @@ pub(crate) fn account_not_found(malo_id: &str) -> ApiError {
         .with_code("account_not_found")
 }
 
-/// The account's balance under the Lieferant `lf_mp_id`.
+/// The account's balance under `mp_id`.
 ///
 /// # Errors
 ///
@@ -333,15 +335,15 @@ pub async fn balance(
     pool: &PgPool,
     tenant: &str,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
 ) -> Result<Kontostand, ApiError> {
-    let a = crate::pg::fetch_account(pool, malo_id, lf_mp_id, tenant)
+    let a = crate::pg::fetch_account(pool, malo_id, mp_id, tenant)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| account_not_found(malo_id))?;
     Ok(Kontostand {
         malo_id: a.malo_id,
-        lf_mp_id: a.lf_mp_id,
+        mp_id: a.mp_id,
         balance_ct: a.balance_ct,
         balance_eur: format_ct_as_eur(a.balance_ct),
         status: Saldostatus::of(a.balance_ct),
@@ -350,7 +352,7 @@ pub async fn balance(
 }
 
 /// The newest `limit` movements (default 100, at most 1000), with the balance
-/// the window opens at, under the Lieferant `lf_mp_id`.
+/// the window opens at, under `mp_id`.
 ///
 /// # Errors
 ///
@@ -360,10 +362,10 @@ pub async fn ledger(
     ledger: &crate::ledger::PgLedger,
     tenant: &str,
     malo_id: &str,
-    lf_mp_id: &str,
+    mp_id: &str,
     limit: Option<i64>,
 ) -> Result<Kontoauszug, ApiError> {
-    let a = crate::pg::fetch_account(pool, malo_id, lf_mp_id, tenant)
+    let a = crate::pg::fetch_account(pool, malo_id, mp_id, tenant)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| account_not_found(malo_id))?;
@@ -371,14 +373,14 @@ pub async fn ledger(
         ledger,
         pool,
         tenant,
-        &a.lf_mp_id,
+        &a.mp_id,
         &a.malo_id,
         &doubleentry::BalanceQuery::all(),
         limit.unwrap_or(100).clamp(1, 1000),
     )
     .await
     .map_err(crate::handlers::ledger_failure)?;
-    Ok(Kontoauszug::new(a.malo_id, a.lf_mp_id, window))
+    Ok(Kontoauszug::new(a.malo_id, a.mp_id, window))
 }
 
 /// The open dunning cases, newest Mahnung first — `limit` of them (default
@@ -511,7 +513,7 @@ pub async fn payment_match(
             candidates: vec![Zuordnungskandidat {
                 account_id: hit.account_id.to_string(),
                 malo_id: hit.malo_id,
-                lf_mp_id: hit.lf_mp_id,
+                lf_mp_id: hit.mp_id,
                 open_balance_ct: balance_ct,
                 open_balance_eur: crate::sepa::ct_to_eur_str(balance_ct),
                 matched_by: hit.matched_by.to_owned(),
@@ -548,7 +550,7 @@ pub async fn payment_match(
     // is the doubleentry ledger; this cache is refreshed from it on every
     // post), so a set-based scan stays cheap.
     let rows = sqlx::query(
-        r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
+        r"SELECT a.account_id, a.malo_id, a.mp_id, a.balance_ct
           FROM accounts a
           WHERE a.tenant = $1
             AND a.balance_ct BETWEEN $2 AND $3
@@ -568,7 +570,7 @@ pub async fn payment_match(
         .map(|r| {
             let account_id: uuid::Uuid = r.try_get("account_id").unwrap_or_default();
             let malo_id: String = r.try_get("malo_id").unwrap_or_default();
-            let lf_mp_id: String = r.try_get("lf_mp_id").unwrap_or_default();
+            let lf_mp_id: String = r.try_get("mp_id").unwrap_or_default();
             let balance_ct: i64 = r.try_get("balance_ct").unwrap_or_default();
 
             // Amount proximity is the only signal here — the reference already

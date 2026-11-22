@@ -19,7 +19,7 @@
 //!
 //! ```toml
 //! port   = 9480
-//! tenant = "9900357000004"
+//! tenant = "stadtwerke-musterstadt"
 //!
 //! # Required: the authorization authority. Without it portald cannot decide
 //! # who owns a MaLo, and refuses to start (see `allow_insecure_no_auth`).

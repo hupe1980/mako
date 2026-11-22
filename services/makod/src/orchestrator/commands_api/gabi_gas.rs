@@ -30,7 +30,7 @@ pub(super) async fn dispatch_gabi_gas_invoic(
     let antwort = remadv_antwort(payload);
     dispatch_to_process::<GaBiGasInvoicWorkflow, _>(
         state,
-        &invoice_ref,
+        &crate::ingest_dispatcher::rechnungsempfaenger_key(&invoice_ref),
         GABI_GAS_INVOIC_WORKFLOW_NAME,
         move || {
             if settle {

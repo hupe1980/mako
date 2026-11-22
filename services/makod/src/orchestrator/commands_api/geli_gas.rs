@@ -1132,7 +1132,7 @@ pub(super) async fn dispatch_geli_gas_invoic(
     let antwort = remadv_antwort(payload);
     dispatch_to_process::<GeliGasSperrprozesseInvoicWorkflow, _>(
         state,
-        &invoice_ref,
+        &crate::ingest_dispatcher::rechnungsempfaenger_key(&invoice_ref),
         GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
         move || {
             if settle {

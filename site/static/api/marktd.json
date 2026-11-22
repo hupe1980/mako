@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.45.0"
+    "version": "0.46.0"
   },
   "paths": {
     "/api/v1/bilanzierungsgebiete/{eic}/mabis-zp": {
@@ -4239,11 +4239,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "description": "The day asked about, `YYYY-MM-DD`; today when absent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The gMSB MP-ID of the grid: `{ nb_mp_id, gmsb_mp_id }`",
+            "description": "The gMSB MP-ID of the grid that day: `{ nb_mp_id, gmsb_mp_id, valid_from, valid_to }`",
             "content": {
               "application/json": {
                 "schema": {}
@@ -4271,7 +4280,7 @@
             }
           },
           "404": {
-            "description": "No gMSB recorded for this Netzbetreiber",
+            "description": "No gMSB recorded for this Netzbetreiber on that day",
             "content": {
               "application/json": {
                 "schema": {
@@ -4300,7 +4309,7 @@
           }
         ],
         "requestBody": {
-          "description": "`PutGrundzustaendigerMsbBody`: `{ gmsb_mp_id }`",
+          "description": "`PutGrundzustaendigerMsbBody`: `{ gmsb_mp_id, valid_from }`",
           "content": {
             "application/json": {
               "schema": {}
@@ -4333,7 +4342,7 @@
             }
           },
           "422": {
-            "description": "`mp_id_ungueltig`: a value is no MP-ID",
+            "description": "`mp_id_ungueltig`: a value is no MP-ID; or `valid_from` is no date",
             "content": {
               "application/json": {
                 "schema": {

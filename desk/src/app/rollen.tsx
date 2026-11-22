@@ -41,12 +41,15 @@ export const ROLLEN: Record<Rolle, RolleInfo> = {
 const ORDER: Rolle[] = ["netz", "lieferant", "messstelle", "energieservice"];
 
 /**
- * The Rollen this person may wear. Every Rolle is offered until the gateway's
- * identity answer narrows it (spec Open Question 1); what each Rolle shows is
- * the service's Cedar answer, not a Desk filter.
+ * The Rollen this person may wear: those their sign-in names, where it names
+ * any (the demo persona's `mako_roles`); every Rolle otherwise. What each
+ * Rolle shows is still the service's Cedar answer — this only keeps the Desk
+ * from offering a Rolle the person cannot act in.
  */
-export function heldRollen(): Rolle[] {
-  return ORDER;
+export function heldRollen(marktrollen?: readonly string[]): Rolle[] {
+  if (!marktrollen) return ORDER;
+  const held = ORDER.filter((r) => marktrollen.includes(ROLLEN[r].marktrolle));
+  return held.length > 0 ? held : ORDER;
 }
 
 const STORE = "mako-desk.rolle";
@@ -71,13 +74,16 @@ const Ctx = createContext<RolleState | null>(null);
 
 export function RolleProvider({
   children,
-  held = heldRollen(),
+  held: gegeben,
 }: {
   children: ReactNode;
   held?: Rolle[];
 }) {
   const queries = useQueryClient();
-  const [rolle, setRolle] = useState<Rolle>(() => remembered(held));
+  const held = gegeben ?? ORDER;
+  const [gewaehlt, setRolle] = useState<Rolle>(() => remembered(held));
+  // Another persona may not hold the Rolle the last one wore.
+  const rolle = held.includes(gewaehlt) ? gewaehlt : (held[0] ?? "netz");
 
   useEffect(() => {
     document.documentElement.dataset.rolle = rolle;

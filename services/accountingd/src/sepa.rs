@@ -274,10 +274,12 @@ pub struct CreditorIdentity<'a> {
     pub address: Option<&'a AddressParts>,
 }
 
-/// The debtor side of a pain.001 credit transfer — the LF's own account.
+/// The debtor side of a pain.001 credit transfer — the paying party's own
+/// account: the Lieferant's for an Erstattung, the Netzbetreiber's for an EEG
+/// payout.
 #[derive(Debug, Clone, Copy)]
 pub struct DebtorIdentity<'a> {
-    /// IBAN of the debtor's (LF's) own bank account.
+    /// IBAN of the debtor's own bank account.
     pub iban: &'a str,
     /// Legal name, emitted as `Dbtr/Nm` (transliterated).
     pub name: &'a str,

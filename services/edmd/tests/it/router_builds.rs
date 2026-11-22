@@ -95,7 +95,7 @@ async fn fake_marktd() -> String {
     let edge = || {
         serde_json::json!([{
             "id": "00000000-0000-4000-8000-000000000001",
-            "tenant": "9900357000004",
+            "tenant": "stadtwerke-musterstadt",
             "von_id": "51238696012", "von_typ": "MALO",
             "nach_id": MELO, "nach_typ": "MELO",
             "valid_from": null, "valid_to": null, "data": {}, "depth": 0,
@@ -422,7 +422,7 @@ async fn open_reading_order(pool: &sqlx::PgPool, obis_code: &str) -> uuid::Uuid 
     sqlx::query_scalar(
         "INSERT INTO ablese_auftraege
              (malo_id, melo_id, tenant, anlass, auftraggeber_rolle, geplant_am, obis_code, sparte)
-         VALUES ('51238696012', 'DE0001234567890123456789012345678', '9900357000004',
+         VALUES ('51238696012', 'DE0001234567890123456789012345678', 'stadtwerke-musterstadt',
                  'ZWISCHENABLESUNG', 'LF', DATE '2026-07-01', $1, 'STROM')
          RETURNING id",
     )
@@ -563,7 +563,7 @@ async fn a_stored_reading_order_cannot_lack_a_sparte() {
     let inserted = sqlx::query(
         "INSERT INTO ablese_auftraege
              (malo_id, tenant, anlass, auftraggeber_rolle, geplant_am)
-         VALUES ('51238696012', '9900357000004', 'ZWISCHENABLESUNG', 'LF', DATE '2026-07-01')",
+         VALUES ('51238696012', 'stadtwerke-musterstadt', 'ZWISCHENABLESUNG', 'LF', DATE '2026-07-01')",
     )
     .execute(&pool)
     .await;
@@ -937,7 +937,7 @@ async fn a_malo_update_refreshes_its_cached_bundesland() {
 
     sqlx::query(
         "INSERT INTO malo_bundesland (tenant, malo_id, bundesland, postleitzahl, quelle)
-         VALUES ('9900357000004', '51238696781', 'BY', '80331', 'test')",
+         VALUES ('stadtwerke-musterstadt', '51238696781', 'BY', '80331', 'test')",
     )
     .execute(&pool)
     .await

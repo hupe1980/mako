@@ -258,11 +258,14 @@ pub(super) fn cmd_gpke_abrechnung_annehmen<'a>(
         // we can route to the correct billing process.
         let invoice_ref = extract_invoice_ref(p)?;
         let message_ref = remadv_message_ref(p);
-        dispatch_to_process::<GpkeAbrechnungWorkflow, _>(s, &invoice_ref, "gpke-abrechnung", || {
-            InvoicCommand::SettleInvoice {
+        dispatch_to_process::<GpkeAbrechnungWorkflow, _>(
+            s,
+            &crate::ingest_dispatcher::rechnungsempfaenger_key(&invoice_ref),
+            "gpke-abrechnung",
+            || InvoicCommand::SettleInvoice {
                 message_ref: message_ref.clone(),
-            }
-        })
+            },
+        )
         .await
     })
 }
@@ -282,13 +285,16 @@ pub(super) fn cmd_gpke_abrechnung_ablehnen<'a>(
             .to_owned();
         let message_ref = remadv_message_ref(p);
         let antwort = remadv_antwort(p);
-        dispatch_to_process::<GpkeAbrechnungWorkflow, _>(s, &invoice_ref, "gpke-abrechnung", || {
-            InvoicCommand::DisputeInvoice {
+        dispatch_to_process::<GpkeAbrechnungWorkflow, _>(
+            s,
+            &crate::ingest_dispatcher::rechnungsempfaenger_key(&invoice_ref),
+            "gpke-abrechnung",
+            || InvoicCommand::DisputeInvoice {
                 message_ref: message_ref.clone(),
                 reason: reason.clone(),
                 antwort: antwort.clone(),
-            }
-        })
+            },
+        )
         .await
     })
 }

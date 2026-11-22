@@ -243,7 +243,7 @@ pub fn desk_config(base: &serde_json::Value) -> String {
             serde_json::json!({
                 "personas": PERSONAS
                     .iter()
-                    .map(|p| serde_json::json!({ "id": p.id, "name": p.name }))
+                    .map(|p| serde_json::json!({ "id": p.id, "name": p.name, "rollen": p.roles }))
                     .collect::<Vec<_>>(),
                 "standard": DEFAULT_PERSONA,
             }),

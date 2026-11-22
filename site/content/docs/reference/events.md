@@ -53,7 +53,7 @@ URL in `dataschema`. A **phantom** is declared and emitted by nothing.
 | `de.mako.billing.abrechnungsinformation.monatlich` | — | billingd | — | Monthly Abrechnungsinformation (§40 EnWG) generated. |
 | `de.mako.billing.xrechnung.b2g.ready` | — | billingd | — | XRechnung for a B2G recipient is ready for dispatch. |
 | `de.mako.invoic.receipt.disputed` | — | agentd, invoicd, netzbilanzd | — | Inbound INVOIC disputed (REMADV Ablehnung path). |
-| `de.mako.invoic.receipt.settled` | — | accountingd, invoicd, netzbilanzd | — | Inbound INVOIC settled (REMADV Zahlungsavis). |
+| `de.mako.invoic.receipt.settled` | — | invoicd, netzbilanzd | — | Inbound INVOIC settled (REMADV Zahlungsavis). |
 | `de.mako.invoic.payment.overdue` | — | agentd, invoicd | — | Outbound INVOIC payment overdue (no REMADV in time). |
 | `de.mako.eeg.verguetung.berechnet` | — | accountingd, einsd | — | Einspeisevergütung settlement computed (feed-in tariff schemes). |
 | `de.mako.eeg.marktpraemie.berechnet` | — | accountingd, einsd | — | Marktprämie settlement computed (Direktvermarktung schemes). |

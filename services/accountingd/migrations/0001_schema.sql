@@ -7,7 +7,8 @@
 -- drafts that feed the ledger, and the SEPA / dunning / audit machinery.
 --
 -- Tables:
---   accounts             — one row per (malo_id, lf_mp_id, tenant) — Kundenstammdaten
+--   accounts             — one row per (malo_id, mp_id, tenant) — Kundenstammdaten and
+--                          the EEG plant accounts
 --   sepa_mandates        — SEPA direct-debit mandate registry
 --   dunning_cases        — Mahnwesen escalation (Mahnstufe 1–3)
 --   interest_charges     — Verzugszinsen §288 BGB (default interest on overdue invoices)
@@ -57,7 +58,12 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 CREATE TABLE accounts (
     account_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     malo_id             TEXT        NOT NULL,
-    lf_mp_id            TEXT        NOT NULL,
+    -- The MP-ID of the own Marktrolle the account is kept under: the
+    -- Lieferant's (`lf_mp_id`) for a customer, the Netzbetreiber's
+    -- (`[eeg] nb_mp_id`) for an Anlagenbetreiber — the EEG payout is owed
+    -- „gegen den Netzbetreiber" (§ 19 Abs. 1 EEG 2023), so it never sits on a
+    -- Lieferant's Kontokorrent.
+    mp_id               TEXT        NOT NULL,
     tenant              TEXT        NOT NULL,
 
     -- Business-partner key (Geschäftspartner) linking to vertragd.kunden.kunden_nr.
@@ -165,12 +171,13 @@ CREATE TABLE accounts (
 
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- Tenant isolation: one Kundenkonto per (MaLo, LF, tenant)
-    UNIQUE (malo_id, lf_mp_id, tenant)
+    -- Tenant isolation: one account per (MaLo, own MP-ID, tenant)
+    UNIQUE (malo_id, mp_id, tenant)
 );
 
 COMMENT ON TABLE accounts IS
-    'Customer master data (Kundenstammdaten). One row per (MaLo, Lieferant, tenant). '
+    'Customer master data (Kundenstammdaten) and EEG plant accounts. One row per '
+    '(MaLo, own MP-ID — the Lieferant''s or the Netzbetreiber''s — tenant). '
     'balance_ct is a ledger-derived read cache, NOT the system of record — the '
     'authoritative balance is the signed net of this customer''s Kontokorrent in '
     'the doubleentry ledger. Regulatory: §40 EnWG, §238 HGB (10y retention), GDPR Art. 17.';
@@ -179,7 +186,7 @@ COMMENT ON COLUMN accounts.anonymized_at IS
     'GDPR Art. 17: set when PII (IBAN, mandatsref, zahlungsinformation) was '
     'replaced with anonymized placeholders. Financial records retained per §238 HGB.';
 
-CREATE INDEX acct_tenant       ON accounts (tenant, lf_mp_id);
+CREATE INDEX acct_tenant       ON accounts (tenant, mp_id);
 CREATE INDEX acct_malo_tenant  ON accounts (malo_id, tenant);
 CREATE INDEX acct_bp           ON accounts (tenant, kunden_nr) WHERE kunden_nr IS NOT NULL;
 -- Supports the portfolio open-receivables / dunning-candidate scans.
@@ -609,6 +616,14 @@ CREATE TABLE eeg_belege (
     -- Creditor as einsd forwarded it; NULL → the account's zahlungsinformation.
     bank_iban           TEXT,
     zahlungsempfaenger  TEXT,
+    -- The creditor's postal address (`zahlungsempfaenger_anschrift`, ISO 20022
+    -- `PstlAdr`) as the receipt stated it; all NULL → the account's `addr_*`.
+    creditor_town             TEXT,
+    creditor_country          TEXT CHECK (creditor_country IS NULL OR creditor_country ~ '^[A-Z]{2}$'),
+    creditor_street           TEXT,
+    creditor_building_number  TEXT,
+    creditor_post_code        TEXT,
+    creditor_country_subdivision TEXT,
     received_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant, source_ce_id)
 );
@@ -800,6 +815,8 @@ CREATE VIEW eeg_ketten AS
 SELECT b.tenant, b.tr_id, b.billing_year, b.billing_month, b.malo_id, b.account_id,
        b.art, b.receipt_id, b.source_ce_id, b.anspruch_ct, b.ketten_folge,
        b.bank_iban, b.zahlungsempfaenger,
+       b.creditor_town, b.creditor_country, b.creditor_street, b.creditor_building_number,
+       b.creditor_post_code, b.creditor_country_subdivision,
        (COALESCE((SELECT sum(o.amount_ct) FROM eeg_payout_orders o
                    WHERE o.tenant = b.tenant AND o.tr_id = b.tr_id
                      AND o.billing_year = b.billing_year AND o.billing_month = b.billing_month
@@ -1335,7 +1352,8 @@ CREATE TABLE unmatched_payments (
     received_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     assigned_at         TIMESTAMPTZ,
     malo_id             TEXT,
-    lf_mp_id            TEXT,
+    -- `accounts.mp_id` of the account the line was assigned to.
+    mp_id               TEXT,
     ledger_entry_id     UUID,
     -- The operator's subject, or `import` when a later import resolved it.
     assigned_by         TEXT,

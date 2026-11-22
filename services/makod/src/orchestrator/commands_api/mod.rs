@@ -480,7 +480,8 @@ where
             Arc::clone(store),
             tenant_id,
             workflow_id.clone(),
-        );
+        )
+        .with_rolle(ROLLE.try_with(Clone::clone).ok());
     let process_id = process.process_id();
     let identity = process.identity();
     let deadlines: Vec<Deadline> = deadlines
@@ -562,6 +563,22 @@ fn befehls_optionen() -> Result<RunOptions<'static>, mako_engine::error::EngineE
             "a command reached a process with no actor — nothing is written",
         )
     })
+}
+
+tokio::task_local! {
+    /// The Marktrolle the command running on this task acts in, as
+    /// [`validate_command`] resolved it — recorded on every process it spawns.
+    static ROLLE: Box<str>;
+}
+
+/// Run `fut` acting as `marktrolle` (`LF`, `LFG`, `GNB`, …): a process it spawns
+/// records the role in its AHB spelling (`LF`, `NB`, `MSB`, …), which is what
+/// a Cedar policy decides a process read on.
+pub(crate) async fn in_rolle<F: std::future::Future>(marktrolle: &str, fut: F) -> F::Output {
+    match crate::party_registry::ahb_rolle(marktrolle) {
+        Some(rolle) => ROLLE.scope(rolle.into(), fut).await,
+        None => fut.await,
+    }
 }
 
 #[cfg(test)]

@@ -68,8 +68,8 @@ async fn make_dispatcher() -> (SlateDbStore, TenantId, EdifactIngestDispatcher) 
 }
 
 /// Spawn a `wim-invoic` process (MSB sent the 31009 INVOIC) and register it under
-/// the invoice reference — exactly how the outbound `SendInvoic` command indexes it
-/// for REMADV correlation.
+/// the Rechnungssteller's key of the invoice reference — exactly how the outbound
+/// `SendInvoic` command indexes it for REMADV correlation.
 async fn spawn_wim_invoic(store: &SlateDbStore, tenant: TenantId, invoice_ref: &str) {
     let workflow_id = WorkflowId::new("wim-invoic", "FV2025-10-01");
     let process = Process::<WimInvoicWorkflow, Arc<SlateDbStore>>::new(
@@ -95,7 +95,12 @@ async fn spawn_wim_invoic(store: &SlateDbStore, tenant: TenantId, invoice_ref: &
     let identity = ProcessIdentity::new(process_id, tenant, workflow_id);
     store
         .as_process_registry()
-        .register_correlated(tenant, invoice_ref, process_id, identity)
+        .register_correlated(
+            tenant,
+            &makod::ingest_dispatcher::rechnungssteller_key(invoice_ref),
+            process_id,
+            identity,
+        )
         .await
         .expect("register_correlated");
 }

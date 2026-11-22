@@ -33,7 +33,7 @@ mod db_scenarios {
         Some((pool, container))
     }
 
-    const TENANT: &str = "9900357000004";
+    const TENANT: &str = mako_service::oidc::demo::TENANT;
 
     fn every_role() -> Vec<String> {
         ["NB", "LF", "MSB", "ADMIN"].map(str::to_owned).to_vec()

@@ -537,7 +537,6 @@ fn ce_type_to_entry_type_mapping() {
     let expected = [
         (mako_events::billing::RECHNUNG_ERSTELLT, "RECHNUNG", false),
         (mako_events::billing::RECHNUNG_ERSTELLT, "STORNO", true), // is_correction=true
-        (mako_events::invoic::RECEIPT_SETTLED, "ZAHLUNG", false),
         (
             mako_events::eeg::VERGUETUNG_BERECHNET,
             "EEG_GUTSCHRIFT",
@@ -936,6 +935,7 @@ fn gdpr_anonymization_fields_list_is_complete() {
         "sepa_mandates.debtor_*",
         "eeg_belege.bank_iban",
         "eeg_belege.zahlungsempfaenger",
+        "eeg_belege.creditor_*",
     ] {
         assert!(
             declared.iter().any(|d| d == required),

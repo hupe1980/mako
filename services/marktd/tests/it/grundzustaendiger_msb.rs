@@ -14,6 +14,8 @@ use crate::router_builds::load;
 
 const NB: &str = "9900357000004";
 const GMSB: &str = "9900357000035";
+/// The undertaking that takes over the Grundzuständigkeit.
+const UEBERNEHMER: &str = "9900357000042";
 
 fn uri(nb: &str) -> String {
     format!("/api/v1/netzbetreiber/{nb}/grundzustaendiger-msb")
@@ -54,7 +56,10 @@ async fn a_value_that_is_no_mp_id_is_refused() {
         app.clone(),
         "PUT",
         &uri(NB),
-        Some(serde_json::json!({ "gmsb_mp_id": "stadtwerke-musterstadt" })),
+        Some(serde_json::json!({
+            "gmsb_mp_id": "stadtwerke-musterstadt",
+            "valid_from": "2020-01-01",
+        })),
     )
     .await;
     assert_eq!(status, 422, "{problem}");
@@ -97,13 +102,39 @@ async fn the_link_is_recorded_and_read_back() {
         app.clone(),
         "PUT",
         &uri(NB),
-        Some(serde_json::json!({ "gmsb_mp_id": GMSB })),
+        Some(serde_json::json!({ "gmsb_mp_id": GMSB, "valid_from": "2020-01-01" })),
     )
     .await;
     assert_eq!(status, 204, "{problem}");
 
-    let (status, answer) = send(app, "GET", &uri(NB), None).await;
+    let (status, answer) = send(app.clone(), "GET", &uri(NB), None).await;
     assert_eq!(status, 200, "{answer}");
     assert_eq!(answer["nb_mp_id"], NB);
     assert_eq!(answer["gmsb_mp_id"], GMSB);
+    assert_eq!(answer["valid_from"], "2020-01-01");
+    assert_eq!(answer["valid_to"], serde_json::Value::Null);
+
+    // A transfer of the Grundzuständigkeit (§§ 41, 43 MsbG) from 2027-01-01:
+    // the old link ends that day, the new one starts it, and an offer is
+    // priced by the link in force on its own day.
+    let (status, problem) = send(
+        app.clone(),
+        "PUT",
+        &uri(NB),
+        Some(serde_json::json!({ "gmsb_mp_id": UEBERNEHMER, "valid_from": "2027-01-01" })),
+    )
+    .await;
+    assert_eq!(status, 204, "{problem}");
+    let am = |tag: &'static str| {
+        let app = app.clone();
+        async move { send(app, "GET", &format!("{}?at={tag}", uri(NB)), None).await }
+    };
+    let (_, vorher) = am("2026-12-31").await;
+    assert_eq!(vorher["gmsb_mp_id"], GMSB, "{vorher}");
+    assert_eq!(vorher["valid_to"], "2027-01-01", "{vorher}");
+    let (_, nachher) = am("2027-01-01").await;
+    assert_eq!(nachher["gmsb_mp_id"], UEBERNEHMER, "{nachher}");
+
+    let (status, _) = am("2019-12-31").await;
+    assert_eq!(status, 404, "no link before the first was recorded");
 }

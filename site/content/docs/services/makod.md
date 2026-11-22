@@ -1636,10 +1636,35 @@ reaches a Netzbetreiber workflow, and a deployment without `eiv-strom` skips it
 
 A Stadtwerk that is NB, LF and MSB runs the roles in one makod, one
 `[[party]]` per role and Sparte, each with its own Codenummer (Allgemeine
-Festlegungen 6.1d Kap. 2.13). Every message names the sending role's MP-ID, so
-a counterparty — and the Stadtwerk's own other roles — see the role, not the
-company. For multi-role commands `marktrolle` selects the qualifier (`DDM` NB,
-`MS` MSB) and the workflow variant.
+Festlegungen 6.1d Kap. 2.13) — the grundzuständige MSB included, which is the
+MSB role of the NB's undertaking and holds a code of its own. Every message
+names the sending role's MP-ID, so a counterparty — and the Stadtwerk's own
+other roles — see the role, not the company. For multi-role commands
+`marktrolle` selects the qualifier (`DDM` NB, `MS` MSB) and the workflow
+variant.
+
+Where both ends of a step are the same company, GPKE Teil 1 (Kap. 1, S. 3)
+allows a shortcut — it „bleibt für die davon betroffenen Prozessschritte eine
+Abweichung in Bezug auf die prozessuale Ausgestaltung oder des zu verwendenden
+Datenformats zulässig". makod sends the full message anyway, delivered in-house, so the own
+LF is treated exactly like any other supplier (§ 20 Abs. 1 EnWG) and the
+record shows it:
+
+- **Each process acts in one role.** A process records the Marktrolle it runs
+  in — the command's, or the role of the own MP-ID an inbound message is
+  addressed to — and `get_process` / `get_process_history` name it.
+  A Cedar policy decides reads on `context.rolle`, so a person who holds LF
+  reads the LF's side of a `gpke-eog` and not the NB's (§ 6a Abs. 1 EnWG).
+- **Both sides of one exchange are two processes.** An invoice the NB sends its
+  own LF runs as the NB's process under the Rechnungssteller's key and as the
+  LF's under the Rechnungsempfänger's; a lookup by the document number lists
+  both.
+- **The history marks the hop.** A message passed between two own MP-IDs is
+  `intern` in `get_process_history`, which the Desk shows as „im Haus".
+- **One step admits no shortcut.** The BKV's Zuordnungsermächtigung reaches
+  the NB even when BKV and LF are one company: „Auch im Fall einer
+  Rechtspersonenidentität zwischen BKV und LF ist die Zuordnungsermächtigung
+  gegenüber dem NB zwingend abzugeben" (MaBiS Kap. 10.2.1, S. 120).
 
 #### In-process loopback for self-addressed outbox messages
 

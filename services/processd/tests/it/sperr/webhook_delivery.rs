@@ -15,7 +15,7 @@ use processd::sperr::pg::{self, CreateOrderRequest, Treffpunkt};
 use sqlx::PgPool;
 use tower::ServiceExt as _;
 
-const TENANT: &str = "9900357000004";
+const TENANT: &str = mako_service::oidc::demo::TENANT;
 const SECRET: &str = "dev-sperr-hmac-secret";
 
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;

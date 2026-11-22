@@ -444,6 +444,7 @@ mandatory.
 |---|---|
 | `ust_status` | `KLEINUNTERNEHMER` (§ 19 UStG → 0 %, EN 16931 category `E`) or `REGELBESTEUERUNG` (19 %, `S`; default) |
 | `bank_iban` / `bank_bic` / `zahlungsempfaenger` | Payout account, forwarded in the settlement event for accountingd's pain.001 |
+| `zahlungsempfaenger_anschrift` | The payee's postal address, the pain.001's `Cdtr/PstlAdr`: `town`, `country` (ISO 3166-1 alpha-2), `street`, `building_number`, `post_code`, `country_subdivision`. Given, town and country are required and the address replaces the stored one whole; omitted keeps it |
 | `mastr_akteur_id` | MaStR Marktakteursnummer (`SEE…`/`ABR…`) |
 
 ```http
@@ -456,9 +457,22 @@ Content-Type: application/json
   "ust_status":         "KLEINUNTERNEHMER",
   "bank_iban":          "DE89370400440532013000",
   "bank_bic":           "COBADEFFXXX",
-  "zahlungsempfaenger": "Max Mustermann"
+  "zahlungsempfaenger": "Max Mustermann",
+  "zahlungsempfaenger_anschrift": {
+    "street":          "Sonnenweg",
+    "building_number": "7",
+    "post_code":       "80331",
+    "town":            "München",
+    "country":         "DE"
+  }
 }
 ```
+
+An address is checked by the `sepa` crate's `PstlAdr` rules — the ones the
+pain.001 applies — before anything is stored: without town or country it is
+refused `422 incomplete_postal_address`, with a country that is not an ISO
+3166-1 alpha-2 country `422 invalid_country_code`. The country is stored
+upper-cased and blank parts as absent.
 
 An unknown `ust_status` aborts the settlement. § 12 Abs. 3 UStG (0 % on PV
 hardware) is not a feed-in category.
@@ -1180,7 +1194,7 @@ in `error`. Context: `principal_tenant` / `principal_roles` from `mako_tenant` /
 | `[policy] sect52_aufrechnung` | `gesondert` | See [`sect52_aufrechnung`](#policy-sect52-aufrechnung) |
 
 ```toml
-tenant   = "9910000000002"
+tenant   = "stadtwerke-musterstadt"
 edmd_url = "http://edmd:8380"
 
 [http]
@@ -1236,7 +1250,7 @@ nothing sets it from capacity.
 
 | Type | When | Payload |
 |---|---|---|
-| `de.mako.eeg.verguetung.berechnet` | Einspeisevergütung, KWKG or post-EEG period decided | `receipt_id`, `ketten_folge`, `korrektur_von` (the receipt a correction supersedes, else null), `tr_id`, `malo_id`, `billing_year/month`, `settlement_model`, `einspeisemenge_kwh`, `settlement_eur` (net), `status`, `pflichtzahlung_kumuliert_eur` (the running § 52 claim), `gutschrift_nummer`, `gutschrift_steuer_eur`, `gutschrift_brutto_eur`, `bank_iban`, `bank_bic`, `zahlungsempfaenger` |
+| `de.mako.eeg.verguetung.berechnet` | Einspeisevergütung, KWKG or post-EEG period decided | `receipt_id`, `ketten_folge`, `korrektur_von` (the receipt a correction supersedes, else null), `tr_id`, `malo_id`, `billing_year/month`, `settlement_model`, `einspeisemenge_kwh`, `settlement_eur` (net), `status`, `pflichtzahlung_kumuliert_eur` (the running § 52 claim), `gutschrift_nummer`, `gutschrift_steuer_eur`, `gutschrift_brutto_eur`, `bank_iban`, `bank_bic`, `zahlungsempfaenger`, `zahlungsempfaenger_anschrift` (the payee's structured address, else null) |
 | `de.mako.eeg.marktpraemie.berechnet` | Marktprämie period decided | the same payload |
 | `de.mako.eeg.anlage.mastr-registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
 | `de.mako.eeg.anlage.foerderung-auslaufend` | EEG Förderende within 180 days, once per plant (worker every 6 h; never for KWKG); enqueued with the mark that it was sent | `tr_id`, `foerderendedatum`, `days_remaining` |
@@ -1258,8 +1272,8 @@ already paid becomes owed back. `no_data`, `price_missing`,
 `fassung_nicht_tabelliert` and `gehalten` state no amount and announce nothing;
 a decided receipt without `settlement_eur` rolls the settlement back.
 
-The bank fields come from `einspeiser` so accountingd can build the pain.001;
-they are null for `EIGENVERBRAUCH`. Deliveries are
+The bank fields and the payee's address come from `einspeiser` so accountingd
+can build the pain.001; they are null for `EIGENVERBRAUCH`. Deliveries are
 `application/cloudevents+json` with a Standard Webhooks signature, source
 `urn:mako:einsd:tenant:{tenant}`.
 
@@ -1288,7 +1302,11 @@ they are null for `EIGENVERBRAUCH`. Deliveries are
     "gutschrift_brutto_eur": "27.05584",
     "bank_iban":       "DE89370400440532013000",
     "bank_bic":        "COBADEFFXXX",
-    "zahlungsempfaenger": "Franz Huber"
+    "zahlungsempfaenger": "Franz Huber",
+    "zahlungsempfaenger_anschrift": {
+      "town": "Rosenheim", "country": "DE", "street": "Am Bach",
+      "building_number": "3", "post_code": "83022", "country_subdivision": null
+    }
   }
 }
 ```

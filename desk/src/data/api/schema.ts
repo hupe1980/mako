@@ -415,7 +415,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
           };
         };
         responses: {
@@ -443,7 +443,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
           };
         };
         requestBody: {
@@ -561,7 +561,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
           };
         };
         requestBody: {
@@ -612,7 +612,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
           };
         };
         responses: {
@@ -724,7 +724,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
           };
         };
         responses: {
@@ -838,7 +838,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
             from?: string;
             to?: string;
           };
@@ -878,7 +878,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
             limit?: number;
           };
         };
@@ -962,7 +962,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
           };
         };
         responses: {
@@ -1060,7 +1060,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
             repair?: boolean;
           };
         };
@@ -1207,7 +1207,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
           };
         };
         responses: {
@@ -1243,7 +1243,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
-            lf_mp_id?: string;
+            mp_id?: string;
           };
         };
         requestBody: {
@@ -2089,6 +2089,14 @@ export interface Api {
               "application/json": AccountingdApiError;
             };
           };
+          503: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": AccountingdApiError;
+            };
+          };
         };
       };
     };
@@ -2754,7 +2762,7 @@ export interface Api {
           };
           query: {
             malo_id: string;
-            lf_mp_id: string;
+            mp_id: string;
           };
         };
         responses: {
@@ -9817,6 +9825,14 @@ export interface Api {
               "application/json": EinsdApiError;
             };
           };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": EinsdApiError;
+            };
+          };
         };
       };
     };
@@ -14329,6 +14345,9 @@ export interface Api {
         parameters: {
           path: {
             nb_mp_id: string;
+          };
+          query?: {
+            at?: string;
           };
         };
         responses: {
@@ -26164,6 +26183,7 @@ export interface Api {
       "einsd.AnlageOhneMastr": EinsdAnlageOhneMastr;
       "einsd.AnlageRow": EinsdAnlageRow;
       "einsd.AnlagenOhneMastr": EinsdAnlagenOhneMastr;
+      "einsd.Anschrift": EinsdAnschrift2;
       "einsd.ApiError": EinsdApiError;
       "einsd.AuslaufendeAnlagen": EinsdAuslaufendeAnlagen;
       "einsd.BatchSettleRequest": EinsdBatchSettleRequest;
@@ -26500,13 +26520,14 @@ export interface AccountingdKontostand {
    */
   balance_eur: Decimal;
   /**
-   * The Lieferant's MP-ID the account is kept under.
-   */
-  lf_mp_id: string;
-  /**
    * 11-digit Marktlokations-ID.
    */
   malo_id: string;
+  /**
+   * The own MP-ID the account is kept under — the Lieferant's for a
+   * customer, the Netzbetreiber's for an EEG plant.
+   */
+  mp_id: string;
   status: AccountingdSaldostatus;
 }
 /**
@@ -26536,7 +26557,11 @@ export interface AccountingdBuchenRequest {
    * and the operator interface accept exactly the same kinds.
    */
   entry_type: string;
-  lf_mp_id?: string | null;
+  /**
+   * The own MP-ID the account is kept under; defaults to `[eeg] nb_mp_id`
+   * for an `EEG_*` entry and the configured `lf_mp_id` for every other.
+   */
+  mp_id?: string | null;
   /**
    * External reference (invoice number, payment reference, etc.).
    */
@@ -26568,10 +26593,6 @@ export interface AccountingdCreateInterestChargeRequest {
  */
 export interface AccountingdKontoauszug {
   /**
-   * The Lieferant's MP-ID the account is kept under.
-   */
-  lf_mp_id: string;
-  /**
    * The movements, newest first.
    */
   lines: AccountingdKontobewegung[];
@@ -26579,6 +26600,11 @@ export interface AccountingdKontoauszug {
    * 11-digit Marktlokations-ID.
    */
   malo_id: string;
+  /**
+   * The own MP-ID the account is kept under — the Lieferant's for a
+   * customer, the Netzbetreiber's for an EEG plant.
+   */
+  mp_id: string;
   /**
    * The signed balance the window opens at, in cents — what was booked
    * before it and what `limit` cut off its front.
@@ -29226,6 +29252,37 @@ export interface EinsdEinspeiser {
    */
   ust_status: string;
   zahlungsempfaenger?: string | null;
+  zahlungsempfaenger_anschrift?: null | EinsdAnschrift;
+}
+/**
+ * The Zahlungsempfänger's postal address (`Cdtr/PstlAdr` of the payout);
+ * `None` where none is registered.
+ */
+export interface EinsdAnschrift {
+  /**
+   * `BldgNb`.
+   */
+  building_number?: string | null;
+  /**
+   * `Ctry` — ISO 3166-1 alpha-2, required whenever an address is given.
+   */
+  country?: string | null;
+  /**
+   * `CtrySubDvsn` (Bundesland).
+   */
+  country_subdivision?: string | null;
+  /**
+   * `PstCd`.
+   */
+  post_code?: string | null;
+  /**
+   * `StrtNm`.
+   */
+  street?: string | null;
+  /**
+   * `TwnNm` — required whenever an address is given.
+   */
+  town?: string | null;
 }
 /**
  * Fields accepted when creating or replacing an operator.
@@ -29242,6 +29299,37 @@ export interface EinsdUpsertEinspeiser {
    */
   ust_status?: string | null;
   zahlungsempfaenger?: string | null;
+  zahlungsempfaenger_anschrift?: null | EinsdAnschrift1;
+}
+/**
+ * The Zahlungsempfänger's postal address. Given, it replaces the stored
+ * one whole — town and country required — and omitted keeps it.
+ */
+export interface EinsdAnschrift1 {
+  /**
+   * `BldgNb`.
+   */
+  building_number?: string | null;
+  /**
+   * `Ctry` — ISO 3166-1 alpha-2, required whenever an address is given.
+   */
+  country?: string | null;
+  /**
+   * `CtrySubDvsn` (Bundesland).
+   */
+  country_subdivision?: string | null;
+  /**
+   * `PstCd`.
+   */
+  post_code?: string | null;
+  /**
+   * `StrtNm`.
+   */
+  street?: string | null;
+  /**
+   * `TwnNm` — required whenever an address is given.
+   */
+  town?: string | null;
 }
 export interface EinsdEpexPriceBody {
   avg_ct_kwh: Decimal;
@@ -34180,6 +34268,39 @@ export interface EdmdTotalEstimate3 {
    * The rows counted, at most 10 000.
    */
   count: number;
+}
+/**
+ * The Zahlungsempfänger's postal address, in the structured ISO 20022
+ * `PstlAdr` form accountingd's pain.001 emits as `Cdtr/PstlAdr`.
+ *
+ * The field names are accountingd's `sepa::AddressParts`, which reads this
+ * object from the settlement event unchanged.
+ */
+export interface EinsdAnschrift2 {
+  /**
+   * `BldgNb`.
+   */
+  building_number?: string | null;
+  /**
+   * `Ctry` — ISO 3166-1 alpha-2, required whenever an address is given.
+   */
+  country?: string | null;
+  /**
+   * `CtrySubDvsn` (Bundesland).
+   */
+  country_subdivision?: string | null;
+  /**
+   * `PstCd`.
+   */
+  post_code?: string | null;
+  /**
+   * `StrtNm`.
+   */
+  street?: string | null;
+  /**
+   * `TwnNm` — required whenever an address is given.
+   */
+  town?: string | null;
 }
 /**
  * One event to one endpoint.

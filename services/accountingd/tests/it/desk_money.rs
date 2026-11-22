@@ -12,8 +12,10 @@ use serde_json::{Value, json};
 
 use crate::router_builds::{call, dev_app};
 
-/// The demo tenant, which the Lieferant's accounts are kept under.
-const TENANT: &str = "9900357000004";
+/// The demo tenant.
+const TENANT: &str = "stadtwerke-musterstadt";
+/// The demo Lieferant, which its customer accounts are kept under.
+const LF: &str = "9900357000028";
 const MALO: &str = "51238696012";
 
 fn get(uri: &str) -> Request<Body> {
@@ -28,7 +30,7 @@ fn post(uri: &str, body: &Value) -> Request<Body> {
 }
 
 async fn account(pool: &sqlx::PgPool) {
-    accountingd::pg::upsert_account(pool, MALO, TENANT, TENANT)
+    accountingd::pg::upsert_account(pool, MALO, LF, TENANT)
         .await
         .expect("account");
 }
@@ -139,7 +141,7 @@ fn invoice_event(id: &str, rechnungsnummer: &str, zu_zahlen: &str, extra: Value)
     let mut data = json!({
         "record_id": uuid::Uuid::new_v4().to_string(),
         "malo_id": MALO,
-        "lf_mp_id": TENANT,
+        "lf_mp_id": LF,
         "is_correction": false,
         "schlussrechnung": true,
         "rechnung": {
@@ -203,7 +205,7 @@ async fn credit_payout_is_raised_once_per_invoice() {
         "data": {
             "record_id": uuid::Uuid::new_v4().to_string(),
             "malo_id": MALO,
-            "lf_mp_id": TENANT,
+            "lf_mp_id": LF,
             "is_correction": true,
             "schlussrechnung": false,
             "rechnung": {
