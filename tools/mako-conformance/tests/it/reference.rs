@@ -177,9 +177,6 @@ async fn vertragd_keeps_its_own_contract() {
         let _ = axum::serve(listener, router).await;
     });
 
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let listen = probe.local_addr().unwrap().to_string();
-    drop(probe);
     let directory = tempfile::tempdir().unwrap();
     let report = directory.path().join("reference.json");
     // Replay can be queued just after the seed notification has drained.
@@ -195,7 +192,7 @@ async fn vertragd_keeps_its_own_contract() {
             "--inbound-secret",
             INBOUND,
             "--listen",
-            &listen,
+            "127.0.0.1:0",
             "--wait",
             "45",
             "--acceptance",

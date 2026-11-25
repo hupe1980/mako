@@ -38,7 +38,7 @@ The human summary names the verdict and first actionable blocker. The JSON file 
 | Runner | Checks |
 |---|---|
 | `rest` | every operation that documents a `401` refuses a call without a token with an `ApiError`; every parameterless `GET` answers a documented status with a body valid against the document; the refused principal gets `403` |
-| `events` | the kit registers its endpoint through `POST /api/v1/webhooks/endpoints`; the test delivery and every replayed event verify under the issued secret (Standard Webhooks), are CloudEvents 1.0, are of a declared type, and carry `data` valid against the published schema; an inbound route accepts a signed event twice and refuses it unsigned |
+| `events` | Registers a callback and verifies its signed test event names that endpoint. Checks each replayed event’s Standard Webhooks signature, CloudEvents 1.0 envelope, declared type and data schema. Sends a signed inbound event twice and checks that the route refuses an unsigned event. |
 | `mcp` | a call without a token is refused; `tools/list` names exactly the snapshot's tools; the tool twin of the refused route refuses the same principal |
 
 For local diagnosis, omit the acceptance and evidence options. `--only rest|events|mcp` selects one runner. The diagnostic output shows every held, broken or skipped probe. It returns 0 when there are no broken observations, including a run with skipped checks.

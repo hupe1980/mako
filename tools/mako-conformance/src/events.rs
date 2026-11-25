@@ -159,19 +159,13 @@ async fn outbound(ctx: &Ctx, suite: &dyn Suite) {
         .operator("POST", &format!("{endpoint}/test"), Some(&json!({})))
         .await;
     record_submission(ctx, Probe::TestRequest, test);
-    match tokio::time::timeout(ctx.target.wait, rx.recv()).await {
-        Ok(Some(delivery)) => match judge_envelope(&key, &delivery) {
-            Ok(event) if event["type"] == mako_events::mako::WEBHOOK_TEST => {
-                ctx.report.held(Probe::TestDelivery)
-            }
-            Ok(_) => ctx
-                .report
-                .broken(Probe::TestDelivery, "expected the test event type"),
-            Err(why) => ctx.report.broken(Probe::TestDelivery, why),
-        },
-        _ => ctx
+    let declared = suite.emits();
+    match observe_test_delivery(&mut rx, ctx.target.wait, &key, &id, &declared).await {
+        Ok(true) => ctx.report.held(Probe::TestDelivery),
+        Ok(false) => ctx
             .report
             .skipped(Probe::TestDelivery, Reason::DeliveryUnobserved),
+        Err(why) => ctx.report.broken(Probe::TestDelivery, why),
     }
 
     match suite.seed(ctx).await {
@@ -193,7 +187,7 @@ async fn outbound(ctx: &Ctx, suite: &dyn Suite) {
     let deliveries = collect_replay(&mut rx, ctx.target.wait).await;
     judge_replay(
         &ctx.report,
-        &suite.emits(),
+        &declared,
         &ctx.event_schemas,
         &key,
         &deliveries,
@@ -224,6 +218,32 @@ async fn outbound(ctx: &Ctx, suite: &dyn Suite) {
         Err(error) => ctx.report.broken(Probe::Cleanup, error.to_string()),
     }
     server.abort();
+}
+
+/// A live subscription can deliver ordinary events before its direct test response.
+#[must_use = "the caller must record the delivery verdict"]
+async fn observe_test_delivery(
+    rx: &mut mpsc::Receiver<Delivery>,
+    wait: Duration,
+    key: &[u8],
+    endpoint_id: &str,
+    declared: &[&str],
+) -> Result<bool, String> {
+    let deadline = tokio::time::Instant::now() + wait;
+    while let Ok(Some(delivery)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+        let event = judge_envelope(key, &delivery)?;
+        let ty = event["type"].as_str().unwrap_or_default();
+        if ty == mako_events::mako::WEBHOOK_TEST {
+            if event["data"]["endpoint_id"].as_str() != Some(endpoint_id) {
+                return Err("test event names a different or missing endpoint".into());
+            }
+            return Ok(true);
+        }
+        if !declared.contains(&ty) {
+            return Err("undeclared event type at the test endpoint".into());
+        }
+    }
+    Ok(false)
 }
 
 async fn collect_replay(rx: &mut mpsc::Receiver<Delivery>, wait: Duration) -> Vec<Delivery> {
@@ -372,10 +392,10 @@ mod tests {
     use crate::profile::Profile;
     use crate::report::Verdict;
 
-    fn signed(id: &str, data: Value) -> Delivery {
+    fn signed(id: &str, ty: &str, data: Value) -> Delivery {
         let body = Bytes::from(
             json!({
-                "specversion": "1.0", "type": "de.mako.test", "source": "urn:mako:test",
+                "specversion": "1.0", "type": ty, "source": "urn:mako:test",
                 "id": id, "data": data
             })
             .to_string(),
@@ -389,12 +409,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_the_signed_test_for_this_endpoint_satisfies_the_probe() {
+        let domain = "de.mako.test";
+        let test = mako_events::mako::WEBHOOK_TEST;
+        for (types, endpoint, expected) in [
+            (vec![domain, test], "here", Some(true)),
+            (vec![test, domain], "here", Some(true)),
+            (vec![domain], "here", Some(false)),
+            (vec![test], "elsewhere", None),
+        ] {
+            let (tx, mut rx) = mpsc::channel(2);
+            for ty in types {
+                tx.send(signed(ty, ty, json!({"endpoint_id": endpoint})))
+                    .await
+                    .unwrap();
+            }
+            drop(tx);
+            let observed = observe_test_delivery(
+                &mut rx,
+                Duration::from_secs(1),
+                b"secret",
+                "here",
+                &[domain],
+            )
+            .await;
+            assert_eq!(observed.ok(), expected);
+        }
+    }
+
+    #[tokio::test]
     async fn a_late_invalid_occurrence_fails_its_previously_held_schema() {
         let (tx, mut rx) = mpsc::channel(2);
         let send = async move {
-            tx.send(signed("one", json!(12))).await.unwrap();
+            tx.send(signed("one", "de.mako.test", json!(12)))
+                .await
+                .unwrap();
             tokio::time::sleep(Duration::from_millis(3200)).await;
-            tx.send(signed("two", json!("wrong type"))).await.unwrap();
+            tx.send(signed("two", "de.mako.test", json!("wrong type")))
+                .await
+                .unwrap();
         };
         let (_, deliveries) = tokio::join!(send, collect_replay(&mut rx, Duration::from_secs(30)));
         let report = Report::new(Profile {

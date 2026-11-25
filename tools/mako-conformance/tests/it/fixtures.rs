@@ -87,9 +87,6 @@ async fn serve() -> String {
 
 async fn report(only: Runner) -> mako_conformance::report::Report {
     let base = serve().await;
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let listen = probe.local_addr().unwrap().to_string();
-    drop(probe);
     mako_conformance::run(
         mako_conformance::suites::suite("vertragd").unwrap(),
         Target {
@@ -97,7 +94,7 @@ async fn report(only: Runner) -> mako_conformance::report::Report {
             token: "t".to_owned(),
             refused_token: Some("r".to_owned()),
             inbound_secret: Some("s".to_owned()),
-            listen,
+            listen: "127.0.0.1:0".into(),
             callback: None,
             wait: Duration::from_secs(3),
         },
