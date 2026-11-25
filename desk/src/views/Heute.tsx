@@ -18,6 +18,7 @@ import { formatCount } from "../format/count";
 import { epochMs, formatBusinessDate, formatInstantDay } from "../format/date";
 import { BAENDER, band, useNow } from "../format/frist";
 import { useT } from "../i18n";
+import { discoveryDetails, discoverySummary } from "../inbox/discovery";
 import { type Eintrag, type QuelleId, type Stand, warumAnker } from "../inbox/model";
 import { alsEintrag, useBenannt, useHinweise, useQuellen, useVorschlaege } from "../inbox/quellen";
 import { Bewertung } from "./Bewertung";
@@ -309,17 +310,21 @@ function Arbeitsvorrat({ staende, agent }: { staende: Stand[]; agent: string | n
             const seit = s.eintraege.flatMap((e) => (e.seit ? [e.seit] : []));
             const aelteste = seit.sort((a, b) => epochMs(a) - epochMs(b))[0];
             const n = s.eintraege.length;
+            const billing = s.quelle === "abrechnungen";
+            const incomplete = billing && s.discovery?.status !== "completed";
             const zeile = s.fehler
               ? s.fehler
               : s.laedt
                 ? k.quelleLaedt
-                : n === 0
-                  ? k.nichtsOffen
-                  : s.mehr
-                    ? k.mehrAlsSeite
-                    : aelteste
-                      ? k.aeltesteVom(formatInstantDay(aelteste))
-                      : null;
+                : billing
+                  ? discoverySummary(s.discovery)
+                  : n === 0
+                    ? k.nichtsOffen
+                    : s.mehr
+                      ? k.mehrAlsSeite
+                      : aelteste
+                        ? k.aeltesteVom(formatInstantDay(aelteste))
+                        : null;
             return (
               <li key={s.quelle} className="border-b border-separator last:border-b-0">
                 <Link
@@ -330,13 +335,15 @@ function Arbeitsvorrat({ staende, agent }: { staende: Stand[]; agent: string | n
                     <span className="block text-headline">{s.label}</span>
                     {zeile && (
                       <span
+                        role={billing ? "status" : undefined}
+                        aria-atomic={billing || undefined}
                         className={`block text-caption ${s.fehler ? "text-critical" : "text-text-2"}`}
                       >
                         {zeile}
                       </span>
                     )}
                   </span>
-                  {!s.fehler && !s.laedt && (
+                  {!s.fehler && !s.laedt && (!incomplete || n > 0) && (
                     <span
                       className={`text-title2 font-semibold tabular-nums ${n === 0 ? "text-text-2" : "text-text"}`}
                     >
@@ -346,6 +353,18 @@ function Arbeitsvorrat({ staende, agent }: { staende: Stand[]; agent: string | n
                   {s.fehler && <Icon name="warn" size={16} className="text-critical" />}
                   <Icon name="chevron" size={14} className="text-text-2" />
                 </Link>
+                {billing && s.discovery && !s.fehler && (
+                  <details className="mx-5 mb-2 text-callout text-text-2">
+                    <summary className="focus-ring min-h-8 w-fit cursor-pointer content-center rounded-control py-1 text-accent">
+                      {t.billingWatch.runDetails}
+                    </summary>
+                    <ul className="my-2 list-none space-y-1 p-0">
+                      {discoveryDetails(s.discovery).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
               </li>
             );
           })}
@@ -382,7 +401,11 @@ export function HeuteView() {
   const client = useQueryClient();
   const zeilen = useRef<(HTMLButtonElement | null)[]>([]);
   const sichtbar = eintraege.filter((e) => !nur || e.quelle === nur).slice(0, SICHTBAR);
-  const laedt = staende.some((s) => s.laedt) && eintraege.length === 0;
+  const scope = nur ? staende.filter((s) => s.quelle === nur) : staende;
+  const laedt = scope.some((s) => s.laedt) && sichtbar.length === 0;
+  const fullyRead = scope.every(
+    (s) => !s.fehler && (s.quelle !== "abrechnungen" || s.discovery?.status === "completed"),
+  );
   const vorschlaege = useVorschlaege({
     freigabe: sichtbar.flatMap((e) => (e.freigabe ? [e.freigabe.id] : [])),
     disput: sichtbar.flatMap((e) => (e.disput ? [e.disput.id] : [])),
@@ -477,7 +500,7 @@ export function HeuteView() {
         </Panel>
       )}
 
-      {!laedt && eintraege.length === 0 && (
+      {!laedt && fullyRead && sichtbar.length === 0 && (
         <Panel>
           <EmptyState glyph="check" title={k.erledigt}>
             {k.erledigtText}

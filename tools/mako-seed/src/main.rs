@@ -16,6 +16,7 @@
 
 mod api;
 mod listen;
+mod move_out;
 mod seed;
 mod verify;
 mod world;

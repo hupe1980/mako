@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AblaufAnkuendigung",
+  "type": "object",
+  "properties": {
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "vertrags_nr": {
+      "type": "string"
+    },
+    "kunden_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "vertragsart": {
+      "type": "string"
+    },
+    "vertragsende": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "preisgarantie_bis": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    },
+    "faellig_am": {
+      "type": "string",
+      "format": "date"
+    },
+    "auto_renewal": {
+      "type": "boolean"
+    },
+    "kundentyp": {
+      "type": "string"
+    },
+    "standort_bezeichnung": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "vertrag_id",
+    "vertrags_nr",
+    "kunden_id",
+    "vertragsart",
+    "faellig_am",
+    "auto_renewal",
+    "kundentyp"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.ablauf.ankuendigung.json"
+}

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "request_sha256": "40c56042a5047808293d7fc1e80c5442ee35b6592a9a2add46d4f65f566cef7c",
+  "vorgang": "VORGANG-1",
+  "pid": 55003,
+  "tree": "E_0622",
+  "code": "A02",
+  "scope": "cohort-a",
+  "batch": "batch-a",
+  "revision": "r1",
+  "occurrence": "occ-a"
+}

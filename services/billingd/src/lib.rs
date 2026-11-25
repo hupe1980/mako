@@ -38,6 +38,7 @@ pub mod billing_runs;
 pub mod clients;
 pub mod config;
 pub mod daemon;
+pub mod discovery;
 pub mod einvoice;
 pub mod error;
 pub mod gebuehrenbescheid;

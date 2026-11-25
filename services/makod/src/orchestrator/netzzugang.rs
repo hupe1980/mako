@@ -160,7 +160,8 @@ impl NetzzugangSender {
                 &ce,
                 self.webhook_secret
                     .as_ref()
-                    .map(|s| s.expose_secret().as_bytes()),
+                    .map(|s| mako_service::webhook::signing_key(s.expose_secret()))
+                    .as_deref(),
             )
             .await
             .map_err(|e| EngineError::store(format!("netzzugang webhook: {e}")))?;
@@ -281,7 +282,7 @@ mod tests {
         let sender = NetzzugangSender::new(
             Client::new(),
             Some(format!("http://{addr}/hook")),
-            Some("test-secret".into()),
+            Some("whsec_dGVzdC1zZWNyZXQ=".into()),
             None,
         );
         let msg = outbox_msg(serde_json::to_value(antrag()).expect("serialize"));

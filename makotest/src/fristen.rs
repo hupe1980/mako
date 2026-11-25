@@ -39,7 +39,7 @@ pub(crate) fn fmt_date(d: time::Date) -> PyResult<String> {
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
-fn parse_dt(s: &str) -> PyResult<time::OffsetDateTime> {
+pub(crate) fn parse_dt(s: &str) -> PyResult<time::OffsetDateTime> {
     time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
         .map_err(|e| PyValueError::new_err(format!("invalid RFC 3339 datetime {s:?}: {e}")))
 }
@@ -47,6 +47,13 @@ fn parse_dt(s: &str) -> PyResult<time::OffsetDateTime> {
 fn fmt_dt(t: time::OffsetDateTime) -> PyResult<String> {
     t.format(&time::format_description::well_known::Rfc3339)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Represent the same RFC 3339 instant in the German business timezone.
+#[pyfunction]
+#[must_use = "the result carries the Berlin timestamp or the input error"]
+pub fn in_berlin(instant: &str) -> PyResult<String> {
+    fmt_dt(fristen::in_berlin(parse_dt(instant)?))
 }
 
 // ── Calendar ──────────────────────────────────────────────────────────────────
@@ -501,6 +508,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(berlin_day_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(format_303, m)?)?;
     m.add_function(wrap_pyfunction!(berlin_instant, m)?)?;
+    m.add_function(wrap_pyfunction!(in_berlin, m)?)?;
     m.add_function(wrap_pyfunction!(berlin_mtu_count, m)?)?;
     m.add_function(wrap_pyfunction!(antwort_obligation, m)?)?;
     m.add_function(wrap_pyfunction!(antwort_obligations, m)?)?;

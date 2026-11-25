@@ -35,8 +35,8 @@ pub use kunden::{
     fetch_identitaet_by_sub, fetch_kunde, fetch_kunde_by_sub, fetch_person,
     fetch_rechnungsempfaenger_by_ggv, fetch_rechnungsempfaenger_by_malo,
     fetch_rechnungsempfaenger_by_rahmenvertrag, fetch_zahlungsinformation, list_identitaeten,
-    list_kunden, update_kunde, update_letzter_login, upsert_ggv_betreiber, upsert_identitaet,
-    upsert_kunde, upsert_person, upsert_zahlungsinformation,
+    list_kunden, rechnungsempfaenger_of, update_kunde, update_letzter_login, upsert_ggv_betreiber,
+    upsert_identitaet, upsert_kunde, upsert_person, upsert_zahlungsinformation,
 };
 pub use lifecycle::{
     Anmeldung, AnmeldungenSeite, AutoRenewalRow, ExpiringVertragRow, LOCK_ABLAUF,
@@ -50,25 +50,26 @@ pub use messstellenvertrag::{
 };
 pub use produkte::{
     AnzupassenderPreis, Initiator, MaloProduktSlice, ProduktSlice, malo_slices,
-    offene_preisanpassungen, unangekuendigt_wirksame,
+    malo_slices_for_component, offene_preisanpassungen, unangekuendigt_wirksame,
 };
 pub use sect14a::{
-    Sect14aError, Sect14aInput, Sect14aModul, Sect14aSlice, malo_sect14a, record_sect14a,
+    Sect14aError, Sect14aInput, Sect14aModul, Sect14aSlice, malo_sect14a,
+    malo_sect14a_for_component, record_sect14a, record_sect14a_for_issuer,
 };
 pub use vertraege::{
     BillingCandidateRow, CreateKomponenteInput, CreateRahmenvertragInput,
     CreateVersorgungsvertragInput, InsertedKomponente, InsertedVertrag, KuendigungInput,
     KuendigungResult, KundeAnmeldedaten, PortfolioItemRow, RahmenvertragMaloRow, TarifwechselInput,
-    WiderrufResult, beende_komponenten, close_due_supply, derive_vertrag_status, fetch_komponente,
-    fetch_preisgarantie, fetch_rahmenvertrag, fetch_vertrag, fetch_vertrag_by_malo,
-    insert_rahmenvertrag, insert_versorgungsvertrag, insert_versorgungsvertrag_tx,
-    kuendige_vertrag, kunde_anmeldedaten, list_aktive_malo_ids, list_all_rahmenvertraege,
-    list_billing_candidates, list_komponenten, list_offene_vertraege, list_pending_kuendigungen,
-    list_portfolio_by_kunde, list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos,
-    list_versorgungsvertraege_by_rahmenvertrag, list_vertraege_by_kunde,
+    WiderrufResult, beende_komponenten, billing_candidates_in_window, close_due_supply,
+    derive_vertrag_status, fetch_komponente, fetch_preisgarantie, fetch_rahmenvertrag,
+    fetch_vertrag, fetch_vertrag_by_malo, insert_rahmenvertrag, insert_versorgungsvertrag,
+    insert_versorgungsvertrag_tx, kuendige_vertrag, kunde_anmeldedaten, list_aktive_malo_ids,
+    list_all_rahmenvertraege, list_billing_candidates, list_komponenten, list_offene_vertraege,
+    list_pending_kuendigungen, list_portfolio_by_kunde, list_rahmenvertraege_by_kunde,
+    list_rahmenvertrag_malos, list_versorgungsvertraege_by_rahmenvertrag, list_vertraege_by_kunde,
     list_vertraege_by_referenz, mark_kuendigung_bestaetigt, storniere_vertrag,
-    storniere_vertrag_tx, update_komponente_status, update_vertrag_status, upsert_preisgarantie,
-    widerruf_kuendigung,
+    storniere_vertrag_tx, supply_components, update_komponente_status, update_vertrag_status,
+    upsert_preisgarantie, widerruf_kuendigung,
 };
 
 // ── Row types ─────────────────────────────────────────────────────────────────

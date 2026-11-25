@@ -470,6 +470,7 @@ pub(crate) async fn next_rechnungsnummer(
 /// `id` is a fresh UUID — enqueue is idempotent on it, so a retried request
 /// cannot double-enqueue within its transaction.
 pub(crate) fn rechnung_erstellt_ce(
+    tenant: &str,
     record_id: Uuid,
     malo_id: &str,
     lf_mp_id: &str,
@@ -477,7 +478,7 @@ pub(crate) fn rechnung_erstellt_ce(
     is_correction: bool,
 ) -> mako_service::CloudEvent {
     mako_service::CloudEvent::new(
-        mako_service::source("billingd", lf_mp_id),
+        mako_service::source("billingd", tenant),
         mako_events::billing::RECHNUNG_ERSTELLT,
         malo_id,
         serde_json::json!({
@@ -505,6 +506,7 @@ mod rechnung_erstellt_tests {
     fn data(rechnungstyp: &str, is_correction: bool) -> serde_json::Value {
         let rechnung = serde_json::json!({ "rechnungstyp": rechnungstyp });
         let ce = rechnung_erstellt_ce(
+            "stadtwerke-musterstadt",
             uuid::Uuid::nil(),
             "51238696012",
             "9900357000004",
@@ -517,6 +519,20 @@ mod rechnung_erstellt_tests {
     /// M87 T008a: the event says whether it is a Schlussrechnung, so
     /// accountingd raises the § 40c Abs. 3 EnWG payout item for its Guthaben
     /// from the event alone; the Storno of one is not one.
+    #[test]
+    fn invoice_source_identifies_the_deployment_and_the_data_identifies_the_issuer() {
+        let event = rechnung_erstellt_ce(
+            "tenant-reference",
+            uuid::Uuid::nil(),
+            "51238696012",
+            "9900357000028",
+            &serde_json::json!({}),
+            false,
+        );
+        assert_eq!(event.source, "urn:mako:billingd:tenant:tenant-reference");
+        assert_eq!(event.data["lf_mp_id"], "9900357000028");
+    }
+
     #[test]
     fn the_event_says_whether_it_is_a_schlussrechnung() {
         // The spelling BO4E serialises a Schlussrechnung's `rechnungstyp` as.

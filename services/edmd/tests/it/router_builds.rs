@@ -50,12 +50,14 @@ async fn database() -> Option<(toml::Value, sqlx::PgPool, ContainerAsync<Postgre
         .as_table_mut()
         .expect("an [identity] table")
         .insert("own_mp_id".to_owned(), "9900987654329".into());
-    // The secret `marktd` signs its fan-out with, so the suite can post to
-    // `/webhook` the way `marktd` does.
+    // marktd supplies the subscriber with its encoded Standard Webhooks secret.
     cfg["webhook"]
         .as_table_mut()
         .expect("a [webhook] table")
-        .insert("inbound_secret".to_owned(), WEBHOOK_SECRET.into());
+        .insert(
+            "inbound_secret".to_owned(),
+            "whsec_ZWRtZC1yb3V0ZXItdGVzdC13ZWJob29rLXNlY3JldA==".into(),
+        );
     Some((cfg, pool, pg))
 }
 
@@ -157,7 +159,7 @@ async fn fake_marktd() -> String {
     format!("http://{addr}")
 }
 
-/// The `[webhook] inbound_secret` the suite configures.
+/// Raw signing key corresponding to the configured secret.
 const WEBHOOK_SECRET: &str = "edmd-router-test-webhook-secret";
 
 /// A `de.mako.engine.process.completed` for an MSCONS delivery, signed as `marktd`

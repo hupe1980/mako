@@ -11,7 +11,7 @@ import { createDeskRouter } from "../app/router";
 import { de, type Katalog } from "./de";
 import deQuelle from "./de.ts?raw";
 import { en } from "./en";
-import { katalogErsetzen, setSprache } from "./index";
+import { eintrag, katalogErsetzen, setSprache } from "./index";
 
 async function open(path: string) {
   const router = createDeskRouter(createMemoryHistory({ initialEntries: [path] }));
@@ -27,6 +27,19 @@ async function open(path: string) {
   );
   return router;
 }
+
+it("localizes unknown service codes and keeps a view’s more specific fallback", () => {
+  for (const [language, unknown] of [
+    ["de", "Unbekannt"],
+    ["en", "Unknown"],
+  ] as const) {
+    setSprache(language);
+    expect(eintrag({ running: "ok" }, "running")).toBe("ok");
+    expect(eintrag({}, "new_service_state")).toBe(unknown);
+    expect(eintrag({}, "constructor")).toBe(unknown);
+    expect(eintrag({}, "new_service_state", "specific")).toBe("specific");
+  }
+});
 
 afterEach(() => {
   cleanup();

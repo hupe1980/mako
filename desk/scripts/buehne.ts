@@ -4,6 +4,8 @@
 // other service answer recorded in the shape its mcp.snapshot.json declares.
 // No service has to run, and nothing here measures — it only sets the scene.
 
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { build, preview } from "vite";
@@ -55,28 +57,41 @@ export async function buehne(): Promise<{ base: string; schliessen: () => Promis
   // A production build whatever ran before it in this process: a dev server
   // leaves NODE_ENV at development, and Vite then builds with DEV true.
   process.env.NODE_ENV = "production";
-  await build({ root: desk, mode: "production", logLevel: "error" });
-  // The build is the config file's; the preview takes none of it, so no dev
-  // proxy stands behind the stage and no request can reach a running service.
-  const server = await preview({
-    root: desk,
-    configFile: false,
-    logLevel: "error",
-    preview: { port: 0, host: "127.0.0.1" },
-    plugins: [
-      {
-        name: "aufzeichnungen",
-        configurePreviewServer(s) {
-          s.middlewares.use(aufzeichnungen(FIXTURES));
+  // A second build can replace lazy route chunks while a browser still references them.
+  const outDir = await mkdtemp(resolve(tmpdir(), "mako-desk-preview-"));
+  const removeBuild = () => rm(outDir, { recursive: true, force: true });
+  try {
+    await build({ root: desk, mode: "production", logLevel: "error", build: { outDir } });
+    const server = await preview({
+      root: desk,
+      configFile: false,
+      build: { outDir },
+      logLevel: "error",
+      preview: { port: 0, host: "127.0.0.1" },
+      plugins: [
+        {
+          name: "aufzeichnungen",
+          configurePreviewServer(s) {
+            s.middlewares.use(aufzeichnungen(FIXTURES));
+          },
         },
-      },
-    ],
-  });
-  const base = server.resolvedUrls?.local[0];
-  if (!base) throw new Error("vite preview hat keine Adresse");
-  return {
-    base,
-    schliessen: () =>
-      new Promise<void>((ok, fehler) => server.httpServer.close((e) => (e ? fehler(e) : ok()))),
-  };
+      ],
+    });
+    const close = async () => {
+      try {
+        await new Promise<void>((ok, fail) => server.httpServer.close((e) => (e ? fail(e) : ok())));
+      } finally {
+        await removeBuild();
+      }
+    };
+    const base = server.resolvedUrls?.local[0];
+    if (!base) {
+      await close();
+      throw new Error("vite preview has no local address");
+    }
+    return { base, schliessen: close };
+  } catch (error) {
+    await removeBuild();
+    throw error;
+  }
 }

@@ -66,11 +66,14 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Isolated local review installation. Starts only the review router.
+    #[serde(default)]
+    pub shadow_review: Option<crate::shadow::Settings>,
     pub http: HttpConfig,
     pub database: DatabaseConfig,
     pub identity: IdentityConfig,
-    pub makod: MakodConfig,
-    pub marktd: MarktdConfig,
+    pub makod: Option<MakodConfig>,
+    pub marktd: Option<MarktdConfig>,
     /// `vertragd`, when this deployment runs the contract layer.
     ///
     /// Optional because a pure NB deployment has no contracts of its own. Both

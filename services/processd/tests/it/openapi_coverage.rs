@@ -142,7 +142,20 @@ async fn every_documented_operation_is_served() {
         "an unrouted path answered {status}"
     );
 
-    let doc = serde_json::to_value(processd::openapi::document()).expect("serializes");
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::get("/api/v1/openapi.json")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 2 << 20)
+        .await
+        .unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).expect("served OpenAPI document");
     let paths = doc["paths"].as_object().expect("a paths object");
     let mut operations = 0usize;
     let mut unserved = Vec::new();

@@ -1300,6 +1300,90 @@ pub async fn list_documents(
         .map_err(OutputError::Internal)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubjectReference {
+    pub subject_ref: String,
+}
+
+/// Delivery proof for a selected document, without recipient addresses or relay payloads.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct SubjectEvidence {
+    kind: String,
+    subject_ref: String,
+    deliveries: Vec<ChannelEvidence>,
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct ChannelEvidence {
+    /// PORTAL, EMAIL, POST or ERP.
+    channel: String,
+    /// PENDING, SENT, DELIVERED, FAILED or SUPPRESSED. SENT records a handoff.
+    status: String,
+    #[schema(required = true)]
+    #[serde(with = "time::serde::rfc3339::option")]
+    first_sent_at: Option<time::OffsetDateTime>,
+    #[schema(required = true)]
+    #[serde(with = "time::serde::rfc3339::option")]
+    delivered_at: Option<time::OffsetDateTime>,
+    #[schema(required = true)]
+    #[serde(with = "time::serde::rfc3339::option")]
+    read_at: Option<time::OffsetDateTime>,
+}
+
+/// Read channel evidence by an opaque reference, including separators in invoice numbers.
+#[utoipa::path(
+    get, path = "/api/v1/documents/by-subject/{kind}", tag = "delivery evidence",
+    params(
+        ("kind" = crate::template_store::TemplateKind, Path, description = "Document kind"),
+        ("subject_ref" = String, Query, description = "The issuer's nonempty reference. Send exactly once as a query value.")
+    ),
+    responses(
+        (status = 200, description = "Channel states and their recorded timestamps for this document", body = SubjectEvidence),
+        (status = 400, description = "Invalid kind or reference", body = crate::openapi::DocumentProblem),
+        (status = 401, description = "Access token refused", body = mako_service::ApiError),
+        (status = 403, description = "Cedar read-document refused", body = crate::openapi::DocumentProblem),
+        (status = 404, description = "No document matches the kind and reference in this tenant", body = crate::openapi::DocumentProblem),
+        (status = 500, description = "Internal failure with a correlation identifier", body = crate::openapi::DocumentProblem)
+    )
+)]
+pub async fn get_document_by_reference(
+    claims: Claims,
+    cedar: Extension<Arc<CedarEnforcer>>,
+    pool: Extension<PgPool>,
+    cfg: Extension<Arc<OutputdConfig>>,
+    Path(kind): Path<String>,
+    query: Result<Query<SubjectReference>, axum::extract::rejection::QueryRejection>,
+) -> OutputResult<Json<SubjectEvidence>> {
+    let reference = query
+        .ok()
+        .map(|Query(q)| q.subject_ref)
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            OutputError::bad_request(
+                "SUBJECT_REF_REQUIRED",
+                "supply exactly one nonempty subject_ref query parameter",
+            )
+        })?;
+    let Json(document) =
+        get_document_by_subject(claims, cedar, pool, cfg, Path((kind, reference))).await?;
+    Ok(Json(SubjectEvidence {
+        kind: document.document.kind,
+        subject_ref: document.document.subject_ref,
+        deliveries: document
+            .deliveries
+            .into_iter()
+            .map(|d| ChannelEvidence {
+                channel: d.channel,
+                status: d.status,
+                first_sent_at: d.first_sent_at,
+                delivered_at: d.delivered_at,
+                read_at: d.read_at,
+            })
+            .collect(),
+    }))
+}
+
 /// `GET /api/v1/documents/by-subject/{kind}/{subject_ref}` — the document
 /// a `(kind, subject_ref)` was issued as, with every delivery track.
 ///
@@ -1312,7 +1396,7 @@ pub async fn get_document_by_subject(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<OutputdConfig>>,
     Path((kind, subject_ref)): Path<(String, String)>,
-) -> OutputResult<impl IntoResponse> {
+) -> OutputResult<Json<crate::delivery::IssuedDocument>> {
     authorize(&cedar, &claims, "read-document", &cfg.tenant)?;
     let kind = parse_kind(&kind)?;
     crate::delivery::store::by_subject(&pool, &cfg.tenant, kind.as_str(), &subject_ref)

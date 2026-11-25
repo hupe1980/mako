@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import billingWatch from "../../fixtures/billing-watch.json";
 import { RolleProvider } from "../app/rollen";
 import { createDeskRouter } from "../app/router";
 
@@ -149,6 +150,96 @@ describe("the Arbeitsvorrat on Heute", () => {
     fireEvent.click(within(row(list, /^Freigaben/)).getByRole("link"));
     await waitFor(() => expect(router.state.location.pathname).toBe("/freigaben"));
   });
+
+  it.each([
+    [null, "Noch kein Lauf erfasst", false],
+    [
+      { ...billingWatch.discovery, status: "running", candidate_count: null },
+      "Die Ermittlung läuft",
+      false,
+    ],
+    [
+      {
+        ...billingWatch.discovery,
+        status: "failed",
+        candidate_count: null,
+        error_code: "candidate_source_unavailable",
+      },
+      "konnte den Bestand nicht liefern",
+      false,
+    ],
+    [
+      {
+        ...billingWatch.discovery,
+        status: "failed",
+        candidate_count: null,
+        error_code: "sweep_interrupted",
+        next_attempt_at: null,
+      },
+      "wurde unterbrochen",
+      false,
+    ],
+    [
+      {
+        ...billingWatch.discovery,
+        status: "failed",
+        candidate_count: null,
+        error_code: "evidence_write_failed",
+      },
+      "nicht vollständig speichern",
+      false,
+    ],
+    [
+      { ...billingWatch.discovery, candidate_count: 0 },
+      "Keine abzurechnenden Vertragskomponenten",
+      true,
+    ],
+    [billingWatch.discovery, "Ermittelte Vertragskomponenten: 2", true],
+  ] as const)(
+    "states the service's discovery outcome, with a zero only after completion",
+    async (discovery, title, counted) => {
+      localStorage.setItem("mako-desk.rolle", "lieferant");
+      const periods = discovery?.candidate_count === 2 ? billingWatch.periods : [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url.startsWith("/svc/agentd/")) return Response.json([]);
+          if (!init?.body) return Response.json({});
+          const m = JSON.parse(String(init.body));
+          const structuredContent =
+            m.method === "tools/call" && m.params.name === "list_unbilled_periods"
+              ? { discovery, periods, count: periods.length, saturated: false }
+              : {};
+          return Response.json(
+            { jsonrpc: "2.0", id: m.id, result: { structuredContent } },
+            { headers: { "mcp-session-id": "s" } },
+          );
+        }),
+      );
+      await open("/heute?quelle=abrechnungen");
+      const list = await screen.findByRole("list", { name: "Arbeitsvorrat" });
+      const billing = row(list, /^Offene Abrechnungen/);
+      await waitFor(() => expect(within(billing).getByRole("status").textContent).toContain(title));
+      expect(!!within(billing).queryByText(String(periods.length))).toBe(counted);
+      if (periods.length) {
+        for (const p of periods)
+          expect(await screen.findByText(new RegExp(`Lieferant ${p.lf_mp_id}`))).toBeTruthy();
+      } else if (!counted) {
+        expect(screen.queryByText(/^Alles erledigt/)).toBeNull();
+      }
+      if (discovery) {
+        fireEvent.click(within(billing).getByText("Laufdetails"));
+        expect(
+          within(billing).getByText(
+            discovery.next_attempt_at
+              ? /Nächster geplanter Versuch: 04.11.2026, 05:00/
+              : "Kein automatischer Versuch geplant.",
+          ),
+        ).toBeTruthy();
+      }
+      localStorage.removeItem("mako-desk.rolle");
+    },
+  );
 
   it("lists the Lieferant's unbilled periods by the date the service names, with its days left", async () => {
     localStorage.setItem("mako-desk.rolle", "lieferant");

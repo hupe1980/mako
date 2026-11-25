@@ -11,11 +11,11 @@ exercise any MaKo implementation, not only
 |---|---|
 | **Package** | `pip install makotest` (no runtime dependencies); `makotest[hypothesis]` adds property-based strategies |
 | **Build** | PyO3 extension over mako's Rust crates, built with maturin; one abi3 wheel for Python ≥ 3.11 |
-| **Rust core** | `edi-energy` (EDIFACT, MIG/AHB validation), `rubo4e` (check digits), `mako-fristen` (Werktage, Fristen), `mako-pruefung` (Antwortcodes), `mako-events` (CloudEvent types) |
+| **Rust core** | `edi-energy` (EDIFACT, MIG/AHB validation), `rubo4e` (check digits), `mako-fristen` (Werktage, Fristen), `mako-pruefung` (Antwortcodes and the NB participation check), `mako-events` (CloudEvent types) |
 | **pytest** | plugin via `pytest11`: simulator, clock and seed fixtures, `@pytest.mark.regulatory` |
 | **Fixtures** | `nb_sim`, `biko_sim`, `mgv_sim`, `imsys_sim`, `epex`, `lastgang`, `frozen_clock`, `makotest_seed`, `makotest_on`, `mako_endpoint` |
 | **Options** | `--makotest-on ISO_DATE`, `--makotest-seed N`, `--mako-endpoint URL` |
-| **CLI** | `makotest validate`, `frist`, `id`, `pids`, `codes`, … |
+| **CLI** | `makotest validate`, `frist`, `id`, `pids`, `codes`, `shadow reconcile`, `shadow rehearse`, … |
 
 ## Example
 
@@ -41,6 +41,34 @@ def test_nb_bestaetigt(nb_sim, anmeldung):
 Generators are seeded, clocks injected and the format version is an argument,
 so two runs produce byte-identical EDIFACT. `AssertionError` means the system
 under test is wrong; `ValueError` means the test is.
+
+## Reconcile a shadow capture
+
+From the repository root, run `just test-makotest` to install the development build, then compare the two independently prepared inputs and read the mirror on disk.
+
+```sh
+capture=makotest/tests/fixtures/shadow
+makotest/.venv/bin/makotest shadow reconcile --journal "$capture/journal.json" \
+  --inventory "$capture/inventory.json" --mirror-root "$capture/mirror"
+```
+
+The fixture contains two synthetic Strom Anmeldungen received by an NB and a closed outbound interval with zero traffic. Exit 0 means the capture is complete or confirmed empty. Exit 1 identifies differences in sealed inputs. Exit 2 means coverage could not be established. Read `eligible_for_comparison` before comparing business outcomes. The report contains fingerprints, counts and reason codes and can be redirected to a file **outside** the mirror. [Capture format and recovery steps](https://hupe1980.github.io/mako/docs/reference/makotest/#reconcile-a-shadow-capture)
+
+Replay one occurrence against the independent expected reply. The synthetic fixture yields two eligible Anmeldungen, one matching response and one unassessed occurrence.
+
+```sh
+capture=makotest/tests/fixtures/shadow
+makotest/.venv/bin/makotest shadow rehearse \
+  --journal "$capture/journal.json" --inventory "$capture/inventory.json" \
+  --mirror-root "$capture/mirror" --coverage "$capture/reports/complete.json" \
+  --case "$capture/case.json" --expected "$capture/expected.json"
+```
+
+Add `--emit summary` to see the counts and the two answers. With `makod` on `PATH`, add `--makod-workspace "$(mktemp -d)"` to compare a reply from the daemon’s own workflow and capture its outbox locally.
+
+For the isolated review installation, add `--emit review --review-nb 9900357000003` to the daemon command and redirect stdout to a private file outside the mirror. Every inbound envelope must address that NB. Use `--also CASE EXPECTED [OBSERVATION]` for each additional assessment. Exit 1 produces a reviewable difference. Exit 2 withholds the private file contents. [Review configuration](https://hupe1980.github.io/mako/docs/services/processd/#isolated-shadow-review)
+
+Compare a response present on only one side with `makotest shadow pair --incumbent DIR --shadow DIR --case FILE`. Both archives must cover the same inbound and outbound window. Assess an ESA invoice using `makotest shadow invoice --invoice FILE --reference FILE`. The bundled settlement example returns EUR 13.95 for the position and REMADV 33001. [Capture and invoice contracts](https://hupe1980.github.io/mako/docs/reference/makotest/#compare-an-esa-invoice)
 
 ## Run
 

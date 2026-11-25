@@ -5,7 +5,7 @@ weight = 3
 
 [extra]
 translated_from = "content/docs/guide/desk/index.md"
-source_sha256 = "c945d93ae644f528e9e9c4889a4a8c414f5247c98e1015e830844c67aff44e5a"
+source_sha256 = "d2a49f36b8072025e5e6c76d0d15b321e401c2991dc3601c778b0e0f820b2537"
 
 +++
 **mako Desk** ist deine Arbeitsoberfläche im Betrieb. Er liest die MCP-Tools
@@ -29,12 +29,13 @@ aufgezeichneten Antworten.
 
 In Produktion ist der Desk das Image `mako-desk` — das statische Bundle auf Port
 8080 — hinter [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) als
-Gateway. Der Browser spricht mit einem einzigen Origin und hält kein
-Dienst-Token: Das Gateway meldet die Person per OIDC an, liefert den Desk aus
-und leitet `/svc/<service>/` an jeden Dienst weiter, den der Desk liest —
-makod, processd, vertragd, invoicd, billingd, edmd, netzbilanzd und agentd —,
-mit dem Access-Token der Person als `Authorization: Bearer`.
-`desk/deploy/gateway.yaml` ist das Routing des Gateways, bereit zum Anpassen.
+Gateway. Der Browser verwendet einen Origin. Das Gateway meldet dich über OIDC
+an und leitet die Anfragen mit deinem Access-Token an die Dienstpfade aus
+`desk/deploy/gateway.yaml` weiter. Für das Sitzungscookie setzt
+`desk/deploy/oauth2-proxy.cfg` Secure, HttpOnly und SameSite=Strict. Beim
+Abmelden öffnet der Desk `/oauth2/sign_out`. Wie lange deine Sitzung gilt und
+wie du beim Identity-Provider abgemeldet wirst, hängt von der Konfiguration
+deines Betriebs ab. [Abmeldung bei OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/features/endpoints/#sign-out)
 
 Jeder Dienst prüft dieses Token wie jedes andere, deshalb muss seine
 `[oidc] audience` im `aud` des Tokens stehen — über einen Audience-Mapper beim
@@ -50,6 +51,8 @@ Einstellungs-Link eines Befunds öffnet (Standard
 `/usr/share/nginx/html/config.json`, um auf ein Handbuch zu verweisen, das du
 selbst betreibst; fehlt die Datei oder ist der Wert keine `https:`- oder
 Same-Origin-Adresse, bleibt der Standard.
+
+Das Gateway leitet den Nachweis zur ausgewählten Rechnung mit deinem Token an die Dokumentenausgabe weiter. Für eine Installation mit `shadowReview` aktivierst du außerdem den auskommentierten Eintrag `shadowreview` in `desk/deploy/gateway.yaml` und setzt seine URI auf die isolierte Prüfinstallation. Dort landen das Lesen des Prüflaufs und das Festhalten einer Entscheidung. [Einrichtung des Schattenbetriebs](@/docs/services/processd.md#isolated-shadow-review)
 
 ## Ein Prozess über seinen Geschäftsschlüssel
 
@@ -466,13 +469,11 @@ kein Vorschlag gezeigt.
 
 Ein Korrekturbedarf öffnet nichts: Der Desk hat keine Ansicht für Netzentgelte.
 
-Ein **Klärfall** ist ein Fall je Ursache, den die Prozessüberwachung eröffnet
-hat — eine abgelehnte Nachricht, ein Dead Letter, eine versäumte Frist. Seine
-Zeile nennt die Ursache im Wortlaut der Liste, die den Code definiert, was zu
-tun ist („Korrigieren und neu senden", „Selbst klären") und wie oft er
-auftrat; fällig ist er, wann die Prozessüberwachung es sagt. „Warum?" erklärt
-ihn nur — geschlossen wird der Fall durch die Aktion, nie durch den
-Assistenten.
+Ein **Klärfall** bündelt die Meldungen eines Mandanten zur selben Nachricht
+desselben Marktpartners. Du siehst die hinterlegte Ursache, die vorgeschlagene
+Aktion und wie oft der Fall aufgetreten ist. Eine APERAK, ein Dead Letter oder
+eine versäumte Frist können einen Fall eröffnen. Öffne die Zeile, um die
+zuständige Marktrolle zu sehen und den nächsten Schritt zu wählen.
 
 Im **Überblick** zählt „Ohne Eingriff" die Prozesse einer PID, die in diesem
 Monat ohne den Handgriff einer Person endeten, so wie die Prozessüberwachung
@@ -514,6 +515,8 @@ würde.
 
 [![Heute als Lieferant: die Lage, dann die Einträge in Frist-Bändern, ein Hinweis des Assistenten unter dem Eintrag, den er betrifft](heute-light.png)](heute-light.png)
 [![Heute als Lieferant: die Lage, dann die Einträge in Frist-Bändern, ein Hinweis des Assistenten unter dem Eintrag, den er betrifft](heute-dark.png)](heute-dark.png)
+
+Als Lieferant siehst du unter **Offene Abrechnungen**, ob die Vertragsverwaltung die abzurechnenden Komponenten ermitteln konnte. Öffne **Laufdetails** für Quelle, Suchfenster des Lieferendes, Laufzeiten und nächsten geplanten Versuch. Ein erfolgreicher Lauf mit leerer Liste meldet ausdrücklich, dass er keine Komponenten gefunden hat. Bei einem Ausfall bleibt der Umfang unbekannt. Erfasste offene Zeiträume bleiben mit dem jeweiligen Lieferanten sichtbar, auch wenn MaLo und Daten übereinstimmen. Im **Überblick** siehst du je Lieferant, wie viele Rechnungen pünktlich und wie viele verspätet ausgestellt wurden.
 
 ## Eine Marktlokation: Versorgung, Messung, Konto
 
@@ -563,6 +566,8 @@ der Regel dahinter und der Rechnung. Nichts davon rechnet der Desk.
 [![Nachrechnen: zuerst das Ergebnis, dann jede Position mit ihren Quellen](nachrechnen-light.png)](nachrechnen-light.png)
 [![Nachrechnen: zuerst das Ergebnis, dann jede Position mit ihren Quellen](nachrechnen-dark.png)](nachrechnen-dark.png)
 
+In der Rolle Lieferant zeigt dir **Rechnungsstellung** den erfassten Ausstellungszeitpunkt. Unter **Bereitstellung beim Kunden** findest du die Zustellnachweise zur ausgewählten Rechnung. Veröffentlichung und Öffnung im Kundenportal sowie eine bestätigte Zustellung haben eigene Zeitpunkte. Bei einer Übergabe an den Versanddienst, einem unterdrückten Versand oder einer fehlgeschlagenen Zustellung bleibt die Bereitstellung offen, solange kein anderer Kanal sie bestätigt.
+
 ## Gegenparteien
 
 **Gegenparteien** listet jeden Marktpartner, den die Prozessüberwachung
@@ -579,13 +584,24 @@ CSV herunter.
 
 ## Klärfälle, Zahlungen, Anlagen
 
-Ein **Klärfall** in Heute öffnet seine eigene Seite: die Ursache im Wortlaut
-der Liste, die ihren Code definiert, woher er kommt, wann er fällig ist, und
-sein Verlauf. Schlägt die Prozessüberwachung eine Korrektur vor, ist die eine
-Aktion „Korrigieren & senden" — ein anderer erlaubter Befehl verlangt eine
-Begründung —, sonst „Erledigt" mit Begründung oder „Zuweisen". Jede Aktion
-wird wie jede Entscheidung zum Rückgängigmachen gehalten, und eine Ablehnung
-steht in Worten da.
+Öffne den **Klärfall** in Heute. Oben siehst du die Ursache mit ihrer
+Codeliste und die zuständige Rolle. Fehlt der Termin, steht dort „Frist
+unbekannt“. Die Prozessüberwachung schlägt den nächsten Schritt vor. Bietet
+sie eine Korrektur an, wähle „Korrigieren & senden“. Für eine andere erlaubte
+Antwort gib eine Begründung ein. Den technischen Hinweis und die
+Befehlskennungen findest du unter „Aktionsdetails“. Im Verlauf steht der
+jeweilige Befehl unter „Befehlsdetails“. Bei einem Fall ohne Korrektur
+kannst du ihn übernehmen oder mit Begründung abschließen.
+
+Mit „Rückgängig“ innerhalb von fünf Sekunden nimmst du die Entscheidung vor
+dem Versand zurück. Der Fokus kehrt zur Aktion zurück. Bei einer Ablehnung
+bleibt deine Begründung erhalten und der Fokus springt zu „Details“. Meldet
+die Prozessüberwachung einen abgeschlossenen Fall, aktualisiert der Desk den
+Fallstatus und bietet keine weitere Entscheidung an. Geht die
+Antwort verloren, bleibt das Ergebnis unbekannt. Beim nächsten Laden liest
+der Desk den Fall erneut und verlinkt seinen aktuellen Status und Verlauf.
+Dabei sendet er keine Entscheidung. Auch eine andere Person kann den
+Fallstatus geändert haben.
 
 **Zahlungen** listet für den Lieferanten jede Zahlung, die kein Konto
 genommen hat — jede mit dem Konto, das die Kundenkonten vorschlagen, und einer
@@ -799,19 +815,22 @@ aufrechter Text hinter einer dünnen violetten Linie und seinem Funkeln.
 `desk/src/design/tokens.test.ts` lehnt einen zweiten Akzent ab und hält jede
 Textfarbe auf jeder Fläche, hell und dunkel, bei WCAG AA.
 
-Bietet ein Dienst eines der Werkzeuge, gegen die der Desk erzeugt wurde, mit
-einem anderen Schema an, nennt ein Banner oben diesen Dienst, statt dass eine
-Ansicht später scheitert. Bis der Desk wieder zu diesem Dienst passt, bietet
-er keine Entscheidung für ihn an, und er prüft erneut, sobald das Fenster den
-Fokus zurückbekommt.
+Weicht die Schnittstelle eines Dienstes vom Schema des Desk ab, nennt ein
+Banner den Dienst. In der Prozess-, Freigabe- und Klärfallansicht kannst du
+die betroffene Prozessentscheidung dann nicht auslösen. Sobald das Fenster
+wieder den Fokus bekommt, prüft der Desk die Schnittstellen erneut.
 
 Eine Entscheidung verlässt den Desk mit einem `Idempotency-Key`, sodass eine
 unterwegs wiederholte Anfrage beim Dienst eine Entscheidung bleibt. Eine, die
 beim Schließen des Tabs gesendet wurde — ihr Halten bei `pagehide`
 abgeschlossen —, bekommt ihre Antwort vielleicht nie zu sehen; der nächste
 Aufruf zeigt sie unter „Beim letzten Mal gesendet" mit dem, was der Dienst
-daraus gemacht hat (bei einer Freigabe der Ausgang aus der
-Prozessüberwachung), bis du bestätigst, dass du es gesehen hast.
+daraus gemacht hat, bis du den Hinweis bestätigst. Bei einer Freigabe siehst
+du den hinterlegten Ausgang. Bei einem LF-Klärfall zeigt dir der Desk in der
+ursprünglichen Rolle den aktuellen Fallstatus. Bei Rechnungsdisput,
+Prüfposten, geparkter Buchung und gehaltener Rechnung steht dort, dass das
+Ergebnis der Anfrage unbekannt ist. Prüfe den Eintrag in der jeweiligen
+Liste. Beim Öffnen und Bestätigen des Hinweises sendest du keine Entscheidung.
 
 Hat der Assistent für die Freigabe auf einer Prozessseite einen Vorschlag
 vorbereitet, zeigt ihn die Entscheidungsleiste — gekennzeichnet, mit dem

@@ -1,0 +1,51 @@
+{
+  "batches": [
+    {
+      "batch": "2679c8191031928a343490b35007519d11a4f8991626e93d642d9f9799a58cb4",
+      "direction": "inbound",
+      "end": "2026-11-01T01:00:00Z",
+      "expected": 2,
+      "observed": 2,
+      "start": "2026-11-01T00:00:00Z",
+      "status": "complete"
+    },
+    {
+      "batch": "85e085f4c9672a55dff965837ee6237157d58e4d9016898fb52299ffc6a97ec7",
+      "direction": "outbound",
+      "end": "2026-11-01T01:00:00Z",
+      "expected": 0,
+      "observed": 0,
+      "start": "2026-11-01T00:00:00Z",
+      "status": "confirmed_empty"
+    }
+  ],
+  "counts": {
+    "changed": 0,
+    "confirmed_empty_batches": 1,
+    "duplicate": 0,
+    "expected": 2,
+    "expected_identities": 2,
+    "extra": 0,
+    "missing": 0,
+    "observed": 2,
+    "observed_identities": 2
+  },
+  "directions": [
+    "inbound",
+    "outbound"
+  ],
+  "eligible_for_comparison": true,
+  "eligible_inbound": 2,
+  "end": "2026-11-01T01:00:00Z",
+  "fingerprints": {
+    "inventory": "2d25d6eaf1ab79d135d8fb196ae44b6f0dcbbc15402e3e133d727b62d12cadb0",
+    "journal": "b32dea0ca336a24a1e7af61b5fc31db08854fbf325282ea3d15f3dfbe66e46d5",
+    "observed": "f498b6f3ec3d60a29c8f3bb954873d94f1558a23e7c9eb3f7a5bc272c677f502"
+  },
+  "issues": [],
+  "reason_codes": [],
+  "scope_fingerprint": "49b1c16fef32bbb880b4a665ecdefb7d7d6bd585276ac20399973f69bde8f3d5",
+  "start": "2026-11-01T00:00:00Z",
+  "status": "complete",
+  "version": 1
+}

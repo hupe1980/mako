@@ -217,6 +217,21 @@ export type NetzbilanzdDeliveryFilter = "all" | "pending" | "delivered" | "faile
  */
 export type NetzbilanzdDeliveryStatus = "pending" | "delivered" | "dead_lettered";
 /**
+ * Which document a template renders.
+ *
+ * Every kind shares one store and one engine, deliberately: an operator
+ * maintaining two template systems for one brand is how a logo change reaches
+ * the invoice and not the Mahnung.
+ */
+export type OutputdTemplateKind =
+  | "INVOICE"
+  | "MAHNUNG"
+  | "PREISANPASSUNG"
+  | "GEBUEHRENBESCHEID"
+  | "VERTRAGSZUSAMMENFASSUNG"
+  | "VERTRAGSBESTAETIGUNG"
+  | "WIDERRUFSBESTAETIGUNG";
+/**
  * Whom the visit is put down to: `customer`, `contractor`, `operator` or
  * `nobody`. Kept on the order and in its events; the Lieferant asks why.
  */
@@ -3637,7 +3652,7 @@ export interface Api {
               [k: string]: unknown | undefined;
             };
             content: {
-              "application/json": unknown;
+              "application/json": BillingdDeadlineSummary;
             };
           };
           403: {
@@ -3771,6 +3786,70 @@ export interface Api {
         };
       };
     };
+    "/svc/billingd/api/v1/billing/runs/sweep": {
+      post: {
+        parameters: {
+          header: {
+            "Idempotency-Key": string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": BillingdSweepRequest;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdSweepReceipt;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          422: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+          502: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": BillingdApiError;
+            };
+          };
+        };
+      };
+    };
     "/svc/billingd/api/v1/billing/sammelrechnung/{rahmenvertrag_id}": {
       post: {
         parameters: {
@@ -3849,7 +3928,7 @@ export interface Api {
               [k: string]: unknown | undefined;
             };
             content: {
-              "application/json": unknown;
+              "application/json": BillingdUnbilledPeriods;
             };
           };
           403: {
@@ -18578,6 +18657,68 @@ export interface Api {
         };
       };
     };
+    "/svc/outputd/api/v1/documents/by-subject/{kind}": {
+      get: {
+        parameters: {
+          path: {
+            kind: OutputdTemplateKind;
+          };
+          query: {
+            subject_ref: string;
+          };
+        };
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": OutputdSubjectEvidence;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": OutputdDocumentProblem;
+            };
+          };
+          401: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": OutputdApiError;
+            };
+          };
+          403: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": OutputdDocumentProblem;
+            };
+          };
+          404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": OutputdDocumentProblem;
+            };
+          };
+          500: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": OutputdDocumentProblem;
+            };
+          };
+        };
+      };
+    };
     "/svc/portald/api/v1/portal/{malo_id}/balance": {
       get: {
         parameters: {
@@ -20592,6 +20733,47 @@ export interface Api {
             };
             content: {
               "application/json": ProcessdApiError;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/shadow/review": {
+      get: {
+        parameters: {};
+        responses: {
+          200: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": ProcessdReviewResult;
+            };
+          };
+        };
+      };
+    };
+    "/svc/processd/api/v1/shadow/review/{id}/resolve": {
+      post: {
+        parameters: {
+          path: {
+            id: string;
+          };
+        };
+        requestBody: {
+          content: {
+            "application/json": ProcessdResolve;
+          };
+        };
+        responses: {
+          204: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+          };
+          412: {
+            headers: {
+              [k: string]: unknown | undefined;
             };
           };
         };
@@ -24334,6 +24516,7 @@ export interface Api {
             malo_id: string;
           };
           query?: {
+            lf_mp_id?: string;
             as_of?: BusinessDate;
             from?: BusinessDate;
             to?: BusinessDate;
@@ -24346,6 +24529,14 @@ export interface Api {
             };
             content: {
               "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
             };
           };
           401: {
@@ -24365,6 +24556,14 @@ export interface Api {
             };
           };
           404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          409: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -24390,6 +24589,7 @@ export interface Api {
             malo_id: string;
           };
           query: {
+            lf_mp_id?: string;
             from: BusinessDate;
             to: BusinessDate;
           };
@@ -24401,6 +24601,14 @@ export interface Api {
             };
             content: {
               "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
             };
           };
           401: {
@@ -24427,6 +24635,14 @@ export interface Api {
               "application/json": VertragdApiError;
             };
           };
+          409: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
           422: {
             headers: {
               [k: string]: unknown | undefined;
@@ -24441,6 +24657,9 @@ export interface Api {
         parameters: {
           path: {
             malo_id: string;
+          };
+          query?: {
+            lf_mp_id?: string;
           };
         };
         requestBody: {
@@ -24474,6 +24693,14 @@ export interface Api {
             };
           };
           404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          409: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -25024,7 +25251,12 @@ export interface Api {
     };
     "/svc/vertragd/api/v1/vertraege/billing-candidates": {
       get: {
-        parameters: {};
+        parameters: {
+          query?: {
+            ended_from?: BusinessDate;
+            ended_through?: BusinessDate;
+          };
+        };
         responses: {
           200: {
             headers: {
@@ -25060,6 +25292,9 @@ export interface Api {
             malo_id: string;
           };
           query?: {
+            lf_mp_id?: string;
+            from?: BusinessDate;
+            to?: BusinessDate;
             stichtag?: string;
             kunde?: string;
           };
@@ -25071,6 +25306,14 @@ export interface Api {
             };
             content: {
               "application/json": unknown;
+            };
+          };
+          400: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
             };
           };
           401: {
@@ -25090,6 +25333,14 @@ export interface Api {
             };
           };
           404: {
+            headers: {
+              [k: string]: unknown | undefined;
+            };
+            content: {
+              "application/json": VertragdApiError;
+            };
+          };
+          409: {
             headers: {
               [k: string]: unknown | undefined;
             };
@@ -26126,9 +26377,12 @@ export interface Api {
       "agentd.RunRequest": AgentdRunRequest;
       "billingd.ApiError": BillingdApiError;
       "billingd.CorrectionRequest": BillingdCorrectionRequest;
+      "billingd.DeadlineSummary": BillingdDeadlineSummary;
+      "billingd.DeadlineSummaryRow": BillingdDeadlineSummaryRow;
       "billingd.Delivery": BillingdDelivery;
       "billingd.DeliveryFilter": BillingdDeliveryFilter;
       "billingd.DeliveryStatus": BillingdDeliveryStatus2;
+      "billingd.Discovery": BillingdDiscovery;
       "billingd.Endpoint": BillingdEndpoint1;
       "billingd.EndpointCreate": BillingdEndpointCreate;
       "billingd.EndpointCreated": BillingdEndpointCreated;
@@ -26143,8 +26397,12 @@ export interface Api {
       "billingd.Replayed": BillingdReplayed;
       "billingd.RotateSecret": BillingdRotateSecret;
       "billingd.SecretRotated": BillingdSecretRotated;
+      "billingd.SweepReceipt": BillingdSweepReceipt;
+      "billingd.SweepRequest": BillingdSweepRequest;
       "billingd.TestDelivery": BillingdTestDelivery;
       "billingd.TotalEstimate": BillingdTotalEstimate3;
+      "billingd.UnbilledPeriodRow": BillingdUnbilledPeriodRow;
+      "billingd.UnbilledPeriods": BillingdUnbilledPeriods;
       "billingd.VerifyTokenBody": BillingdVerifyTokenBody;
       "edmd.Abdeckung": EdmdAbdeckung;
       "edmd.Ablesehindernis": EdmdAblesehindernis1;
@@ -26347,13 +26605,24 @@ export interface Api {
       "netzbilanzd.SecretRotated": NetzbilanzdSecretRotated;
       "netzbilanzd.TestDelivery": NetzbilanzdTestDelivery;
       "netzbilanzd.TotalEstimate": NetzbilanzdTotalEstimate3;
+      "outputd.ApiError": OutputdApiError;
+      "outputd.ChannelEvidence": OutputdChannelEvidence;
+      "outputd.DocumentProblem": OutputdDocumentProblem;
+      "outputd.DocumentProblemDetail": OutputdDocumentProblemDetail;
+      "outputd.SubjectEvidence": OutputdSubjectEvidence;
+      "outputd.TemplateKind": OutputdTemplateKind;
       "portald.ApiError": PortaldApiError;
       "portald.PortalKontaktRequest": PortaldPortalKontaktRequest;
       "portald.PortalKuendigungRequest": PortaldPortalKuendigungRequest;
       "portald.PortalSepaRequest": PortaldPortalSepaRequest;
       "portald.PortalTarifwechselRequest": PortaldPortalTarifwechselRequest;
+      "processd.Answer": ProcessdAnswer;
       "processd.ApiError": ProcessdApiError;
+      "processd.Assessment": ProcessdAssessment;
       "processd.AssignKlaerfallRequest": ProcessdAssignKlaerfallRequest;
+      "processd.Cohort": ProcessdCohort;
+      "processd.Coverage": ProcessdCoverage;
+      "processd.Deadline": ProcessdDeadline;
       "processd.Delivery": ProcessdDelivery;
       "processd.DeliveryFilter": ProcessdDeliveryFilter;
       "processd.DeliveryStatus": ProcessdDeliveryStatus2;
@@ -26369,14 +26638,18 @@ export interface Api {
       "processd.KuendigungGasRequest": ProcessdKuendigungGasRequest;
       "processd.KuendigungRequest": ProcessdKuendigungRequest;
       "processd.NeuanlageIdentifikationRequest": ProcessdNeuanlageIdentifikationRequest;
+      "processd.Occurrence": ProcessdOccurrence;
       "processd.Owner": ProcessdOwner2;
       "processd.Page_Delivery": ProcessdPageDelivery;
       "processd.Page_Endpoint": ProcessdPageEndpoint;
       "processd.Page_Value": ProcessdPageValue;
       "processd.ReplayWindow": ProcessdReplayWindow;
       "processd.Replayed": ProcessdReplayed;
+      "processd.Resolution": ProcessdResolution;
+      "processd.Resolve": ProcessdResolve;
       "processd.ResolveKlaerfallRequest": ProcessdResolveKlaerfallRequest;
       "processd.Responsible": ProcessdResponsible1;
+      "processd.ReviewResult": ProcessdReviewResult;
       "processd.RotateSecret": ProcessdRotateSecret;
       "processd.SecretRotated": ProcessdSecretRotated;
       "processd.TestDelivery": ProcessdTestDelivery;
@@ -27539,6 +27812,53 @@ export interface BillingdProblemDetail {
   service?: string | null;
 }
 /**
+ * `summarize_billing_deadlines`' answer.
+ */
+export interface BillingdDeadlineSummary {
+  discovery?: null | BillingdDiscovery;
+  /**
+   * One row per Lieferant (MP-ID).
+   */
+  lieferanten: BillingdDeadlineSummaryRow[];
+}
+export interface BillingdDiscovery {
+  business_date: BusinessDate;
+  candidate_count?: number | null;
+  ended_from: BusinessDate;
+  ended_through: BusinessDate;
+  error_code?: string | null;
+  finished_at?: Instant | null;
+  last_failure_at?: Instant | null;
+  next_attempt_at?: Instant | null;
+  origin: string;
+  run_id: string;
+  source: string;
+  started_at: Instant;
+  status: string;
+}
+/**
+ * One Lieferant's § 40c Abs. 2 EnWG standing — the Überblick tile.
+ */
+export interface BillingdDeadlineSummaryRow {
+  /**
+   * Invoices issued after their `due_on`.
+   */
+  issued_late: number;
+  /**
+   * Invoices issued on or before their `due_on` (Berlin date of issue).
+   */
+  issued_on_time: number;
+  lf_mp_id: string;
+  /**
+   * Open unbilled periods past their deadline.
+   */
+  overdue: number;
+  /**
+   * Open unbilled periods still inside their deadline.
+   */
+  owed: number;
+}
+/**
  * The body of [`post_public_nachrechnung`].
  */
 export interface BillingdVerifyTokenBody {
@@ -27546,6 +27866,90 @@ export interface BillingdVerifyTokenBody {
    * The verify token printed on the invoice.
    */
   token: string;
+}
+/**
+ * The run uses the installation's clock and policy. Unknown options are refused.
+ */
+export interface BillingdSweepRequest {}
+/**
+ * Receipt of a committed manual run. Its evidence is available in the billing watch.
+ */
+export interface BillingdSweepReceipt {
+  run_id: string;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface BillingdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
+ * `list_unbilled_periods`' answer.
+ */
+export interface BillingdUnbilledPeriods {
+  /**
+   * How many periods `periods` holds.
+   */
+  count: number;
+  discovery?: null | BillingdDiscovery;
+  /**
+   * The earliest `due_on` first.
+   */
+  periods: BillingdUnbilledPeriodRow[];
+  /**
+   * At least `limit` periods matched: more may be waiting than were listed.
+   */
+  saturated: boolean;
+}
+/**
+ * One recorded unbilled period, as the Desk's Heute and the MCP tool read it.
+ */
+export interface BillingdUnbilledPeriodRow {
+  attempts: number;
+  /**
+   * Days from today (Europe/Berlin) to `due_on`; negative once overdue.
+   */
+  days_left: number;
+  /**
+   * § 40c Abs. 2 EnWG: the last day the invoice may reach the customer.
+   */
+  due_on: BusinessDate;
+  /**
+   * The period ends with the supply and is owed an Abschlussrechnung.
+   */
+  final_invoice: boolean;
+  lf_mp_id: string;
+  malo_id: string;
+  period_from: BusinessDate;
+  period_to: BusinessDate;
+  /**
+   * Stable refusal code — word it from the catalogue, never show it raw.
+   */
+  reason_code: string;
+  /**
+   * The invoice that discharged the period; `None` while it is open.
+   */
+  settled_by?: string | null;
 }
 /**
  * Request body for `POST /api/v1/billing/{id}/correction`.
@@ -27587,32 +27991,6 @@ export interface BillingdTotalEstimate {
    * The rows counted, at most 10 000.
    */
   count: number;
-}
-/**
- * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
- */
-export interface BillingdApiError {
-  /**
-   * A stable English machine code (`limit_too_large`), where the refusal has one.
-   */
-  code?: string;
-  /**
-   * What went wrong, for the developer.
-   */
-  detail: string;
-  /**
-   * The HTTP status's reason phrase.
-   */
-  error: string;
-  /**
-   * On a 5xx: the id the service's log line carries; the cause is never in the body.
-   */
-  error_id?: string;
-  /**
-   * On a 502/503/504: the service this one called that failed.
-   */
-  upstream?: string;
-  [k: string]: unknown | undefined;
 }
 /**
  * How many deliveries a replay queued.
@@ -30041,8 +30419,8 @@ export interface MakodImpact {
     [k: string]: number | undefined;
   };
   /**
-   * Files not read, per reason (`compressed`, `unnamed`, `unparseable`,
-   * `no_binding_profile`).
+   * Unassessed input by reason. `compressed`, `unnamed` and `unparseable`
+   * count files. `no_binding_profile` counts messages.
    */
   not_read: {
     [k: string]: number | undefined;
@@ -32456,6 +32834,73 @@ export interface NetzbilanzdTestDelivery {
   status?: number | null;
 }
 /**
+ * Delivery proof for a selected document, without recipient addresses or relay payloads.
+ */
+export interface OutputdSubjectEvidence {
+  deliveries: OutputdChannelEvidence[];
+  kind: string;
+  subject_ref: string;
+}
+export interface OutputdChannelEvidence {
+  /**
+   * PORTAL, EMAIL, POST or ERP.
+   */
+  channel: string;
+  delivered_at: Instant | null;
+  first_sent_at: Instant | null;
+  read_at: Instant | null;
+  /**
+   * PENDING, SENT, DELIVERED, FAILED or SUPPRESSED. SENT records a handoff.
+   */
+  status: string;
+}
+/**
+ * An outputd business refusal.
+ */
+export interface OutputdDocumentProblem {
+  error: OutputdDocumentProblemDetail;
+}
+export interface OutputdDocumentProblemDetail {
+  /**
+   * Stable code identifying the refusal.
+   */
+  code: string;
+  /**
+   * Correlation identifier on internal failures.
+   */
+  error_id?: string | null;
+  /**
+   * Diagnostic for the caller.
+   */
+  message: string;
+}
+/**
+ * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
+ */
+export interface OutputdApiError {
+  /**
+   * A stable English machine code (`limit_too_large`), where the refusal has one.
+   */
+  code?: string;
+  /**
+   * What went wrong, for the developer.
+   */
+  detail: string;
+  /**
+   * The HTTP status's reason phrase.
+   */
+  error: string;
+  /**
+   * On a 5xx: the id the service's log line carries; the cause is never in the body.
+   */
+  error_id?: string;
+  /**
+   * On a 502/503/504: the service this one called that failed.
+   */
+  upstream?: string;
+  [k: string]: unknown | undefined;
+}
+/**
  * The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.
  */
 export interface PortaldApiError {
@@ -32731,6 +33176,84 @@ export interface ProcessdNeuanlageIdentifikationRequest {
    * The Marktlokation the NB identified for this Neuanlage.
    */
   malo_id: string;
+}
+export interface ProcessdReviewResult {
+  assessed: number;
+  can_resolve: boolean;
+  cohort: ProcessdCohort;
+  corrections: string[];
+  different: number;
+  eligible: number;
+  generation: number;
+  open_differences: number;
+  ready: boolean;
+  required_werktage: number;
+  resolutions: ProcessdResolution[];
+  revision: string;
+  timing_unassessed: number;
+  unassessed: number;
+}
+export interface ProcessdCohort {
+  complete_werktage: number;
+  coverage: ProcessdCoverage;
+  directions: string[];
+  end: Instant;
+  nb: string;
+  role: string;
+  rows: ProcessdOccurrence[];
+  scope: string;
+  start: Instant;
+  version: number;
+}
+export interface ProcessdCoverage {
+  inventory: string;
+  journal: string;
+  observed: string;
+}
+export interface ProcessdOccurrence {
+  assessment?: null | ProcessdAssessment;
+  batch_revision: string;
+  id: string;
+  request_sha256: string;
+}
+export interface ProcessdAssessment {
+  actual: ProcessdAnswer;
+  answer_sha256: string;
+  deadline: ProcessdDeadline;
+  ebd_revision: string;
+  expected: ProcessdAnswer;
+  expected_fingerprint: string;
+  facts_fingerprint: string;
+  incumbent_received_at?: Instant | null;
+  observation_fingerprint?: string | null;
+  producer: string;
+  pruefschritt: number;
+  release: string;
+  timing: string;
+}
+export interface ProcessdAnswer {
+  code: string;
+  pid: number;
+  tree: string;
+}
+export interface ProcessdDeadline {
+  due_at: Instant;
+  source: string;
+}
+export interface ProcessdResolution {
+  actor: string;
+  disposition: string;
+  evidence: string;
+  generation: number;
+  occurrence: string;
+  reason: string;
+  recorded_at: Instant;
+}
+export interface ProcessdResolve {
+  evidence: string;
+  generation: number;
+  reason: string;
+  revision: string;
 }
 export interface ProcessdExecuteRequest {
   /**

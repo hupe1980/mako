@@ -14,16 +14,23 @@ export function Refusal({
   title,
   raw,
   action,
+  message,
+  focusDetails = false,
 }: {
   title: string;
   /** The service's text as it came, `code: sentence` where it states a code. */
   raw: string;
   action?: ReactNode;
+  message?: string;
+  focusDetails?: boolean;
 }) {
   const t = useT();
   const { sentence } = refusalCode(raw);
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => ref.current?.focus(), []);
+  useEffect(() => {
+    const target = focusDetails ? ref.current?.querySelector("summary") : ref.current;
+    target?.focus();
+  }, [focusDetails]);
   return (
     <div
       ref={ref}
@@ -32,7 +39,9 @@ export function Refusal({
       className="flex flex-col items-start gap-2 py-2 outline-none"
     >
       <p className="m-0 text-title3 font-semibold text-text">{title}</p>
-      <p className="measure m-0 text-body text-text-2">{sentence ?? t.refusal.unknown}</p>
+      <p className="measure m-0 text-body text-text-2">
+        {message ?? sentence ?? t.refusal.unknown}
+      </p>
       <details className="group">
         <summary className="focus-ring inline-flex cursor-default list-none items-center gap-1 rounded-[6px] text-callout text-text-2 hover:text-text [&::-webkit-details-marker]:hidden">
           <Icon name="chevron" size={11} className="transition-transform group-open:rotate-90" />

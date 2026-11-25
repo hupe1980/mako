@@ -67,6 +67,8 @@ jobs:
         with:
           tool: just@1.58.0
       - name: Build the validator module
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/mako-site-target
         run: just wasm
 
       # Zola validates links but never parses diagram source, so a broken
@@ -97,6 +99,12 @@ jobs:
         run: |
           zola build
           node tools/postbuild.mjs
+
+      - name: Check English and German landing page reflow
+        working-directory: site
+        run: |
+          npx playwright install --with-deps --only-shell chromium
+          npm run check:layout
 
   build:
     needs: check

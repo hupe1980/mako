@@ -8,14 +8,8 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-/// DDL for the two tables. Idempotent; [`super::ensure_schema`] runs it.
-///
-/// An endpoint holds at most two secrets: the current one and, for a stated
-/// overlap after a rotation, the previous one — both sign while both are
-/// active. A delivery is one event to one endpoint; it carries the event's
-/// commit position `(event_txid, event_seq)` and its ordering key, which is
-/// what holds a later event of the same key back while an earlier one is
-/// outstanding.
+/// Endpoint and delivery schema installed by [`super::ensure_schema`].
+/// Both secrets sign during rotation. Commit position orders pending deliveries of the same key.
 pub const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
     id                         UUID        PRIMARY KEY,
@@ -64,7 +58,19 @@ CREATE INDEX IF NOT EXISTS webhook_deliveries_key ON webhook_deliveries (endpoin
     WHERE delivered_at IS NULL AND dead_lettered_at IS NULL AND ordering_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS webhook_deliveries_log ON webhook_deliveries (endpoint_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS event_outbox_window ON event_outbox (created_at)
-    WHERE kind = 'cloudevent' AND upstream IS NULL;";
+    WHERE kind = 'cloudevent' AND upstream IS NULL;
+-- A window replay can add a delivery for a historical event, and both
+-- replay routes can reset an existing one. Neither writes event_outbox.
+-- Signal the same listener on commit. Identical notifications from one
+-- transaction coalesce even when a replay queues a whole window.
+CREATE OR REPLACE TRIGGER webhook_deliveries_insert_notify
+    AFTER INSERT ON webhook_deliveries
+    REFERENCING NEW TABLE AS inserted
+    FOR EACH STATEMENT EXECUTE FUNCTION event_outbox_notify();
+CREATE OR REPLACE TRIGGER webhook_deliveries_replay_notify
+    AFTER UPDATE ON webhook_deliveries
+    REFERENCING NEW TABLE AS inserted
+    FOR EACH STATEMENT EXECUTE FUNCTION event_outbox_notify();";
 
 /// Who owns an endpoint.
 #[derive(

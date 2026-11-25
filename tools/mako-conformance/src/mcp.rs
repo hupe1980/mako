@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use crate::report::Runner;
+use crate::profile::Probe;
+use crate::report::Reason;
 use crate::suite::{Ctx, Suite};
 
 /// A JSON-RPC request on MCP revision 2026-07-28: stateless, its revision and
@@ -41,10 +42,10 @@ async fn post(
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
-    let r = req.send().await?;
-    let status = r.status().as_u16();
-    let text = r.text().await.unwrap_or_default();
-    let message = serde_json::from_str(&text).unwrap_or_else(|_| {
+    let r = crate::transport::send(req).await?;
+    let status = r.status.as_u16();
+    let text = std::str::from_utf8(&r.body)?;
+    let message = serde_json::from_str(text).unwrap_or_else(|_| {
         text.lines()
             .filter_map(|l| l.strip_prefix("data:"))
             .filter_map(|d| serde_json::from_str::<Value>(d.trim()).ok())
@@ -57,61 +58,54 @@ async fn post(
 /// Run every MCP check.
 pub async fn run(ctx: &Ctx, suite: &dyn Suite) {
     match post(ctx, None, "tools/list", None, json!({})).await {
-        Ok((401, _)) => ctx
+        Ok((401, _)) => ctx.report.held(Probe::McpAuth),
+        Ok((status, _)) => ctx
             .report
-            .held(Runner::Mcp, "a call without a token is refused"),
-        Ok((s, _)) => ctx.report.broken(
-            Runner::Mcp,
-            "a call without a token is refused",
-            format!("answered {s}, not 401"),
-        ),
-        Err(e) => ctx.report.broken(
-            Runner::Mcp,
-            "a call without a token is refused",
-            format!("unreachable: {e}"),
-        ),
+            .broken(Probe::McpAuth, format!("expected 401, received {status}")),
+        Err(error) => ctx.report.broken(Probe::McpAuth, error.to_string()),
     }
 
-    let listed = match post(ctx, Some(&ctx.target.token), "tools/list", None, json!({})).await {
-        Ok((200, m)) => m["result"]["tools"].as_array().map(|ts| {
-            ts.iter()
-                .filter_map(|t| t["name"].as_str().map(str::to_owned))
-                .collect::<BTreeSet<_>>()
-        }),
-        Ok((s, m)) => {
-            ctx.report
-                .broken(Runner::Mcp, "tools/list", format!("answered {s}: {m}"));
-            None
+    match post(ctx, Some(&ctx.target.token), "tools/list", None, json!({})).await {
+        Ok((200, message))
+            if message["jsonrpc"] == "2.0"
+                && message["id"] == 1
+                && message.get("error").is_none()
+                && message["result"]["tools"].is_array() =>
+        {
+            let tools = message["result"]["tools"]
+                .as_array()
+                .expect("verified array");
+            let declared: BTreeSet<_> = ctx.mcp_tools.iter().map(String::as_str).collect();
+            let listed: BTreeSet<_> = tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect();
+            if listed == declared && listed.len() == tools.len() {
+                ctx.report.held(Probe::Tools);
+            } else {
+                ctx.report.broken(
+                    Probe::Tools,
+                    "missing, duplicate, malformed or undeclared MCP tool",
+                );
+            }
+            for tool in &ctx.mcp_tools {
+                let probe = Probe::Tool(tool.clone());
+                if listed.contains(tool.as_str()) {
+                    ctx.report.held(probe);
+                } else {
+                    ctx.report.broken(probe, "declared tool missing");
+                }
+            }
         }
-        Err(e) => {
-            ctx.report
-                .broken(Runner::Mcp, "tools/list", format!("unreachable: {e}"));
-            None
-        }
-    };
-    if let Some(listed) = listed {
-        let declared: BTreeSet<String> = ctx.mcp_tools.iter().cloned().collect();
-        let missing: Vec<_> = declared.difference(&listed).cloned().collect();
-        let extra: Vec<_> = listed.difference(&declared).cloned().collect();
-        if missing.is_empty() && extra.is_empty() {
-            ctx.report.held(
-                Runner::Mcp,
-                format!("tools/list names the {} declared tools", declared.len()),
-            );
-        } else {
-            ctx.report.broken(
-                Runner::Mcp,
-                "tools/list names the declared tools",
-                format!("missing {missing:?}, undeclared {extra:?}"),
-            );
-        }
+        Ok((status, _)) => ctx
+            .report
+            .broken(Probe::Tools, format!("invalid listing (HTTP {status})")),
+        Err(error) => ctx.report.broken(Probe::Tools, error.to_string()),
     }
-
     let refusal = suite.refusal();
-    let name = format!("{} is refused where GET {} is", refusal.tool, refusal.path);
+    let name = Probe::McpRefusal(refusal.tool.into());
     let Some(token) = ctx.target.refused_token.as_deref() else {
-        ctx.report
-            .skipped(Runner::Mcp, name, "no --refused-token given");
+        ctx.report.skipped(name, Reason::MissingRefusedCredential);
         return;
     };
     match post(
@@ -126,18 +120,16 @@ pub async fn run(ctx: &Ctx, suite: &dyn Suite) {
         // Authenticated and then denied: a 401 would only say the key is
         // unknown, not that the policy refuses the principal.
         Ok((401, _)) => ctx.report.broken(
-            Runner::Mcp,
             name,
             "answered 401 — the refused principal was not authenticated, so the policy was never asked",
         ),
-        Ok((s, m)) if s == 403 || m.get("error").is_some() || m["result"]["isError"] == true => {
-            ctx.report.held(Runner::Mcp, name);
+        Ok((403, _)) => {
+            ctx.report.held(name);
         }
         Ok((s, m)) => ctx.report.broken(
-            Runner::Mcp,
             name,
             format!("answered {s} with a result — the tool admits a principal its REST twin refuses: {m}"),
         ),
-        Err(e) => ctx.report.broken(Runner::Mcp, name, format!("unreachable: {e}")),
+        Err(e) => ctx.report.broken(name, format!("unreachable: {e}")),
     }
 }

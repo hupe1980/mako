@@ -26,6 +26,8 @@ the Mahnung.
 
 Port: `:9880`
 
+The OpenAPI document at `GET /api/v1/openapi.json` describes the delivery-evidence lookup by document kind and issuer reference.
+
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/render/{kind}` | Render a view with the current or a pinned template; `X-Mako-Template-Hash` names the layout used. Stores nothing |
@@ -33,6 +35,7 @@ Port: `:9880`
 | `GET` | `/api/v1/documents` | A customer's documents (`?malo_id=` or `?kunden_nr=`, `&kind=`) — the portal inbox |
 | `GET` | `/api/v1/documents/{id}` | One document with every delivery track |
 | `GET` | `/api/v1/documents/{id}/content` | The bytes as issued — a reproduction, never a re-render |
+| `GET` | `/api/v1/documents/by-subject/{kind}?subject_ref=…` | Channel states and timestamps for one reference, including invoice numbers with slashes. The response contains the kind, the reference and the delivery tracks’ states and times. |
 | `GET` | `/api/v1/documents/by-subject/{kind}/{subject_ref}` | The document a `(kind, subject_ref)` was issued as, with every delivery track — how vertragd reads a Vertragsbestätigung's `delivered_at` |
 | `GET` | `/api/v1/deliveries?status=FAILED&kind=` | Every delivery that ended `FAILED`, with its document's `kind` and `subject_ref` — the operator's work list |
 | `POST` | `/api/v1/deliveries/{id}/read` | The customer opened it in the portal |

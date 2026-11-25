@@ -879,7 +879,7 @@ publishes. Seeded net Überschuss rates:
 
 The seed runs to 2030; `eeg_billing::rates::aw_ct_bei_inbetriebnahme` computes
 any window. Use `lookup_statutory_rate` or `POST /api/v1/verguetungssatz-lookup`.
-See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/Einspeiseverguetung/start.html).
+See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/artikel.html#doc899816bodyText2).
 
 ### Metering
 

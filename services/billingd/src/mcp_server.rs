@@ -293,23 +293,7 @@ pub struct ListUnbilledParams {
     pub limit: Option<i64>,
 }
 
-/// `list_unbilled_periods`' answer.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct UnbilledPeriods {
-    /// The earliest `due_on` first.
-    pub periods: Vec<crate::pg::UnbilledPeriodRow>,
-    /// How many periods `periods` holds.
-    pub count: usize,
-    /// At least `limit` periods matched: more may be waiting than were listed.
-    pub saturated: bool,
-}
-
-/// `summarize_billing_deadlines`' answer.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct DeadlineSummary {
-    /// One row per Lieferant (MP-ID).
-    pub lieferanten: Vec<crate::pg::DeadlineSummaryRow>,
-}
+use crate::discovery::{DeadlineSummary, UnbilledPeriods};
 
 /// An internal failure as a tool answers it: an `error_id` the log line
 /// carries, never the error's own text.
@@ -939,7 +923,7 @@ before billing.",
     }
 
     #[tool(
-        description = "The § 40c Abs. 2 EnWG watch: every billing period the scheduled run attempted and could not bill — customer (MaLo), Lieferant, period, whether it is the Abschlussrechnung at the end of supply, the stable refusal code (`NO_METER_DATA`, `RATE_REFUSED`, `ABSCHLAEGE_UNBEKANNT`, `STORNIERT`, …; word it from the catalogue, never show it raw), the day the invoice is owed by (`due_on`) and the days left (negative = overdue), the earliest due first. A period closes when any path writes its invoice and re-opens when a Storno cancels it.",
+        description = "LF-only § 40c Abs. 2 EnWG billing watch. Lists refused periods by earliest due date with MaLo, Lieferant, final-invoice flag, refusal code, due date and days left. Set include_settled to include periods discharged by an issued invoice from the same Lieferant. A cancellation reopens the period. Saturated means more periods exist. Discovery records the latest tenant run, including failures before enumeration.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_output::<UnbilledPeriods>()
     )]
@@ -947,36 +931,30 @@ before billing.",
         &self,
         Parameters(params): Parameters<ListUnbilledParams>,
     ) -> Result<CallToolResult, McpError> {
-        let limit = params.limit.unwrap_or(100).clamp(1, 500);
-        let periods = crate::pg::list_unbilled_periods(
+        let watch = UnbilledPeriods::read(
             &self.state.pool,
             &self.state.tenant,
             !params.include_settled.unwrap_or(false),
-            limit,
+            params.limit,
         )
         .await
         .map_err(|e| internal(&e))?;
         Ok(CallToolResult::structured(
-            serde_json::to_value(UnbilledPeriods {
-                count: periods.len(),
-                saturated: periods.len() >= usize::try_from(limit).unwrap_or(usize::MAX),
-                periods,
-            })
-            .map_err(|e| internal(&e))?,
+            serde_json::to_value(watch).map_err(|e| internal(&e))?,
         ))
     }
 
     #[tool(
-        description = "Per Lieferant, the standing against § 40c Abs. 2 EnWG: invoices owed (open periods still inside their deadline), issued on time, issued late, and overdue (open periods past it). Only invoices that carry a § 40c due date count.",
+        description = "LF-only deadline summary under § 40c Abs. 2 EnWG. Returns counts per Lieferant of open periods within their deadline, overdue periods and invoices issued on time or late. The latest tenant discovery accompanies the counts so an operator can identify a failed or missing run.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = rmcp::handler::server::tool::schema_for_output::<DeadlineSummary>()
     )]
     async fn summarize_billing_deadlines(&self) -> Result<CallToolResult, McpError> {
-        let lieferanten = crate::pg::deadline_summary(&self.state.pool, &self.state.tenant)
+        let summary = DeadlineSummary::read(&self.state.pool, &self.state.tenant)
             .await
             .map_err(|e| internal(&e))?;
         Ok(CallToolResult::structured(
-            serde_json::to_value(DeadlineSummary { lieferanten }).map_err(|e| internal(&e))?,
+            serde_json::to_value(summary).map_err(|e| internal(&e))?,
         ))
     }
 
@@ -1348,19 +1326,16 @@ impl ServerHandler for BillingdMcpHandler {
 
 /// The Cedar action a tool requires beyond `use-mcp`, or `None`.
 ///
-/// The blanket `use-mcp` gate admits any role of the tenant. A tool whose REST
-/// twin requires `read-billing` — the § 40c watch, the deadline counts, the
-/// recomputation — must clear the same action here, or a role the REST route
-/// refuses reads it through MCP.
+/// The tenant-wide `use-mcp` gate admits callers outside the LF role. Each
+/// protected read must also clear the action its REST route requires.
 fn tool_action(body: &[u8]) -> Option<&'static str> {
     let v: serde_json::Value = serde_json::from_slice(body).ok()?;
     if v.get("method")?.as_str()? != "tools/call" {
         return None;
     }
     match v.get("params")?.get("name")?.as_str()? {
-        "list_unbilled_periods" | "summarize_billing_deadlines" | "recompute_invoice" => {
-            Some("read-billing")
-        }
+        "list_unbilled_periods" | "summarize_billing_deadlines" => Some("read-billing-watch"),
+        "recompute_invoice" => Some("read-billing"),
         "list_webhook_endpoints" | "list_webhook_deliveries" => {
             Some(mako_service::subscriptions::MANAGE)
         }
@@ -1442,9 +1417,8 @@ mod contract_tests {
         }
     }
 
-    /// SR: a tool whose REST twin requires `read-billing` requires it here too.
     #[test]
-    fn the_watch_and_recompute_tools_require_read_billing() {
+    fn protected_reads_require_their_rest_action() {
         let call = |name: &str| {
             serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -1452,13 +1426,17 @@ mod contract_tests {
             }))
             .expect("json")
         };
-        for name in [
-            "list_unbilled_periods",
-            "summarize_billing_deadlines",
-            "recompute_invoice",
-        ] {
-            assert_eq!(tool_action(&call(name)), Some("read-billing"), "{name}");
+        for name in ["list_unbilled_periods", "summarize_billing_deadlines"] {
+            assert_eq!(
+                tool_action(&call(name)),
+                Some("read-billing-watch"),
+                "{name}"
+            );
         }
+        assert_eq!(
+            tool_action(&call("recompute_invoice")),
+            Some("read-billing")
+        );
         for name in ["list_webhook_endpoints", "list_webhook_deliveries"] {
             assert_eq!(
                 tool_action(&call(name)),

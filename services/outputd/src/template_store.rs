@@ -70,7 +70,9 @@ pub enum StoreError {
 /// Every kind shares one store and one engine, deliberately: an operator
 /// maintaining two template systems for one brand is how a logo change reaches
 /// the invoice and not the Mahnung.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum TemplateKind {
     /// The ZUGFeRD PDF/A-3 invoice carrier.

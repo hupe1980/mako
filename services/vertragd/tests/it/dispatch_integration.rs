@@ -13,6 +13,8 @@
     reason = "a test connects straight to its throwaway container; pool sizing and lifetimes are a deployment concern"
 )]
 
+mod supply;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 use vertragd::pg::{self, Initiator};
@@ -806,7 +808,19 @@ async fn an_ended_supply_is_a_candidate_for_twelve_weeks() {
             .await
             .expect("list")
             .is_empty(),
-        "a supply ended thirteen weeks ago is not"
+        "the ordinary feed covers twelve weeks"
+    );
+    let ended = mako_fristen::heute() - time::Duration::days(91);
+    let recovered = pg::billing_candidates_in_window(&pool, tenant, ended, ended)
+        .await
+        .unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].lieferende, Some(ended));
+    assert!(
+        pg::billing_candidates_in_window(&pool, "another-tenant", ended, ended)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
 

@@ -39,8 +39,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     config::VertragdConfig,
     domain::{self, Verlaengerung, Vertragsart},
-    events::build_cloud_event,
-    pg,
+    events, pg,
 };
 
 /// 23 hours rather than 24: the loop then drifts earlier instead of skipping a
@@ -296,45 +295,30 @@ async fn kuendige_preisaenderung_an(
     };
 
     let mut tx = pool.begin().await?;
-    let ce = build_cloud_event(
-        mako_events::vertrag::PREISAENDERUNG_ANKUENDIGUNG,
+    let ce = events::typed_event(
         row.vertrag_id,
         &cfg.tenant,
-        serde_json::json!({
-            "vertrag_id": row.vertrag_id,
-            "kunden_id": row.kunden_id,
-            "komp_id": row.komp_id,
-            "malo_id": row.malo_id,
-            "sparte": row.sparte,
-            "current_product_code": row.bisheriges_produkt,
-            "new_product_code": row.neues_produkt,
-            "wirksamkeit": row.wirksam_ab.to_string(),
-            "vorlauf_tage": vorlauf_tage,
-            "erforderliche_frist": regime.bezeichnung,
-            "fruehestens_wirksam": regime.fruehestens_wirksam(today).to_string(),
-            "frist_gewahrt": frist_gewahrt,
-            "rechtsgrundlage": regime.rechtsgrundlage,
-            "dokument_id": document_id,
-            // § 41 Abs. 5 Satz 3 EnWG: the notice states Anlass and Umfang, so
-            // a recipient that composes its own letter has both. `umfang` is
-            // empty where the change was scheduled without price lines, and
-            // `umfang_vollstaendig` says so: the composer holds the price
-            // sheets and states the Umfang from them, and a letter that states
-            // none is not a valid notice on any channel.
-            "anlass": row.grund,
-            "umfang": positionen,
-            "umfang_vollstaendig": !positionen.is_empty(),
-            // § 41 Abs. 5 Satz 1 EnWG obliges the supplier to state the
-            // customer's termination right in the same notice, and Satz 4
-            // gives them one without notice to the day the change lands.
-            "sonderkuendigungsrecht": {
-                "besteht": true,
-                "rechtsgrundlage": "§ 41 Abs. 5 Satz 4 EnWG",
-                "wirksam_zum": row.wirksam_ab.to_string(),
-                "entgeltfrei": true,
-            },
-        }),
-    );
+        &events::PreisaenderungAnkuendigung {
+            vertrag_id: row.vertrag_id,
+            kunden_id: row.kunden_id,
+            komp_id: row.komp_id,
+            malo_id: row.malo_id.clone(),
+            sparte: row.sparte.clone(),
+            current_product_code: row.bisheriges_produkt.clone(),
+            new_product_code: row.neues_produkt.clone(),
+            wirksamkeit: row.wirksam_ab.to_string(),
+            vorlauf_tage,
+            erforderliche_frist: regime.bezeichnung.clone(),
+            fruehestens_wirksam: regime.fruehestens_wirksam(today).to_string(),
+            frist_gewahrt,
+            rechtsgrundlage: regime.rechtsgrundlage,
+            dokument_id: document_id,
+            anlass: row.grund.clone(),
+            umfang_vollstaendig: !positionen.is_empty(),
+            umfang: positionen,
+            sonderkuendigungsrecht: events::Sonderkuendigungsrecht::zum(row.wirksam_ab),
+        },
+    )?;
     mako_service::outbox::enqueue(&mut tx, &ce).await?;
     if let Some(document_id) = document_id {
         pg::produkte::mark_dokument(&mut *tx, row.slice_id, document_id).await?;
@@ -385,7 +369,11 @@ async fn issue_preisanpassung_document(
             "die Komponente führt keine Marktlokation, die Anzeige ist nicht adressierbar"
         )
     };
-    let Some(buyer) = pg::fetch_rechnungsempfaenger_by_malo(pool, malo_id, &cfg.tenant).await?
+    // The notice belongs to this contract's customer even if another supply
+    // currently serves the same MaLo.
+    let Some(buyer) = pg::fetch_kunde(pool, row.kunden_id, &cfg.tenant)
+        .await?
+        .map(pg::rechnungsempfaenger_of)
     else {
         anyhow::bail!(
             "keine Kundenstammdaten zur Marktlokation {malo_id} — die Preisänderungsanzeige \
@@ -478,30 +466,27 @@ pub async fn auto_renewal(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result
             today,
         );
         let mut tx = pool.begin().await?;
-        let ce = build_cloud_event(
-            mako_events::vertrag::AUTOERNEUERUNG_ANKUENDIGUNG,
+        let ce = events::typed_event(
             row.id,
             &cfg.tenant,
-            serde_json::json!({
-                "vertrag_id": row.id,
-                "vertrags_nr": row.vertrags_nr,
-                "kunden_id": row.kunden_id,
-                "vertragsende": row.vertragsende.to_string(),
-                "verlaengerung": match neu {
-                    Verlaengerung::Unbefristet => serde_json::json!({
-                        "art": "UNBEFRISTET",
-                        "kuendigungsfrist": "1 Monat, jederzeit",
-                        "rechtsgrundlage": "§ 309 Nr. 9 lit. b BGB",
-                    }),
-                    Verlaengerung::Befristet(bis) => serde_json::json!({
-                        "art": "BEFRISTET",
-                        "neues_vertragsende": bis.to_string(),
-                        "monate": row.renewal_monate,
-                    }),
+            &events::AutoerneuerungAnkuendigung {
+                vertrag_id: row.id,
+                vertrags_nr: row.vertrags_nr,
+                kunden_id: row.kunden_id,
+                vertragsende: row.vertragsende.to_string(),
+                verlaengerung: match neu {
+                    Verlaengerung::Unbefristet => events::Verlaengerungsart::Unbefristet {
+                        kuendigungsfrist: "1 Monat, jederzeit",
+                        rechtsgrundlage: "§ 309 Nr. 9 lit. b BGB",
+                    },
+                    Verlaengerung::Befristet(bis) => events::Verlaengerungsart::Befristet {
+                        neues_vertragsende: bis.to_string(),
+                        monate: row.renewal_monate,
+                    },
                 },
-                "kuendigungsfrist_monate": row.kuendigungsfrist_monate,
-            }),
-        );
+                kuendigungsfrist_monate: row.kuendigungsfrist_monate,
+            },
+        )?;
         mako_service::outbox::enqueue(&mut tx, &ce).await?;
         // The notice is due once per term, and the flag is what keeps a daily
         // run from re-deriving it: it commits with the notice it records.
@@ -548,12 +533,14 @@ pub async fn ablauf(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     let geschlossen = pg::close_due_supply(&mut tx, &cfg.tenant).await?;
     for vertrag_id in &geschlossen {
-        let ce = build_cloud_event(
-            mako_events::vertrag::ABGESCHLOSSEN,
+        let ce = events::typed_event(
             *vertrag_id,
             &cfg.tenant,
-            serde_json::json!({ "vertrag_id": vertrag_id, "status": "ABGELAUFEN" }),
-        );
+            &events::Abgeschlossen {
+                vertrag_id: *vertrag_id,
+                status: "ABGELAUFEN",
+            },
+        )?;
         mako_service::outbox::enqueue(&mut tx, &ce).await?;
     }
     tx.commit().await?;
@@ -570,23 +557,22 @@ pub async fn ablauf(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
     tracing::info!(count = rows.len(), "vertragd: Ablauf-Ankündigungen");
     for row in &rows {
         let mut tx = pool.begin().await?;
-        let ce = build_cloud_event(
-            mako_events::vertrag::ABLAUF_ANKUENDIGUNG,
+        let ce = events::typed_event(
             row.id,
             &cfg.tenant,
-            serde_json::json!({
-                "vertrag_id": row.id,
-                "vertrags_nr": row.vertrags_nr,
-                "kunden_id": row.kunden_id,
-                "vertragsart": row.vertragsart,
-                "vertragsende": row.vertragsende.map(|d| d.to_string()),
-                "preisgarantie_bis": row.preisgarantie_bis.map(|d| d.to_string()),
-                "faellig_am": row.faellig_am.to_string(),
-                "auto_renewal": row.auto_renewal,
-                "kundentyp": row.kundentyp,
-                "standort_bezeichnung": row.standort_bezeichnung,
-            }),
-        );
+            &events::AblaufAnkuendigung {
+                vertrag_id: row.id,
+                vertrags_nr: row.vertrags_nr.clone(),
+                kunden_id: row.kunden_id,
+                vertragsart: row.vertragsart.clone(),
+                vertragsende: row.vertragsende.map(|d| d.to_string()),
+                preisgarantie_bis: row.preisgarantie_bis.map(|d| d.to_string()),
+                faellig_am: row.faellig_am.to_string(),
+                auto_renewal: row.auto_renewal,
+                kundentyp: row.kundentyp.clone(),
+                standort_bezeichnung: row.standort_bezeichnung.clone(),
+            },
+        )?;
         mako_service::outbox::enqueue(&mut tx, &ce).await?;
         pg::mark_ablauf_notified(&mut *tx, row.id, row.faellig_am).await?;
         tx.commit().await?;

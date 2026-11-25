@@ -1,35 +1,5 @@
-// The assistant's trail, receipt, pill, ⌘K's action panel, the Überblick and
-// the list–detail–inspector layout on Fristen (German and English),
-// checked for access in a browser — WCAG 2.2 A/AA, light and dark, reduced
-// motion:
-//
-//   just desk-axe
-//
-// On the stage of scripts/buehne.ts, in light and in dark, with reduced motion
-// asked for, each surface is reached from the keyboard alone and then
-// scanned by axe-core (`@axe-core/playwright`, WCAG 2.2 A and AA):
-//
-// - **the trail** — a question streaming, its reads arriving;
-// - **the receipt** — the answered run folded into „{n} Quellen gelesen ▸",
-//   reached with Tab, opened with ↵;
-// - **the pill** — the run left streaming, followed into the top bar, reached
-//   with Tab;
-// - **the action panel** — ⌘K, an identifier, ↵ on the entry, then ↵ on its
-//   primary action into the parameters;
-// - **Einrichtung** — the readiness checklist with makod's findings, then a
-//   Probelauf started from the keyboard (⌘↵ in its facts) and its verdict;
-// - **the Vorschlag** — a sentence typed and sent with ↵, the pre-fill's
-//   offers taken from the keyboard, and a gap's „Zur Frage" landing focus on
-//   the question that fills it;
-// - **the phone's width** — the sidebar as a sheet, opened from the top bar
-//   with the keyboard and closed with esc, focus back on its button.
-//
-// A state fails on a serious or critical axe finding, on an animation still
-// running under reduced motion, or on a control the keyboard cannot reach —
-// and the answer's citation fails when focusing it from under the top bar
-// leaves it there: the bar is sticky and translucent, so a scroll into view
-// must stop below it (WCAG 2.2 2.4.11, Focus Not Obscured).
-// Every finding is printed.
+// `just desk-axe` checks keyboard navigation and WCAG 2.2 A/AA findings in both themes.
+// Reduced motion and focus visibility under the sticky header need explicit browser checks.
 
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, chromium, type Locator, type Page } from "playwright";
@@ -155,6 +125,196 @@ async function durchgang(browser: Browser, base: string, theme: "light" | "dark"
     return { context, page: await seite(context) };
   };
   const zustand = (name: string) => `${name} (${theme === "light" ? "hell" : "dunkel"})`;
+
+  for (const language of ["de", "en"] as const) {
+    const de = language === "de";
+    const { context, page } = await neu("shadow");
+    await page.addInitScript((s) => localStorage.setItem("mako-desk.sprache", s), language);
+    await page.goto(`${base}schattenbetrieb`);
+    await page.getByText(de ? /1 von 2 Eingängen geprüft/ : /1 of 2 inbound assessed/).waitFor();
+    const row = page.getByRole("row", {
+      name: de ? /Eingang.*Abweichung/ : /Occurrence.*Difference/,
+    });
+    await row.focus();
+    await page.keyboard.press("Enter");
+    const code = page.getByRole("row", {
+      name: de ? /Antwortcode A02 A07/ : /Answer code A02 A07/,
+    });
+    await code.waitFor();
+    await page.waitForFunction(
+      () =>
+        document.activeElement?.closest("section[tabindex]") !== null &&
+        document.activeElement?.closest("section[tabindex]") !== undefined,
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () =>
+        document.activeElement?.closest('[role="row"]')?.getAttribute("aria-selected") === "true",
+    );
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page
+      .getByText(de ? /Für diesen Eingang fehlt/ : /This occurrence needs a comparison/)
+      .waitFor();
+    await page.getByRole("button", { name: de ? "Erneut prüfen" : "Recheck" }).click();
+    await page
+      .getByRole("status")
+      .filter({ hasText: de ? "Aktueller Stand geladen." : "Current evidence loaded." })
+      .waitFor();
+    await pruefen(page, zustand(`Shadow review ${language}`), "main");
+    await context.close();
+  }
+
+  // The same MaLo can owe two suppliers a period. The run evidence stays
+  // keyboard accessible at phone width while both issuer rows remain distinct.
+  {
+    const de = theme === "light";
+    const context = await browser.newContext({
+      ...KONTEXT,
+      viewport: { width: 390, height: 844 },
+      colorScheme: theme,
+      reducedMotion: "reduce",
+    });
+    await aufnehmen(context, "beantwortet");
+    await context.addInitScript(
+      (language) => {
+        localStorage.setItem("mako-desk.rolle", "lieferant");
+        localStorage.setItem("mako-desk.sprache", language);
+      },
+      de ? "de" : "en",
+    );
+    const page = await context.newPage();
+    await page.goto(`${base}heute?quelle=abrechnungen`);
+    await page
+      .getByRole("status")
+      .filter({
+        hasText: de ? "Ermittelte Vertragskomponenten: 2" : "Contract components found: 2",
+      })
+      .waitFor();
+    for (const issuer of ["9900357000004", "9900357000028"]) {
+      await page.getByRole("button", { name: new RegExp(`Lieferant ${issuer}`) }).waitFor();
+    }
+    const details = page.locator("summary").filter({ hasText: de ? "Laufdetails" : "Run details" });
+    await tabZu(page, details, "Billing discovery");
+    await page.keyboard.press("Enter");
+    await page.getByText(de ? /Nächster geplanter Versuch:/ : /Next scheduled attempt:/).waitFor();
+    await pruefen(page, zustand("Billing discovery"), "main");
+    await page.goto(`${base}rechnung/b-1`);
+    await page
+      .getByRole("status")
+      .filter({ hasText: de ? /kein Nachweis/ : /No evidence/ })
+      .waitFor();
+    await page.getByText(de ? /Versand unterdrückt/ : /sending suppressed/).waitFor();
+    await pruefen(page, zustand("Invoice delivery evidence"), "main");
+    await context.close();
+  }
+
+  // The LF keyboard path starts in Heute and ends at the refusal's diagnostic.
+  {
+    const de = theme === "light";
+    const language = de ? "de" : "en";
+    const context = await browser.newContext({
+      ...KONTEXT,
+      viewport: { width: 320, height: 720 },
+      reducedMotion: "reduce",
+      colorScheme: theme,
+    });
+    await aufnehmen(context, "klaerfall-lf");
+    await context.addInitScript((language) => {
+      localStorage.setItem("mako-desk.rolle", "lieferant");
+      localStorage.setItem("mako-desk.sprache", language);
+    }, language);
+    const page = await context.newPage();
+    const posts: { key: string | undefined; body: Record<string, unknown> }[] = [];
+    await page.route("**/api/v1/klaerfaelle/*/dispatch", async (route) => {
+      const request = route.request();
+      posts.push({ key: request.headers()["idempotency-key"], body: request.postDataJSON() });
+      if (de) return route.fallback();
+      return route.fulfill({
+        status: 422,
+        json: { code: "unknown_case_code", detail: "synthetic diagnostic" },
+      });
+    });
+    await page.goto(`${base}heute?quelle=klaerfaelle`);
+    const eintrag = page.getByRole("button", { name: /UTILMD-LF-DEMO/ });
+    await tabZu(page, eintrag, "Heute, LF");
+    await page.keyboard.press("Enter");
+    const cause = page.getByRole("heading", { level: 1, name: de ? /Ursache Z29/ : /Cause Z29/ });
+    await cause.waitFor();
+    await page
+      .getByText(de ? "Zuständige Rolle · Lieferant" : "Responsible Rolle · Lieferant")
+      .waitFor();
+    await page.getByText(de ? "Frist unbekannt" : "Frist unknown").waitFor();
+    const source = page.getByRole("button", { name: /ERC/ });
+    await tabZu(page, source, "LF, Quelle");
+    await page.keyboard.press("Enter");
+    await page.getByRole("dialog").getByText("ERC", { exact: true }).waitFor();
+    await page.keyboard.press("Escape");
+    const send = page.getByRole("button", { name: de ? "Korrigieren & senden" : "Correct & send" });
+    await tabZu(page, send, "LF, Korrektur");
+    const overflow = await send.evaluate((el) => {
+      const main = el.closest("main");
+      // A compressed heading can overlap the action while the page itself still fits.
+      const list = [
+        document.documentElement,
+        main,
+        el.closest("section"),
+        main?.querySelector("nav"),
+        el.closest("section")?.querySelector("h2"),
+      ];
+      return list.some((node) => node && node.scrollWidth > node.clientWidth);
+    });
+    if (overflow) throw new Error(`LF (${language}): 320 px requires horizontal scrolling`);
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: de ? /Rückgängig/ : /Undo/ }).waitFor();
+    await page.keyboard.press("ControlOrMeta+z");
+    const undone = page.getByRole("status").filter({
+      hasText: de ? "Zurückgenommen. Es wurde nichts gesendet." : "Undone. Nothing was sent.",
+    });
+    await undone.waitFor();
+    if (
+      (await undone.count()) !== 1 ||
+      !(await send.evaluate((el) => el === document.activeElement))
+    )
+      throw new Error(`LF (${language}): undo announcement or return focus missing`);
+    // Flushing the page releases every surviving hold, even before its timer expires.
+    await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+    await page.reload();
+    await cause.waitFor();
+    if (posts.length) throw new Error(`LF (${language}): undo sent a request`);
+    const radio = page.getByRole("radio", { checked: true });
+    await tabZu(page, radio, "LF, Korrektur wählen");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Tab");
+    const reason = page.getByRole("textbox", { name: de ? /Begründung/ : /Reason/ });
+    if (!(await reason.evaluate((el) => el === document.activeElement)))
+      throw new Error("LF: reason lacks focus");
+    await page.keyboard.type("Kundenauftrag liegt vor");
+    await tabZu(page, send, "LF, Alternative senden");
+    await page.keyboard.press("Enter");
+    const refusal = page.getByRole("status").filter({
+      hasText: de ? "Dieser Klärfall ist schon abgeschlossen." : "The service refused the request.",
+    });
+    await refusal.waitFor();
+    const details = refusal.locator("summary");
+    if (
+      (await refusal.count()) !== 1 ||
+      (de && (await send.count()) !== 0) ||
+      !(await details.evaluate((el) => el === document.activeElement)) ||
+      (await reason.inputValue()) !== "Kundenauftrag liegt vor" ||
+      posts.length !== 1 ||
+      posts[0]?.body.befehl !== "gpke.kuendigung.ablehnen" ||
+      posts[0]?.body.begruendung !== "Kundenauftrag liegt vor" ||
+      !posts[0]?.key?.match(/^[0-9a-f-]{36}$/)
+    )
+      throw new Error(`LF (${language}): refusal, retained reason, key or focus missing`);
+    const raw = refusal.getByText(de ? /case_closed:/ : /unknown_case_code:/);
+    if (await raw.isVisible()) throw new Error("LF: service text exposed before Details");
+    await page.keyboard.press("Enter");
+    await raw.waitFor();
+    await pruefen(page, zustand(`LF Klärfall • ${language} • 320 px`), "main");
+    await context.close();
+  }
 
   // The trail, while the run reads.
   {

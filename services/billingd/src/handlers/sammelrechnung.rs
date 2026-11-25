@@ -262,7 +262,7 @@ pub async fn post_sammelrechnung(
         .await;
         let record_id = match record_id {
             Ok(id) => id,
-            Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+            Err(e) => return Err(period_conflict(&mut tx, &cfg.tenant, e).await),
         };
         crate::einvoice::store(&mut tx, record_id, &site.invoice, &cfg, &site.malo_id).await?;
         per_malo_ids.push(record_id);
@@ -290,6 +290,7 @@ pub async fn post_sammelrechnung(
         );
     } else {
         let ce = rechnung_erstellt_ce(
+            &cfg.tenant,
             sammel_id,
             &rahmenvertrag_id,
             &req.lf_mp_id,

@@ -6,22 +6,11 @@
 [![BDEW](https://img.shields.io/badge/BDEW-EDI%40Energy-green)](https://www.edi-energy.de/)
 [![Container](https://img.shields.io/badge/ghcr.io-mako--makod-blue?logo=docker)](https://github.com/hupe1980/mako/pkgs/container/mako-makod)
 
-> **⚠️ Experimental** — pre-1.0. APIs change between releases. Do not run it in
-> production without thorough in-house testing against your own counterparties.
+> **Experimental.** mako is in development ahead of its first official platform release.
+> APIs can change. Test with your own counterparties before production use.
 
-**mako is an open-source, AI-first operating platform for the German energy
-market, in Rust.** Every regulated process runs as a proven, event-sourced
-workflow — BDEW Marktkommunikation from raw EDIFACT and AS4 bytes, metering,
-grid and EEG settlement, retail billing and the ledger — for the NB, LF, MSB
-and ESA roles and the BKV's MaBiS share. Agents prepare the work; a named
-person decides; every answer, amount and Frist carries its source.
-
-- **The rules are data.** MIG and AHB profiles are imported from the binding
-  BDEW PDFs, so a format release is an import run, not a rewrite.
-- **Code computes, models propose.** Fristen, amounts and verdicts are Rust
-  functions; agents read the same MCP surface as the Desk and never send.
-- **Proof ships with the release.** Every defect class is a CI guard, and each
-  release carries SBOMs, provenance and a VEX document.
+**mako runs market communication and settlement for the German electricity and gas markets.**
+Validate EDIFACT against imported BDEW profiles, follow a process from its incoming message to its reply, or trace a posting back to its billing inputs. In the Desk, an operator can inspect an assistant’s proposal and decide whether to send it.
 
 <p align="center">
   <picture>
@@ -41,7 +30,7 @@ person decides; every answer, amount and Frist carries its source.
 | **Agents** | 11 of the 14 services expose an MCP server — **212 tools**; `agentd` is the governed consumer: 30 specialists on [agentplane](https://github.com/hupe1980/agentplane), advisory and human-gated |
 | **Validator** | [Check an EDIFACT message in your browser](https://hupe1980.github.io/mako/validator/) — the validator makod runs, compiled to WebAssembly — beside an [Antwortcode lookup](https://hupe1980.github.io/mako/validator/codes/), a [Fristenrechner](https://hupe1980.github.io/mako/validator/fristen/) and an [ID check](https://hupe1980.github.io/mako/validator/ids/), and four [calculators](https://hupe1980.github.io/mako/tools/) from the crates the settlement uses — the § 30 MsbG smart-meter cap, a PV system's EEG rate, the 2027 levies, § 14a Modul 1 against Modul 2; nothing leaves the tab |
 | **Desk** | [`desk/`](desk/) — one inbox per Rolle, the rule behind every item, an assistant that cites every sentence ([guide](https://hupe1980.github.io/mako/docs/guide/desk/)) |
-| **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties and a `pytest` plugin · [`mako-conformance`](tools/mako-conformance/) — checks a replacement for a service against the contract mako's publishes ([guide](https://hupe1980.github.io/mako/docs/guide/replace-a-service/)) |
+| **Testing** | [`makotest`](makotest/) — Python toolkit on the same Rust core, with answering counterparties, a `pytest` plugin and offline capture reconciliation and a Strom NB rehearsal through makod’s local capture store · [`mako-conformance`](tools/mako-conformance/) — checks a replacement for vertragd and exports a scoped acceptance verdict with missing evidence ([guide](https://hupe1980.github.io/mako/docs/guide/replace-a-service/)) |
 
 ## Quick start
 
@@ -55,15 +44,10 @@ just doctor        # what this machine still needs, each miss with its fix
 just dev           # PostgreSQL in Docker, every service on this machine, the Desk on :5173
 ```
 
-`just dev` builds every service with cargo, runs each on its
-`deploy/demo/<service>.toml` with its logs in one terminal, and seeds
-**Stadtwerke Musterstadt** through the public APIs: an inbound UTILMD 55001
-answered with the 55002, an affiliate's Anmeldung waiting for a Freigabe, an
-EEG plant settled to the cent, a household invoice issued, booked and paid,
-the Stadtwerk's Gas grid and a Gas customer, and a Gas NN-Rechnung disputed
-for a price its Netzbetreiber's Preisblatt does not publish.
-`just seed --verify` asserts those outcomes. Ctrl-C keeps the data, `just
-dev-down` forgets it.
+`just dev` builds the services, starts them with the configurations in
+`deploy/demo/` and seeds the fictional **Stadtwerke Musterstadt** through the public
+APIs. Run `just seed --verify` to check the supplier switch, invoice, EEG payment
+and disputed Gas network invoice. Ctrl-C preserves the data. `just dev-down` removes it.
 
 | Command | What it does |
 |---|---|
@@ -72,8 +56,10 @@ dev-down` forgets it.
 | `just listen` | Every CloudEvent of the running estate, signature verified, as it arrives |
 | `just dev-ui` | The Desk on its recorded answers — Node only |
 
-The [Getting Started guide](https://hupe1980.github.io/mako/docs/guide/getting-started/)
-walks it.
+Follow [Getting Started](https://hupe1980.github.io/mako/docs/guide/getting-started/) to open the Desk and inspect a case.
+
+- **Restore a supplier close.** Run `just recovery-drill` to recover an invoice and its credit, then verify whether a pending delivery can resume. [Recovery guide](https://hupe1980.github.io/mako/docs/reference/recovery/)
+- **Review a shadow cohort.** Rehearse a captured Anmeldung offline, inspect unassessed messages and record an NB decision in the Desk. [Operator guide](https://hupe1980.github.io/mako/docs/services/processd/#isolated-shadow-review)
 
 ## Architecture
 
@@ -166,10 +152,9 @@ Each crate's README carries its scope, PIDs and regulatory sources.
 
 ## Services
 
-One PostgreSQL schema per daemon; routes, configuration and deployment are in
-[mako docs · Services](https://hupe1980.github.io/mako/docs/services/). Each
-service's OpenAPI 3.1 document is published at
-[mako docs · HTTP APIs](https://hupe1980.github.io/mako/docs/reference/api/).
+Find routes, configuration and deployment details in the service guides.
+The HTTP API catalog lists the services with a published OpenAPI 3.1 document.
+[Service guides](https://hupe1980.github.io/mako/docs/services/) · [HTTP APIs](https://hupe1980.github.io/mako/docs/reference/api/)
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
@@ -182,7 +167,7 @@ service's OpenAPI 3.1 document is published at
 | [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB · ÜNB | Grid settlement — NNE, KA, MMM, MSB, AWH and the MaBiS Summenzeitreihen; issues the INVOIC · 15 MCP tools |
 | [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement · 20 MCP tools + 6 prompts |
 | [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 11 MCP tools |
-| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 18 MCP tools |
+| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing, issuer-scoped billing watch and recovery, EN 16931, Abschlagspläne · 18 MCP tools |
 | [`accountingd`](services/accountingd/) | `:9380` | LF | Massenkontokorrent — tamper-evident double-entry ledger, SEPA, Mahnwesen |
 | [`outputd`](services/outputd/) | `:9880` | — | Customer documents and their delivery, addressed by `[policy] anrede` |
 | [`portald`](services/portald/) | `:9480` | LF | Customer portal gateway and the § 41 EnWG self-service writes |
@@ -311,4 +296,4 @@ Licensed under either of [MIT](./LICENSE-MIT) or
 ## Sister projects
 
 - [emob](https://hupe1980.github.io/emob/) — open-source charging operations: CSMS and eMSP back office, OCPP 2.1, OCPI 2.3.0, Eichrecht. mako covers the market side of e-mobility (`mako-emob`, NZR-EMob Modell 2).
-- [hems](https://hupe1980.github.io/hems/) — open-source home energy management: § 14a, § 9 EEG, MiSpeL. mako holds the § 14a module on the contract and prices its Netzentgelt reduction.
+- [hems](https://hupe1980.github.io/ems/docs/household/) — open-source home energy management: § 14a, § 9 EEG, MiSpeL. mako holds the § 14a module on the contract and prices its Netzentgelt reduction.

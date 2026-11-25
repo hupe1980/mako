@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Versand } from "../data/versand";
 import { HoldProvider } from "./Holds";
-import { HOLD_MS, HoldQueue } from "./holdQueue";
+import { HOLD_MS, HoldQueue, unbestaetigt } from "./holdQueue";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -14,6 +14,33 @@ const sender = () => vi.fn(async (_v: Versand) => undefined);
 const SCHLUESSEL = expect.stringMatching(/^[0-9a-f-]{36}$/);
 
 describe("a held decision", () => {
+  it("keeps a closing page's case for a read in its initiating role even if keepalive receives a reply", async () => {
+    const q = new HoldQueue();
+    q.hold("klaerfall/k-1", "held", sender(), () => {}, "lieferant");
+    q.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(unbestaetigt()).toMatchObject([{ key: "klaerfall/k-1", rolle: "lieferant" }]);
+    localStorage.clear();
+  });
+
+  it("remembers an uncertain decision whose timer expires before the tab closes", async () => {
+    const q = new HoldQueue();
+    q.hold(
+      "klaerfall/k-1",
+      "held",
+      async () => {
+        throw new TypeError("lost response");
+      },
+      () => {},
+      "lieferant",
+    );
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    expect(unbestaetigt().map((entry) => entry.key)).toEqual(["klaerfall/k-1"]);
+    q.flush();
+    expect(unbestaetigt()).toHaveLength(1);
+    localStorage.clear();
+  });
+
   it("sends nothing when it is taken back inside the hold", () => {
     const q = new HoldQueue();
     const send = sender();

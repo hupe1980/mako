@@ -55,6 +55,10 @@ cargo run -p processd --no-default-features --features nb-only   # one role only
 Every route checks a Cedar action in `policies/processd.cedar`; the full table is
 in the operator guide's [Routes and authorization](https://hupe1980.github.io/mako/docs/services/processd/#routes-and-authorization).
 
+## Isolated shadow review
+
+A `[shadow_review]` installation imports a hash-pinned local review file into PostgreSQL and serves the named NB readers at `GET /api/v1/shadow/review` and the read-only MCP tool `get_shadow_review`. Named resolvers can record an evidence reference and reason at `POST /api/v1/shadow/review/{id}/resolve`. The installation constructs its review router before any market clients or workers. [Configuration and operator walkthrough](https://hupe1980.github.io/mako/docs/services/processd/#isolated-shadow-review)
+
 ## Configuration
 
 - `[identity]`: `tenant` (required, the data-isolation key), one MP-ID list

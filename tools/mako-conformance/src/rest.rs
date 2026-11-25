@@ -1,8 +1,9 @@
 //! The REST runner: refusals, statuses and bodies against the committed
 //! OpenAPI document.
 
-use crate::document::{api_error, truncate};
-use crate::report::Runner;
+use crate::document::api_error;
+use crate::profile::Probe;
+use crate::report::Reason;
 use crate::suite::{Ctx, Suite};
 
 /// A path parameter no service holds a record for.
@@ -23,23 +24,20 @@ async fn unauthorised(ctx: &Ctx) {
         .document
         .operations()
         .into_iter()
-        .filter(|o| o.protected())
+        .filter(|op| ctx.report.required(&Probe::RestAuth(op.name())))
     {
-        let name = format!("401 without a token: {}", op.name());
+        let name = Probe::RestAuth(op.name());
         let path = concrete(&op.path);
         let body = (op.method != "GET" && op.method != "DELETE").then(|| serde_json::json!({}));
         match ctx.call(None, &op.method, &path, body.as_ref()).await {
             Ok(a) if a.status == 401 => match api_error(&a.body) {
-                Ok(()) => ctx.report.held(Runner::Rest, name),
-                Err(gap) => ctx.report.broken(Runner::Rest, name, gap),
+                Ok(()) => ctx.report.held(name),
+                Err(gap) => ctx.report.broken(name, gap),
             },
-            Ok(a) if matches!(a.status, 400 | 404 | 405 | 415 | 422) => ctx.report.skipped(
-                Runner::Rest,
-                name,
-                format!("answered {} before the token was read", a.status),
-            ),
+            Ok(a) if matches!(a.status, 400 | 404 | 405 | 415 | 422) => {
+                ctx.report.skipped(name, Reason::AuthNotReached)
+            }
             Ok(a) => ctx.report.broken(
-                Runner::Rest,
                 name,
                 format!(
                     "answered {} without a token, not 401: the operation is not protected as \
@@ -47,9 +45,7 @@ async fn unauthorised(ctx: &Ctx) {
                     a.status
                 ),
             ),
-            Err(e) => ctx
-                .report
-                .broken(Runner::Rest, name, format!("unreachable: {e}")),
+            Err(e) => ctx.report.broken(name, format!("unreachable: {e}")),
         }
     }
 }
@@ -62,49 +58,41 @@ async fn reads(ctx: &Ctx) {
         .document
         .operations()
         .into_iter()
-        .filter(|o| o.method == "GET" && !o.has_path_params() && !o.requires_query())
+        .filter(|op| ctx.report.required(&Probe::RestStatus(op.name())))
     {
-        let name = format!("documented answer: {}", op.name());
-        let a = match ctx.operator("GET", &op.path, None).await {
-            Ok(a) => a,
-            Err(e) => {
-                ctx.report
-                    .broken(Runner::Rest, name, format!("unreachable: {e}"));
+        let status = Probe::RestStatus(op.name());
+        let body = Probe::RestBody(op.name());
+        let required_body = ctx.report.required(&body);
+        let answer = match ctx.operator("GET", &op.path, None).await {
+            Ok(answer) => answer,
+            Err(error) => {
+                ctx.report.broken(status, error.to_string());
                 continue;
             }
         };
-        let Some(response) = op.response(a.status) else {
-            ctx.report.broken(
-                Runner::Rest,
-                name,
-                format!(
-                    "answered {}, a status the document does not declare: {}",
-                    a.status,
-                    truncate(&a.body.to_string())
-                ),
-            );
+        let Some(response) = op.response(answer.status) else {
+            ctx.report
+                .broken(status, format!("undocumented status {}", answer.status));
             continue;
         };
-        if a.status >= 400 {
-            match api_error(&a.body) {
-                Ok(()) => ctx.report.held(Runner::Rest, name),
-                Err(gap) => ctx.report.broken(Runner::Rest, name, gap),
+        if answer.status >= 400 {
+            match api_error(&answer.body) {
+                Ok(()) => ctx.report.held(status),
+                Err(gap) => ctx.report.broken(status, gap),
+            }
+            if required_body {
+                ctx.report.skipped(body, Reason::UnobservedBody);
             }
             continue;
         }
-        match ctx.document.violations(response, &a.body) {
-            None => ctx
-                .report
-                .skipped(Runner::Rest, name, "the answer declares no JSON body"),
-            Some(v) if v.is_empty() => ctx.report.held(Runner::Rest, name),
-            Some(v) => ctx.report.broken(
-                Runner::Rest,
-                name,
-                format!(
-                    "the body is not what the document declares: {}",
-                    v.join("; ")
-                ),
-            ),
+        ctx.report.held(status);
+        if required_body {
+            match ctx.document.violations(response, &answer.body) {
+                None => ctx.report.skipped(body, Reason::UnobservedBody),
+                Some(_) if !answer.json_body => ctx.report.broken(body, "expected a JSON response"),
+                Some(violations) if violations.is_empty() => ctx.report.held(body),
+                Some(violations) => ctx.report.broken(body, violations.join("; ")),
+            }
         }
     }
 }
@@ -112,28 +100,24 @@ async fn reads(ctx: &Ctx) {
 /// The refused principal gets `403` on the suite's refusal route.
 async fn refused(ctx: &Ctx, suite: &dyn Suite) {
     let refusal = suite.refusal();
-    let name = format!("403 for the refused principal: GET {}", refusal.path);
+    let name = Probe::RestRefusal(refusal.path.into());
     let Some(token) = ctx.target.refused_token.as_deref() else {
-        ctx.report
-            .skipped(Runner::Rest, name, "no --refused-token given");
+        ctx.report.skipped(name, Reason::MissingRefusedCredential);
         return;
     };
     match ctx.call(Some(token), "GET", refusal.path, None).await {
         Ok(a) if a.status == 403 => match api_error(&a.body) {
-            Ok(()) => ctx.report.held(Runner::Rest, name),
-            Err(gap) => ctx.report.broken(Runner::Rest, name, gap),
+            Ok(()) => ctx.report.held(name),
+            Err(gap) => ctx.report.broken(name, gap),
         },
         Ok(a) => ctx.report.broken(
-            Runner::Rest,
             name,
             format!(
                 "answered {} — a principal the policy refuses was admitted",
                 a.status
             ),
         ),
-        Err(e) => ctx
-            .report
-            .broken(Runner::Rest, name, format!("unreachable: {e}")),
+        Err(e) => ctx.report.broken(name, format!("unreachable: {e}")),
     }
 }
 

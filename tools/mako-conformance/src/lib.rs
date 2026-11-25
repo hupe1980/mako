@@ -11,14 +11,23 @@
 pub mod document;
 pub mod events;
 pub mod mcp;
+mod profile;
 pub mod report;
 pub mod rest;
 pub mod suite;
 pub mod suites;
+mod transport;
 
 /// The documents every service commits, embedded at build time.
 pub mod documents {
     include!(concat!(env!("OUT_DIR"), "/documents.rs"));
+
+    /// Only the schemas published by the selected service are reference evidence.
+    pub fn event_schemas(service: &str) -> impl Iterator<Item = (&'static str, &'static str)> {
+        EVENT_SCHEMAS
+            .iter()
+            .filter_map(move |&(owner, ty, schema)| (owner == service).then_some((ty, schema)))
+    }
 }
 
 use report::{Report, Runner};
@@ -41,23 +50,41 @@ pub async fn run(
     };
     let openapi = find(documents::OPENAPI)
         .ok_or_else(|| anyhow::anyhow!("{} commits no openapi.json", suite.service()))?;
-    let mcp_tools = find(documents::MCP_SNAPSHOTS)
-        .map(|s| {
-            serde_json::from_str::<serde_json::Value>(s)
-                .ok()
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|t| t["name"].as_str().map(str::to_owned))
-                .collect()
+    let snapshot = find(documents::MCP_SNAPSHOTS)
+        .ok_or_else(|| anyhow::anyhow!("missing MCP reference snapshot"))?;
+    let snapshot_tools: Vec<serde_json::Value> = serde_json::from_str(snapshot)?;
+    let mcp_tools = snapshot_tools
+        .iter()
+        .map(|tool| {
+            tool["name"]
+                .as_str()
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow::anyhow!("invalid MCP reference tool"))
         })
-        .unwrap_or_default();
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let document = document::Document::parse(openapi)?;
+    let schemas: Vec<_> = documents::event_schemas(suite.service()).collect();
+    let profile = profile::Profile::new(
+        suite, only, &document, openapi, snapshot, &mcp_tools, &schemas,
+    )?;
+    let event_schemas = schemas
+        .into_iter()
+        .map(|(ty, text)| {
+            let schema: serde_json::Value = serde_json::from_str(text)?;
+            let validator = jsonschema::draft202012::new(&schema)
+                .map_err(|_| anyhow::anyhow!("invalid reference event schema"))?;
+            Ok((ty, validator))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    let http = transport::client(&target.base)?;
     let ctx = Ctx {
         target,
-        document: document::Document::parse(openapi)?,
+        document,
         mcp_tools,
-        http: reqwest::Client::new(),
-        report: Report::default(),
+        event_schemas,
+        http,
+        report: Report::new(profile),
     };
     let runs = |r: Runner| only.is_none_or(|o| o == r);
     if runs(Runner::Rest) {

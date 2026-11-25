@@ -6,11 +6,13 @@
   "description": "Build-time tooling for the mako documentation site: diagram and link checks, and the post-build step (Pagefind index, Markdown twins, llms.txt). Not shipped — Mermaid loads from a CDN at runtime.",
   "scripts": {
     "check:mermaid": "node tools/check-mermaid.mjs",
-    "check:links": "node tools/check-links.mjs"
+    "check:links": "node tools/check-links.mjs",
+    "check:layout": "node tools/check-layout.mjs"
   },
   "devDependencies": {
     "jsdom": "^27.0.0",
     "mermaid": "^11.16.0",
-    "pagefind": "1.5.2"
+    "pagefind": "1.5.2",
+    "playwright": "1.64.1"
   }
 }

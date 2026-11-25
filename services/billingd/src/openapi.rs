@@ -61,6 +61,7 @@ pub fn api(subs: &Subscriptions) -> OpenApiRouter {
         .routes(routes!(handlers::get_review_queue))
         .routes(routes!(handlers::get_unbilled_periods))
         .routes(routes!(handlers::get_deadline_summary))
+        .routes(routes!(handlers::post_billing_sweep))
         .routes(routes!(handlers::get_nachrechnung))
         .routes(routes!(handlers::post_public_nachrechnung))
         .routes(routes!(handlers::post_revoke_verify_token))

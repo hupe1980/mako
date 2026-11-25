@@ -390,13 +390,10 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let secret = sync
-        .webhook_secret
-        .as_ref()
-        .map(|s| s.expose_secret().as_bytes().to_vec());
+    let secret = sync.webhook_secret.as_ref().map(|s| s.expose_secret());
     // Idempotent by construction — every delivery re-reads the current record
     // — so the webhook id needs no deduplication store.
-    if let Err(e) = mako_service::webhook::verify_request_only(secret.as_deref(), &headers, &body) {
+    if let Err(e) = mako_service::webhook::verify_configured_request(secret, &headers, &body) {
         warn!(error = %e, "malo sync: inbound webhook refused");
         return mako_service::ApiError::from(e).into_response();
     }

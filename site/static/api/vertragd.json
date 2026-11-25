@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.46.0"
+    "version": "0.47.0"
   },
   "paths": {
     "/api/v1/aggregatorvertraege": {
@@ -2251,6 +2251,15 @@
             }
           },
           {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "Invoice issuer for a supply-specific period read.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "as_of",
             "in": "query",
             "description": "Point form: the product in force on this day. Defaults to today.",
@@ -2290,6 +2299,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid supply selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No valid token",
             "content": {
@@ -2312,6 +2331,16 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous supply period",
             "content": {
               "application/json": {
                 "schema": {
@@ -2352,6 +2381,15 @@
             }
           },
           {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "Invoice issuer for a supply-specific period read.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "from",
             "in": "query",
             "required": true,
@@ -2376,6 +2414,16 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid supply selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
               }
             }
           },
@@ -2409,6 +2457,16 @@
               }
             }
           },
+          "409": {
+            "description": "Ambiguous supply period",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "A refusal naming the rule that decided",
             "content": {
@@ -2434,6 +2492,15 @@
             "in": "path",
             "description": "11-digit Marktlokations-ID",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "Select the issuer when a MaLo has competing supply components.",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2479,6 +2546,16 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous supply or later module state",
             "content": {
               "application/json": {
                 "schema": {
@@ -3305,6 +3382,26 @@
         ],
         "summary": "`GET /api/v1/vertraege/billing-candidates` — § 40b EnWG billing cadence feed.",
         "operationId": "billing_candidates",
+        "parameters": [
+          {
+            "name": "ended_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "ended_through",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -3356,6 +3453,33 @@
             }
           },
           {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "Invoice issuer, required alongside the full billing interval.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
             "name": "stichtag",
             "in": "query",
             "description": "`?stichtag=YYYY-MM-DD` — the date a Kündigungsfrist is measured from.\nAbsent means today.",
@@ -3383,6 +3507,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid supply selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No valid token",
             "content": {
@@ -3405,6 +3539,16 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous supply period",
             "content": {
               "application/json": {
                 "schema": {

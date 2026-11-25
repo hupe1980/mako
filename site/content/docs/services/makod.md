@@ -126,6 +126,14 @@ blocking findings and logs every warning. See [Einrichtung](#einrichtung).
 
 ---
 
+## Shadow capture
+
+Use `makotest shadow rehearse --makod-workspace <dir>` to replay one reconciled Strom NB Anmeldung. Put the matching `makod` binary on `PATH`. The command creates a private directory, runs the NB workflow, drains due deadlines and ready outbox entries, and compares the validated 55003 with the supplied expectation. [Run the synthetic example](@/docs/reference/makotest.md#rehearse-a-strom-nb-refusal)
+
+`makod shadow --workspace <dir> --nb <MP-ID> check` prints the local configuration. The shadow command has no network listeners, transport clients or telemetry exporter. Its store retains the request and reply, ERP notifications and source fingerprints. Keep the directory private and outside the mirror.
+
+Use `run` again to drain newly due work, `report` for counts and `answer` to write the private reply to stdout. Repeating the same occurrence reuses its captured bytes. Use a fresh directory for changed input or case facts. Sending authority and outstanding acknowledgements stay with the installation that handles live traffic.
+
 ## Configuration file
 
 Every CLI flag has a config-file key, and every secret has a `*_file` companion
@@ -662,7 +670,7 @@ go to the MaLo-ID sender.
 
 Without the section, `GET /api/v1/format-candidates/{fv}/impact` and MCP
 `get_format_impact` answer `format_impact_not_configured`. Nothing read from the
-archive leaves the deployment.
+archive leaves the deployment. The archive must contain regular files and directories. A truncated interchange counts as one unread file, including when a complete message precedes its missing trailer. Messages without a binding profile have their own count. See the [release workflow](@/docs/compliance/annual-release-workflow.md#read-the-candidate-preview) for the report units and input errors.
 
 ### `[webdienste]` — BDEW API-Webdienste Strom
 
@@ -2379,8 +2387,7 @@ spec:
 
 ### Scaling
 
-Run **one writer**. On `local`, makod holds an exclusive lock on
-`<data-dir>/.makod.lock` and a second instance refuses to start. Object-store
+Run **one writer**. On `local`, the daemon, full `--check` and `migrate` acquire the exclusive lock on `<data-dir>/.makod.lock` before opening SlateDB. Stop the incumbent before a full check or migration. For an online configuration inspection, use `--check-config`. The lock file remains on disk after exit. The kernel releases ownership when the owning process exits. Object-store
 backends carry no such lock, so keeping a second instance off the same bucket
 prefix is the deployment's job — one replica with a `Recreate` rollout. AS4
 inbox deduplication and the business-key lock are per instance, and makod has
@@ -2403,7 +2410,7 @@ boot consumes the same preflight output.
 | Profiles | Every module has an active `edi-energy` profile for each of its message types |
 | Adapter coverage | Every adapter registry accepts every format version the profile registry declares |
 | Dispatch completeness | Every workflow the `PidRouter` reaches has an ingest dispatch arm |
-| Store | The object store opens and the data-directory lock is acquired |
+| Store | Local storage opens after acquiring the directory guard. The configured cloud backend opens its object store. |
 | AS4 material | `As4::builder(..).build()` succeeds for every `[[party]]`; trust anchor, CRL signer and message-id domain set; distinct key pairs; every partner endpoint HTTPS with an encryption certificate |
 | Cedar | The policy set compiles, including `authz.cedar_policy_dir` |
 | Ports | Every authenticated port has a key or an OIDC issuer; an issuer has an audience and HTTPS |

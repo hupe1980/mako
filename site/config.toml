@@ -7,11 +7,9 @@ base_url = "https://hupe1980.github.io/mako"
 # check-translations`). A Zola section has no fallback across languages, so a
 # German page needs the German `_index.de.md` of every section above it.
 default_language = "en"
-title = "mako — AI-first German Energy Market Platform in Rust"
-# Search engines show roughly 155-160 characters and `base.html` truncates at
-# 180. This is the fallback for every page without its own front-matter
-# `description`, the landing page included, so it has to fit unabridged.
-description = "Open-source, AI-first German energy-market platform in Rust: BDEW MaKo from raw EDIFACT to production, typed MCP tools for agents, NNE/EEG settlement and AS4."
+title = "mako — German energy market communication and settlement"
+# Fallback for pages without a description.
+description = "Open-source software for German electricity and gas markets. Validate EDIFACT, trace MaKo workflows and reconcile billing and settlement in one operator Desk."
 
 # Pretty URLs (/page/ → /page/index.html); no trailing-slash 404s on GitHub Pages.
 compile_sass = true
@@ -25,8 +23,8 @@ feed_filenames = ["atom.xml"]
 taxonomies = []
 
 [languages.de]
-title = "mako — KI-first Plattform für die deutsche Marktkommunikation in Rust"
-description = "Open-Source-Plattform in Rust für die Marktkommunikation von Strom und Gas: BDEW-MaKo von EDIFACT bis Produktion, MCP-Werkzeuge für Agenten, Abrechnung und AS4."
+title = "mako — Marktkommunikation und Abrechnung für Strom und Gas"
+description = "Open-Source-Plattform in Rust für die Marktkommunikation von Strom und Gas: EDIFACT-Prüfung und ereignisbasierte MaKo-Prozesse, MCP-Werkzeuge für Agenten, Abrechnung und AS4."
 generate_feeds = true
 feed_filenames = ["atom.xml"]
 build_search_index = false        # Pagefind owns search; see above
@@ -78,7 +76,7 @@ trace_out_sub = "persist before dispatch · CloudEvents"
 trace_prod = "in production"
 trace_foot = "Stages 2 to 5 are computed in your browser by the code makod runs; nothing leaves the tab."
 trace_open = "Open it in the Validator →"
-trace_after = "The format layer reads the BDEW profiles as data, so an annual release is an import run rather than a rewrite. The domain layer never sees EDIFACT: it receives typed commands and emits typed events."
+trace_after = "The format layer imports published BDEW profiles. Workflows receive typed commands and emit typed events."
 trace_loading = "Loading the validator (1.5 MB, once) …"
 trace_failed = "The validator did not load"
 trace_too_big = "The file is larger than 2 MB."
@@ -177,7 +175,7 @@ trace_out_sub = "erst speichern, dann senden · CloudEvents"
 trace_prod = "im Betrieb"
 trace_foot = "Schritte 2 bis 5 rechnet der Code, mit dem makod arbeitet, in deinem Browser; nichts verlässt den Tab."
 trace_open = "Im Validator öffnen →"
-trace_after = "Die Formatebene liest die BDEW-Profile als Daten, ein jährlicher Formatwechsel ist also ein Import und kein Umbau. Die Fachebene sieht kein EDIFACT: Sie bekommt typisierte Befehle und schreibt typisierte Ereignisse."
+trace_after = "Die Formatebene importiert die veröffentlichten BDEW-Profile. Die Workflows verarbeiten typisierte Befehle und schreiben Ereignisse."
 trace_loading = "Der Validator wird geladen (1,5 MB, einmalig) …"
 trace_failed = "Der Validator ließ sich nicht laden"
 trace_too_big = "Die Datei ist größer als 2 MB."
@@ -274,7 +272,7 @@ crates = [
 # (`footer_sibling_<key>`).
 siblings = [
   { key = "emob", url = "https://hupe1980.github.io/emob/" },
-  { key = "hems", url = "https://hupe1980.github.io/hems/" },
+  { key = "hems", url = "https://hupe1980.github.io/ems/docs/household/" },
 ]
 # Latest supported BDEW EDI@Energy format versions (shown in the footer).
 format_versions = "FV2025-04-01 → FV2026-10-01"

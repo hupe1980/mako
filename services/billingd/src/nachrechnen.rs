@@ -192,6 +192,10 @@ pub struct Nachrechnung {
     /// Last day of the billed period.
     #[schemars(extend("format" = "date"))]
     pub period_to: String,
+    /// Issuance time from the billing record. Channel evidence is owned by outputd.
+    #[serde(with = "time::serde::rfc3339::option")]
+    #[schemars(with = "Option<String>", extend("format" = "date-time"))]
+    pub dispatched_at: Option<time::OffsetDateTime>,
     /// The verdict, on top.
     pub verdict: Verdict,
     /// Every line, in the invoice's order.
@@ -298,6 +302,7 @@ pub fn nachrechnen(row: &BillingRecordRow) -> anyhow::Result<Nachrechnung> {
         .collect();
     Ok(Nachrechnung {
         record_id: row.id.to_string(),
+        dispatched_at: row.dispatched_at,
         rechnungsnummer: row.rechnungsnummer.clone(),
         malo_id: row.malo_id.clone(),
         period_from: row.period_from.to_string(),

@@ -1,24 +1,49 @@
-//! `mako-conformance <service> <base-url> [options]` — exit 0 when every check
-//! held, 1 on a gap, 2 on a usage error.
+//! Diagnose individual probes or assess the full replacement contract.
 
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use mako_conformance::report::Runner;
+use anyhow::{Context, ensure};
+use mako_conformance::report::{Runner, valid_target_label};
 use mako_conformance::suite::Target;
+use tempfile::NamedTempFile;
 
 const USAGE: &str = "\
-mako-conformance <service> <base-url> --token <bearer>
-    [--refused-token <bearer>]   a principal the service refuses (403 / MCP refusal)
-    [--inbound-secret <secret>]  the secret the service verifies inbound events with
-    [--listen 127.0.0.1:9198]    where the kit receives deliveries
-    [--callback <url>]           the URL the service delivers to (default http://<listen>/)
-    [--wait 30]                  seconds to wait for deliveries
-    [--only rest|events|mcp]
+mako-conformance <service> <test-url> --token <bearer> [options]
 
-Run against a test deployment, never production.";
+  --acceptance --target-build <label> --report <file>
+                               assess the full contract and write JSON evidence
+  --refused-token <bearer>     principal refused on the REST and MCP refusal probes
+  --inbound-secret <secret>    secret for the inbound event receiver
+  --listen <addr>              local delivery listener (default 127.0.0.1:9198)
+  --callback <url>             URL the test target uses to reach the listener
+  --wait <seconds>             delivery observation window (default 30)
+  --only rest|events|mcp       select a runner (partial acceptance is incomplete)
+  -h, --help                   print this help
 
-fn parse(args: &[String]) -> Result<(String, Target, Option<Runner>), String> {
+Example (isolated seeded test deployment):
+  mako-conformance vertragd http://127.0.0.1:9780 --token \"$TEST_TOKEN\" \\
+    --acceptance --target-build demo-1 --report evidence.json
+
+Acceptance exits: 0 passed, 1 failed, 2 usage or output error, 3 incomplete.
+The diagnostic mode exits 1 for broken probes. Seeds write test records.";
+
+struct Acceptance {
+    label: String,
+    path: PathBuf,
+}
+
+struct Options {
+    service: String,
+    target: Target,
+    only: Option<Runner>,
+    acceptance: Option<Acceptance>,
+}
+
+#[must_use = "invalid arguments must produce a usage error"]
+fn parse(args: &[String]) -> anyhow::Result<Options> {
     let mut positional = Vec::new();
     let mut target = Target {
         base: String::new(),
@@ -30,80 +55,120 @@ fn parse(args: &[String]) -> Result<(String, Target, Option<Runner>), String> {
         wait: Duration::from_secs(30),
     };
     let mut only = None;
+    let mut acceptance = false;
+    let mut label = None;
+    let mut path = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || {
             it.next()
+                .filter(|v| !v.starts_with("--") && !v.is_empty())
                 .cloned()
-                .ok_or_else(|| format!("{a} needs a value"))
+                .with_context(|| format!("{a} needs a value"))
         };
         match a.as_str() {
+            "--acceptance" => acceptance = true,
+            "--target-build" => label = Some(value()?),
+            "--report" => path = Some(PathBuf::from(value()?)),
             "--token" => target.token = value()?,
             "--refused-token" => target.refused_token = Some(value()?),
             "--inbound-secret" => target.inbound_secret = Some(value()?),
             "--listen" => target.listen = value()?,
             "--callback" => target.callback = Some(value()?),
             "--wait" => {
-                target.wait = Duration::from_secs(
-                    value()?
-                        .parse()
-                        .map_err(|_| "--wait takes seconds".to_owned())?,
+                target.wait =
+                    Duration::from_secs(value()?.parse().context("--wait takes seconds")?);
+                ensure!(
+                    std::time::Instant::now().checked_add(target.wait).is_some(),
+                    "--wait is too large"
                 );
             }
             "--only" => {
-                let v = value()?;
-                only = Some(
-                    Runner::parse(&v)
-                        .ok_or_else(|| format!("--only {v:?} is not rest, events or mcp"))?,
-                );
+                only = Some(Runner::parse(&value()?).context("--only takes rest, events or mcp")?)
             }
-            "-h" | "--help" => return Err(String::new()),
-            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
-            other => positional.push(other.to_owned()),
+            other if other.starts_with('-') => anyhow::bail!("unknown option (see --help)"),
+            other => positional.push(other),
         }
     }
     let [service, base] = positional.as_slice() else {
-        return Err("expected <service> <base-url>".to_owned());
+        anyhow::bail!("expected <service> <test-url>");
     };
-    if target.token.is_empty() {
-        return Err("--token is required".to_owned());
-    }
+    ensure!(!target.token.is_empty(), "--token is required");
     target.base = base.trim_end_matches('/').to_owned();
-    Ok((service.clone(), target, only))
+    let acceptance = if acceptance {
+        let label = label.context("--acceptance needs --target-build")?;
+        ensure!(
+            valid_target_label(&label),
+            "--target-build needs 1–64 ASCII letters, digits, dots, underscores or hyphens"
+        );
+        Some(Acceptance {
+            label,
+            path: path.context("--acceptance needs --report")?,
+        })
+    } else {
+        ensure!(
+            label.is_none() && path.is_none(),
+            "--target-build and --report require --acceptance"
+        );
+        None
+    };
+    Ok(Options {
+        service: (*service).to_owned(),
+        target,
+        only,
+        acceptance,
+    })
+}
+
+#[must_use = "return the assessment exit status to the caller"]
+async fn execute(options: Options) -> anyhow::Result<u8> {
+    let suite = mako_conformance::suites::suite(&options.service).with_context(|| {
+        let services: Vec<_> = mako_conformance::suites::SUITES
+            .iter()
+            .map(|s| s.service())
+            .collect();
+        format!("unknown service. Available suites: {}", services.join(", "))
+    })?;
+    if let Some(acceptance) = options.acceptance {
+        let parent = acceptance
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut file = NamedTempFile::new_in(parent)
+            .context("cannot create report in destination directory")?;
+        let report = mako_conformance::run(suite, options.target, options.only).await?;
+        let evidence = report.acceptance(&acceptance.label)?;
+        serde_json::to_writer_pretty(&mut file, &evidence).context("cannot write evidence JSON")?;
+        file.write_all(b"\n")?;
+        file.as_file().sync_all()?;
+        file.persist(acceptance.path)
+            .map_err(|e| e.error)
+            .context("cannot publish evidence file")?;
+        println!("{evidence}");
+        Ok(evidence.exit_code())
+    } else {
+        let report = mako_conformance::run(suite, options.target, options.only).await?;
+        println!("{report}");
+        Ok(u8::from(!report.gaps().is_empty()))
+    }
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let (service, target, only) = match parse(&args) {
-        Ok(p) => p,
-        Err(why) => {
-            if !why.is_empty() {
-                eprintln!("{why}\n");
-            }
-            eprintln!("{USAGE}");
-            return ExitCode::from(2);
-        }
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    let result = match parse(&args) {
+        Ok(options) => execute(options).await,
+        Err(error) => Err(error),
     };
-    let Some(suite) = mako_conformance::suites::suite(&service) else {
-        let known: Vec<_> = mako_conformance::suites::SUITES
-            .iter()
-            .map(|s| s.service())
-            .collect();
-        eprintln!("no suite for {service:?} — known: {}", known.join(", "));
-        return ExitCode::from(2);
-    };
-    match mako_conformance::run(suite, target, only).await {
-        Ok(report) => {
-            println!("{report}");
-            if report.gaps().is_empty() {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
-        }
-        Err(e) => {
-            eprintln!("{e}");
+    match result {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("{error}");
             ExitCode::from(2)
         }
     }

@@ -10,7 +10,7 @@
 use time::macros::date;
 use vertragd::{
     domain::{self, Kuendigungsgrund, Verlaengerung, Vertragsart},
-    events::{build_cloud_event, parse_mako_outcome},
+    events::{parse_mako_outcome, typed_event},
 };
 
 // ── MaKo outcome parsing ──────────────────────────────────────────────────────
@@ -163,19 +163,43 @@ fn an_unrelated_event_is_not_an_outcome() {
 #[test]
 fn an_emitted_event_correlates_on_the_contract_it_belongs_to() {
     let vertrag_id = uuid::Uuid::new_v4();
-    let event = build_cloud_event(
-        mako_events::vertrag::KUENDIGUNG,
+    let event = typed_event(
         vertrag_id,
         "9900357000004",
-        serde_json::json!({ "lieferende": "2026-12-31" }),
-    );
+        &vertragd::events::Aktiv { vertrag_id },
+    )
+    .expect("typed event");
     let json = serde_json::to_value(&event).expect("serialise");
-    assert_eq!(json["type"], mako_events::vertrag::KUENDIGUNG);
+    assert_eq!(json["type"], mako_events::vertrag::AKTIV);
     assert_eq!(json["subject"], vertrag_id.to_string());
     assert_eq!(json["tenantid"], "9900357000004");
     assert_eq!(
         json["correlationid"], json["subject"],
         "consumers correlate a contract's whole lifecycle without parsing data"
+    );
+}
+
+#[test]
+fn an_order_event_keeps_the_partners_reference_and_schema() {
+    let id = uuid::Uuid::new_v4();
+    let reference = "reference-order";
+    let event = vertragd::events::typed_bestell_event(
+        reference,
+        id,
+        "conformance-stadtwerk",
+        &vertragd::events::BestellungAbgelehnt {
+            bestellung_id: id,
+            bestellreferenz: reference.to_owned(),
+            grund: "refused".to_owned(),
+        },
+    )
+    .expect("typed order event");
+    assert_eq!(event.subject.as_deref(), Some(reference));
+    assert_eq!(event.extensions["correlationid"], id.to_string());
+    assert_eq!(event.ce_type, mako_events::vertrag::BESTELLUNG_ABGELEHNT);
+    assert_eq!(
+        event.dataschema,
+        Some(mako_service::cloudevent::schema_url(&event.ce_type))
     );
 }
 

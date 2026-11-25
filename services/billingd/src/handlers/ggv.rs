@@ -283,7 +283,7 @@ pub async fn post_tarifwechsel(
     .await;
     let record_id = match record_id {
         Ok(id) => id,
-        Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+        Err(e) => return Err(period_conflict(&mut tx, &cfg.tenant, e).await),
     };
     if held {
         tracing::warn!(
@@ -292,7 +292,14 @@ pub async fn post_tarifwechsel(
             "billingd: Tarifwechsel invoice HELD by risk gate"
         );
     } else {
-        let ce = rechnung_erstellt_ce(record_id, &malo_id, &req.lf_mp_id, &rechnung_json, false);
+        let ce = rechnung_erstellt_ce(
+            &cfg.tenant,
+            record_id,
+            &malo_id,
+            &req.lf_mp_id,
+            &rechnung_json,
+            false,
+        );
         issue_record(&mut tx, &cfg, record_id, &ce).await?;
     }
     persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
@@ -720,7 +727,7 @@ pub async fn post_ggv_billing(
         .await;
         let record_id = match record_id {
             Ok(id) => id,
-            Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+            Err(e) => return Err(period_conflict(&mut tx, &cfg.tenant, e).await),
         };
         crate::einvoice::store(&mut tx, record_id, &t.invoice, &cfg, &t.malo_id).await?;
         tenant_results.push(serde_json::json!({
@@ -754,7 +761,14 @@ pub async fn post_ggv_billing(
             "billingd: GGV bundle HELD by risk gate — issuance requires POST …/release"
         );
     } else {
-        let ce = rechnung_erstellt_ce(sammel_id, &ggv_id, &req.lf_mp_id, &sammel_rechnung, false);
+        let ce = rechnung_erstellt_ce(
+            &cfg.tenant,
+            sammel_id,
+            &ggv_id,
+            &req.lf_mp_id,
+            &sammel_rechnung,
+            false,
+        );
         issue_record(&mut tx, &cfg, sammel_id, &ce).await?;
     }
     persist_risk(&mut *tx, sammel_id, assessment.as_ref()).await?;

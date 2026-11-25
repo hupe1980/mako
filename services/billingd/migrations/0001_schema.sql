@@ -305,12 +305,18 @@ CREATE INDEX br_tenant_period ON billing_records (tenant, period_from DESC);
 
 -- ── Unbilled periods (§ 40c Abs. 2 EnWG watch) ───────────────────────────────
 
--- A billing period the scheduled run attempted and could not bill, with the
--- refusal it got and the § 40c Abs. 2 EnWG date it is owed by. A log line and
--- a counter do not tell a person which customer is about to miss a Frist; a
--- row does. The run writes it with one upsert per attempt; the trigger below
--- closes it when any path writes the period's invoice, and re-opens it when
--- that invoice is cancelled by a Storno.
+-- The scheduled run and its watch share the same definition of a supply
+-- original. A bundle, its children, a VPP settlement and a Gebührenbescheid
+-- cannot discharge the retail supply period.
+CREATE VIEW billing_supply_originals AS
+    SELECT id, tenant, lf_mp_id, malo_id, period_from, period_to, outcome,
+           dispatched_at, due_on
+      FROM billing_records
+     WHERE is_correction = false AND dokumentart = 'RECHNUNG'
+       AND sammelrechnung_id IS NULL AND category NOT IN ('SAMMEL', 'VPP')
+       AND due_on IS NOT NULL;
+
+-- One refusal history per issuer and supply period.
 CREATE TABLE unbilled_periods (
     tenant          TEXT        NOT NULL,
     malo_id         TEXT        NOT NULL,
@@ -322,45 +328,33 @@ CREATE TABLE unbilled_periods (
     -- The stable refusal code (`NO_METER_DATA`, `RATE_REFUSED`,
     -- `ABSCHLAEGE_UNBEKANNT`, `STORNIERT`, …); the Desk words it from its
     -- catalogue.
-    reason_code     TEXT        NOT NULL,
-    -- The refusal's developer message; shown only under „Details".
-    message         TEXT        NOT NULL,
+    reason_code     TEXT        NOT NULL CHECK (reason_code ~ '^[A-Z][A-Z0-9_]{0,63}$'),
     due_on          DATE        NOT NULL,
     attempts        INTEGER     NOT NULL DEFAULT 1 CHECK (attempts > 0),
     first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- The invoice that discharged the period; NULL while it is open.
-    settled_by      UUID        REFERENCES billing_records(id) ON DELETE SET NULL,
-    settled_at      TIMESTAMPTZ,
-    CONSTRAINT up_settled_together CHECK ((settled_by IS NULL) = (settled_at IS NULL)),
     CONSTRAINT up_period CHECK (period_from <= period_to),
-    PRIMARY KEY (tenant, malo_id, period_from, period_to)
+    PRIMARY KEY (tenant, lf_mp_id, malo_id, period_from, period_to)
 );
 
-CREATE INDEX up_open_by_due ON unbilled_periods (tenant, due_on)
-    WHERE settled_by IS NULL;
+CREATE INDEX up_by_due ON unbilled_periods (tenant, due_on);
 
--- An issued invoice for the period discharges it, whichever path wrote it —
--- the run, `/calculate`, a manual re-bill after a Storno. A record the risk
--- gate holds (`generated`) has reached nobody, so it discharges nothing until
--- it is released.
-CREATE OR REPLACE FUNCTION unbilled_periods_settle() RETURNS trigger
-    LANGUAGE plpgsql AS $$
-BEGIN
-    UPDATE unbilled_periods
-       SET settled_by = NEW.id, settled_at = now()
-     WHERE tenant = NEW.tenant AND malo_id = NEW.malo_id
-       AND period_from = NEW.period_from AND period_to = NEW.period_to
-       AND settled_by IS NULL;
-    RETURN NULL;
-END $$;
-
-CREATE TRIGGER billing_records_settle_unbilled
-    AFTER INSERT OR UPDATE OF outcome ON billing_records
-    FOR EACH ROW
-    WHEN (NEW.outcome = 'dispatched' AND NEW.is_correction = false
-          AND NEW.dokumentart = 'RECHNUNG')
-    EXECUTE FUNCTION unbilled_periods_settle();
+-- Issuance and a failed attempt may commit in either order, including when no
+-- refusal exists yet. Reading the live invoice in the same database snapshot
+-- keeps a delayed refusal from reopening an already issued period.
+CREATE VIEW unbilled_period_status AS
+    SELECT p.*, issued.id AS settled_by, issued.dispatched_at AS settled_at
+      FROM unbilled_periods p
+      LEFT JOIN LATERAL (
+          SELECT i.id, i.dispatched_at
+            FROM billing_supply_originals i
+           WHERE i.tenant = p.tenant AND i.lf_mp_id = p.lf_mp_id
+             AND i.malo_id = p.malo_id AND i.period_from = p.period_from
+             AND i.period_to = p.period_to AND i.outcome <> 'cancelled'
+             AND i.dispatched_at IS NOT NULL
+           ORDER BY i.dispatched_at DESC, i.id
+           LIMIT 1
+      ) issued ON true;
 
 -- A Storno takes the period's invoice back, so the period is owed one again
 -- by the same date. Only an invoice that carries a § 40c date re-opens a watch.
@@ -369,14 +363,16 @@ CREATE OR REPLACE FUNCTION unbilled_periods_reopen() RETURNS trigger
 BEGIN
     INSERT INTO unbilled_periods
         (tenant, malo_id, lf_mp_id, period_from, period_to, final_invoice,
-         reason_code, message, due_on)
-    VALUES (NEW.tenant, NEW.malo_id, NEW.lf_mp_id, NEW.period_from, NEW.period_to,
-            NEW.rechnung_json @> '{"zusatzAttribute": [{"name": "mako:rechnungsart", "wert": "SCHLUSSRECHNUNG"}]}',
-            'STORNIERT', 'invoice ' || NEW.rechnungsnummer || ' was cancelled by a Storno',
-            NEW.due_on)
-    ON CONFLICT (tenant, malo_id, period_from, period_to) DO UPDATE
-       SET reason_code = 'STORNIERT', message = EXCLUDED.message,
-           settled_by = NULL, settled_at = NULL, last_seen_at = now();
+         reason_code, due_on)
+    SELECT i.tenant, i.malo_id, i.lf_mp_id, i.period_from, i.period_to,
+           COALESCE(NEW.rechnung_json ->> 'rechnungstyp' = 'ABSCHLUSSRECHNUNG', false),
+           'STORNIERT', i.due_on
+      FROM billing_supply_originals i
+     WHERE i.tenant = NEW.tenant AND i.id = NEW.id
+    ON CONFLICT (tenant, lf_mp_id, malo_id, period_from, period_to) DO UPDATE
+       SET reason_code = EXCLUDED.reason_code,
+           final_invoice = EXCLUDED.final_invoice, due_on = EXCLUDED.due_on,
+           last_seen_at = now();
     RETURN NULL;
 END $$;
 
@@ -455,18 +451,18 @@ COMMENT ON TABLE billing_run_log IS
 CREATE TABLE abrechnungsinfo_log (
     id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant        TEXT        NOT NULL,
+    lf_mp_id      TEXT        NOT NULL,
     malo_id       TEXT        NOT NULL,
     info_year     SMALLINT    NOT NULL,
     info_month    SMALLINT    NOT NULL CHECK (info_month BETWEEN 1 AND 12),
     sent_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (tenant, malo_id, info_year, info_month)
+    UNIQUE (tenant, lf_mp_id, malo_id, info_year, info_month)
 );
 
 COMMENT ON TABLE abrechnungsinfo_log IS
     '§ 40b Abs. 3 EnWG: monthly Abrechnungsinformation dispatch log for '
-    'iMSys/fernauslesbare MaLos. UNIQUE guard = one info per MaLo and month. '
-    'A claim is released again when the delivery it guards does not happen, '
-    'so a transient failure postpones the info rather than cancelling it.';
+    'iMSys/fernauslesbare MaLos. Each issuer claims a MaLo and month in the '
+    'transaction that enqueues its event.';
 
 -- ── VPP dispatch idempotency ──────────────────────────────────────────────────
 -- Prevents double-billing when the outbox retries a de.mako.vpp.dispatch.confirmed
@@ -486,3 +482,36 @@ COMMENT ON TABLE vpp_dispatch_ledger IS
     'Idempotency guard for de.mako.vpp.dispatch.confirmed webhook delivery. '
     'Prevents double-billing on outbox retry, and is the reason per-dispatch '
     'VPP settlements are exempt from br_unique_original.';
+
+-- A source failure precedes identification of any Lieferant.
+CREATE TABLE billing_discovery (
+    run_id UUID NOT NULL,
+    tenant TEXT NOT NULL,
+    business_date DATE NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    finished_at TIMESTAMPTZ,
+    next_attempt_at TIMESTAMPTZ,
+    origin TEXT NOT NULL CHECK (origin IN ('manual', 'scheduled')),
+    PRIMARY KEY (tenant, run_id),
+    ended_from DATE NOT NULL,
+    ended_through DATE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    candidate_count BIGINT CHECK (candidate_count >= 0),
+    error_code TEXT,
+    CHECK (ended_through BETWEEN ended_from AND ended_from + 84),
+    CHECK ((status = 'running' AND finished_at IS NULL AND error_code IS NULL AND candidate_count IS NULL)
+        OR (status = 'completed' AND finished_at IS NOT NULL AND error_code IS NULL AND candidate_count IS NOT NULL)
+        OR (status = 'failed' AND finished_at IS NOT NULL AND error_code IS NOT NULL AND candidate_count IS NULL))
+);
+CREATE INDEX billing_discovery_recent ON billing_discovery (tenant, started_at DESC, run_id);
+CREATE TABLE billing_discovery_issuers (
+    tenant TEXT NOT NULL,
+    run_id UUID NOT NULL,
+    FOREIGN KEY (tenant, run_id) REFERENCES billing_discovery(tenant, run_id),
+    lf_mp_id TEXT NOT NULL,
+    candidates INTEGER NOT NULL CHECK (candidates > 0),
+    billed INTEGER NOT NULL CHECK (billed >= 0),
+    skipped INTEGER NOT NULL CHECK (skipped >= 0),
+    errors INTEGER NOT NULL CHECK (errors >= 0),
+    PRIMARY KEY (tenant, run_id, lf_mp_id)
+);

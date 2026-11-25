@@ -512,10 +512,6 @@
               "description": "Stable refusal code — word it from the catalogue, never show it raw.",
               "type": "string"
             },
-            "message": {
-              "description": "The refusal's developer message (for „Details\").",
-              "type": "string"
-            },
             "due_on": {
               "description": "§ 40c Abs. 2 EnWG: the last day the invoice may reach the customer.",
               "type": "string",
@@ -546,18 +542,101 @@
             "period_to",
             "final_invoice",
             "reason_code",
-            "message",
             "due_on",
             "days_left",
             "attempts",
             "settled_by"
+          ]
+        },
+        "Discovery": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "business_date": {
+              "type": "string",
+              "format": "date"
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "finished_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "next_attempt_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "source": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "error_code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "candidate_count": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "last_failure_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "ended_from": {
+              "type": "string",
+              "format": "date"
+            },
+            "ended_through": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          "required": [
+            "run_id",
+            "business_date",
+            "started_at",
+            "finished_at",
+            "next_attempt_at",
+            "source",
+            "origin",
+            "status",
+            "error_code",
+            "candidate_count",
+            "last_failure_at",
+            "ended_from",
+            "ended_through"
           ]
         }
       },
       "required": [
         "periods",
         "count",
-        "saturated"
+        "saturated",
+        "discovery"
       ],
       "type": "object",
       "properties": {
@@ -577,6 +656,16 @@
         "saturated": {
           "description": "At least `limit` periods matched: more may be waiting than were listed.",
           "type": "boolean"
+        },
+        "discovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Discovery"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }
@@ -1285,6 +1374,7 @@
         "malo_id",
         "period_from",
         "period_to",
+        "dispatched_at",
         "verdict",
         "lines",
         "totals",
@@ -1314,6 +1404,14 @@
           "description": "Last day of the billed period.",
           "type": "string",
           "format": "date"
+        },
+        "dispatched_at": {
+          "description": "Issuance time from the billing record. Channel evidence is owned by outputd.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
         },
         "verdict": {
           "description": "The verdict, on top.",
@@ -1396,10 +1494,94 @@
             "issued_late",
             "overdue"
           ]
+        },
+        "Discovery": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "business_date": {
+              "type": "string",
+              "format": "date"
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "finished_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "next_attempt_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "source": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "error_code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "candidate_count": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "last_failure_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "ended_from": {
+              "type": "string",
+              "format": "date"
+            },
+            "ended_through": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          "required": [
+            "run_id",
+            "business_date",
+            "started_at",
+            "finished_at",
+            "next_attempt_at",
+            "source",
+            "origin",
+            "status",
+            "error_code",
+            "candidate_count",
+            "last_failure_at",
+            "ended_from",
+            "ended_through"
+          ]
         }
       },
       "required": [
-        "lieferanten"
+        "lieferanten",
+        "discovery"
       ],
       "type": "object",
       "properties": {
@@ -1409,6 +1591,16 @@
           "items": {
             "$ref": "#/$defs/DeadlineSummaryRow"
           }
+        },
+        "discovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Discovery"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }

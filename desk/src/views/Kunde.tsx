@@ -44,7 +44,7 @@ function supplyState(l: Lieferstelle): { text: string; tone: Tone } {
     case "ANGELEGT":
       return { text: k.angelegt, tone: "calm" };
     default:
-      return { text: k.unknownStatus(l.status), tone: "calm" };
+      return { text: k.unknownStatus, tone: "calm" };
   }
 }
 

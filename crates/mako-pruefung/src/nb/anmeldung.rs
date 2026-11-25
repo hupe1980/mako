@@ -311,38 +311,42 @@ pub fn evaluate(
 
 // ── E_0622, verbrauchende / ruhende Marktlokation (Prüfschritte 15–70) ────────
 
-fn e_0622_verbrauchend(
-    anfrage: &AnmeldungAnfrage,
-    versorgung: Option<&VersorgungsStatusRecord>,
-    grid: &MaloGridRecord,
-    partner_known: bool,
+/// Check Vorlauf and market participation for a known consuming or ruhende Strom MaLo.
+///
+/// `ruhend` carries the facts for a ZAP Anmeldung; pass `None` for a consuming MaLo.
+/// A surviving request continues at E_0622 Prüfschritt 50 (EBD 4.3, chapter 6.6.1, pp. 72–74).
+#[must_use]
+pub fn evaluate_anmeldung_teilnahme(
+    malo_id: &str,
+    stillgelegt: bool,
+    ruhend: Option<super::RuhendeAnmeldung>,
     today: Date,
-    config: NetzCheckConfig,
-) -> NbEntscheidung {
+    lieferbeginn: Date,
+    calendar: HolidayCalendar,
+) -> Option<NbEntscheidung> {
     // ── 15: Wurde die Vorlauffrist eingehalten? ──────────────────────────────
-    if !has_werktag_strictly_between(today, anfrage.process_date, config.holiday_calendar) {
-        return strom(
+    if !has_werktag_strictly_between(today, lieferbeginn, calendar) {
+        return Some(strom(
             "A07",
             15,
             format!(
-                "Vorlauffrist not met: requested Zuordnungsbeginn {} vs receipt day {today}. \
+                "Vorlauffrist not met: requested Zuordnungsbeginn {lieferbeginn} vs receipt day {today}. \
                  GPKE Teil 2 Kap. 2.1.2 Nr. 1 (S. 18): spätester ÜT ist der Tag vor dem \
                  letzten WT vor dem Zuordnungsbeginn — at least one full Werktag must lie \
                  between receipt and Lieferbeginn; no Anmeldung is retroactive, whatever \
-                 its Transaktionsgrund.",
-                anfrage.process_date
+                 its Transaktionsgrund."
             ),
-        );
+        ));
     }
 
     // ── 16–28: Ruhende Marktlokation ─────────────────────────────────────────
     //
     // Prüfschritt 16 asks whether the Ergänzung names a „Ruhende
     // Marktlokation" — the `ZAP` the caller maps onto `Ruhend`.
-    if anfrage.marktlokationsart == Marktlokationsart::Ruhend
-        && let Some(entscheidung) = ruhende_marktlokation(anfrage)
+    if let Some(facts) = ruhend
+        && let Some(entscheidung) = ruhende_marktlokation(malo_id, facts)
     {
-        return entscheidung;
+        return Some(entscheidung);
     }
 
     // ── 30: Nimmt die Marktlokation an der Marktkommunikation teil? ──────────
@@ -353,18 +357,41 @@ fn e_0622_verbrauchend(
     // zugeordnet sind." A **ruhende** Marktlokation is not in it — Prüfschritte
     // 16–28 exist precisely to check one, so refusing it here would refuse the
     // Anwendungsfall the tree is built around.
-    if let Some(vs) = versorgung
-        && vs.lieferstatus == LieferStatus::Stillgelegt
-    {
-        return strom(
+    if stillgelegt {
+        return Some(strom(
             "A02",
             30,
             format!(
                 "MaLo {} does not participate in market communication \
                  (lieferstatus = {}).",
-                anfrage.malo_id, vs.lieferstatus
+                malo_id,
+                LieferStatus::Stillgelegt
             ),
-        );
+        ));
+    }
+
+    None
+}
+
+fn e_0622_verbrauchend(
+    anfrage: &AnmeldungAnfrage,
+    versorgung: Option<&VersorgungsStatusRecord>,
+    grid: &MaloGridRecord,
+    partner_known: bool,
+    today: Date,
+    config: NetzCheckConfig,
+) -> NbEntscheidung {
+    let ruhend = (anfrage.marktlokationsart == Marktlokationsart::Ruhend).then_some(anfrage.ruhend);
+    let stillgelegt = versorgung.is_some_and(|vs| vs.lieferstatus == LieferStatus::Stillgelegt);
+    if let Some(outcome) = evaluate_anmeldung_teilnahme(
+        &anfrage.malo_id,
+        stillgelegt,
+        ruhend,
+        today,
+        anfrage.process_date,
+        config.holiday_calendar,
+    ) {
+        return outcome;
     }
 
     // ── 50: Handelt es sich um eine Anmeldung für eine Neuanlage? ────────────
@@ -771,14 +798,12 @@ fn neuanlage_offen(
 
 /// `E_0622` Prüfschritte 18–28 — an Anmeldung of a ruhende Marktlokation
 /// (EBD 4.3 Kap. 6.6.1, S. 72 f.). `None` when the walk continues at 30.
-fn ruhende_marktlokation(anfrage: &AnmeldungAnfrage) -> Option<NbEntscheidung> {
-    let r = &anfrage.ruhend;
+fn ruhende_marktlokation(malo_id: &str, r: super::RuhendeAnmeldung) -> Option<NbEntscheidung> {
     let offen = |pruefschritt: u16, frage: &str| {
         Some(NbEntscheidung::Escalate {
             reason: format!(
-                "Anmeldung ruhende Marktlokation {}: {frage} is not recorded (E_0622 \
-                 Prüfschritt {pruefschritt}, EBD 4.3 Kap. 6.6.1).",
-                anfrage.malo_id
+                "Anmeldung ruhende Marktlokation {malo_id}: {frage} is not recorded (E_0622 \
+                 Prüfschritt {pruefschritt}, EBD 4.3 Kap. 6.6.1)."
             ),
         })
     };

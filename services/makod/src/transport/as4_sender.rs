@@ -256,7 +256,7 @@ impl As4Sender for WebhookEdifactSender {
             if let Some(secret) = &shared_secret {
                 use secrecy::ExposeSecret as _;
                 for (name, value) in mako_service::webhook::headers(
-                    secret.expose_secret().as_bytes(),
+                    &mako_service::webhook::signing_key(secret.expose_secret()),
                     &msg_owned.message_id.to_string(),
                     time::OffsetDateTime::now_utc().unix_timestamp(),
                     &body,

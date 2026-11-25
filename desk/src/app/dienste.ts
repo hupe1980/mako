@@ -28,13 +28,15 @@ const GELESEN = [
   "einsd",
   "agentd",
   "productd",
+  "outputd",
+  "portald",
 ] as const satisfies readonly (Service | NurRest | "agentd")[];
 
 /** The services the Desk reads, as an operator calls them. */
 export const DIENST: Record<Service | NurRest | "agentd", string> = benannt(GELESEN);
 
 /** Every service an assistant skill may read, as an operator knows it. */
-const ALLE: Record<string, string> = benannt([...GELESEN, "portald", "sperrd", "outputd"]);
+const ALLE: Record<string, string> = benannt([...GELESEN, "sperrd"]);
 
 /** The fallback for a service the Desk does not know. */
 const dienst = () => katalog().dienstNamen.unbekannt;

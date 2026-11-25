@@ -64,7 +64,7 @@ async fn the_sharing_invoice_is_booked_at_its_gross() {
     let ce = serde_json::json!({
         "specversion": "1.0",
         "id": "ce-sharing-1",
-        "source": format!("urn:mako:billingd:{TENANT}"),
+        "source": mako_service::source("billingd", TENANT),
         "type": "de.mako.billing.rechnung.erstellt",
         "time": "2026-08-03T08:00:00Z",
         "subject": malo,

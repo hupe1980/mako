@@ -14,6 +14,7 @@ import {
 } from "../format/bilanz";
 import { formatCount } from "../format/count";
 import { useT } from "../i18n";
+import { discoverySummary } from "../inbox/discovery";
 import { DESK_ASSISTANT, useKatalog } from "./Bilanz";
 import { useDeadLetters } from "./DeadLetters";
 import { Hinweise } from "./Hinweise";
@@ -131,12 +132,18 @@ function AbrechnungsfristenTiles() {
     );
   return (
     <>
+      <Tile
+        label={t.billingWatch.title}
+        source={DIENST.vertragd}
+        href="/heute?quelle=abrechnungen"
+        state={{ kind: "wert", zeilen: [discoverySummary(q.data.discovery)] }}
+      />
       {(q.data.lieferanten ?? []).map((l) => (
         <Tile
           key={l.lf_mp_id}
           label={t.ueberblick.abrechnungsfristenVon(l.lf_mp_id)}
           source={DIENST.billingd}
-          href="/heute"
+          href="/heute?quelle=abrechnungen"
           state={{
             kind: "wert",
             wert: formatCount(l.overdue),

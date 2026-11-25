@@ -31,11 +31,14 @@ just zugferd-verify # veraPDF + Mustang, containerized; not part of just ci
 
 ## API
 
+The OpenAPI document at `GET /api/v1/openapi.json` describes the delivery-evidence lookup by document kind and issuer reference.
+
 | Route | Purpose |
 |---|---|
 | `POST /api/v1/render/{kind}` | Stateless render → PDF + `X-Mako-Template-Hash` |
 | `POST /api/v1/documents/issue/{kind}` | Render, record and queue for delivery; idempotent on `subject_ref` |
 | `GET /api/v1/documents` · `/{document_id}` · `/{document_id}/content` | The inbox; content is the bytes as issued |
+| `GET /api/v1/documents/by-subject/{kind}?subject_ref=…` | Channel states and timestamps for an opaque reference, including invoice numbers with slashes |
 | `GET /api/v1/documents/by-subject/{kind}/{subject_ref}` | One document by what it is about, with its delivery tracks |
 | `GET /api/v1/deliveries?status=FAILED&kind=` | Failed deliveries — the operator's work list |
 | `GET /api/v1/spool` | What a print service collects |

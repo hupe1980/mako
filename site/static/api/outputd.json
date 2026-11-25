@@ -1,0 +1,275 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "outputd — document delivery evidence",
+    "description": "Read channel evidence for an issued document by its kind and issuer reference, within the authenticated tenant.",
+    "contact": {
+      "name": "hupe1980"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.47.0"
+  },
+  "paths": {
+    "/api/v1/documents/by-subject/{kind}": {
+      "get": {
+        "tags": [
+          "delivery evidence"
+        ],
+        "summary": "Read channel evidence by an opaque reference, including separators in invoice numbers.",
+        "operationId": "get_document_by_reference",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Document kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TemplateKind"
+            }
+          },
+          {
+            "name": "subject_ref",
+            "in": "query",
+            "description": "The issuer's nonempty reference. Send exactly once as a query value.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel states and their recorded timestamps for this document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectEvidence"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid kind or reference",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentProblem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access token refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar read-document refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document matches the kind and reference in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure with a correlation identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "ChannelEvidence": {
+        "type": "object",
+        "required": [
+          "channel",
+          "status",
+          "first_sent_at",
+          "delivered_at",
+          "read_at"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "PORTAL, EMAIL, POST or ERP."
+          },
+          "delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "first_sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "PENDING, SENT, DELIVERED, FAILED or SUPPRESSED. SENT records a handoff."
+          }
+        }
+      },
+      "DocumentProblem": {
+        "type": "object",
+        "description": "An outputd business refusal.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/DocumentProblemDetail"
+          }
+        }
+      },
+      "DocumentProblemDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable code identifying the refusal."
+          },
+          "error_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Correlation identifier on internal failures."
+          },
+          "message": {
+            "type": "string",
+            "description": "Diagnostic for the caller."
+          }
+        }
+      },
+      "SubjectEvidence": {
+        "type": "object",
+        "description": "Delivery proof for a selected document, without recipient addresses or relay payloads.",
+        "required": [
+          "kind",
+          "subject_ref",
+          "deliveries"
+        ],
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelEvidence"
+            }
+          },
+          "kind": {
+            "type": "string"
+          },
+          "subject_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "TemplateKind": {
+        "type": "string",
+        "description": "Which document a template renders.\n\nEvery kind shares one store and one engine, deliberately: an operator\nmaintaining two template systems for one brand is how a logo change reaches\nthe invoice and not the Mahnung.",
+        "enum": [
+          "INVOICE",
+          "MAHNUNG",
+          "PREISANPASSUNG",
+          "GEBUEHRENBESCHEID",
+          "VERTRAGSZUSAMMENFASSUNG",
+          "VERTRAGSBESTAETIGUNG",
+          "WIDERRUFSBESTAETIGUNG"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "oidc": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "security": [
+    {
+      "oidc": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "delivery evidence",
+      "description": "Document channel states and recorded times"
+    }
+  ]
+}

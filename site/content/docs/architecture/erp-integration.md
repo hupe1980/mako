@@ -107,7 +107,9 @@ what one checks. All three must hold:
 1. The signature matches `base64(HMAC-SHA256(key, "{id}.{timestamp}.{body}"))`.
    Note it covers the id and the timestamp, **not the body alone**. The key of a
    `whsec_…` secret is the base64 after the prefix, decoded (Standard Webhooks);
-   any other secret is its own bytes.
+   any other secret is its own bytes. Subscription deliveries, fixed webhooks,
+   and signed relay commands all use this rule. A relay’s HTTP bearer token
+   remains the configured string.
 2. `webhook-timestamp` is within **5 minutes** of now, in either direction.
    Without this a captured request replays forever.
 3. `webhook-id` has not been seen before. Reject or ignore the duplicate.

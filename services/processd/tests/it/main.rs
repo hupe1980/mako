@@ -21,6 +21,7 @@ mod request_bodies;
 mod role_separation;
 mod router_builds;
 mod schema_enum_guard;
+mod shadow_review;
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 mod sperr;
 mod sql_integration;

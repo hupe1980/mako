@@ -261,7 +261,7 @@ impl ErpAdapter for WebhookErpAdapter {
             // of emitter, and `webhook-id` is the idempotency key they were
             // already deduplicating on.
             for (name, value) in mako_service::webhook::headers(
-                secret.expose_secret().as_bytes(),
+                &mako_service::webhook::signing_key(secret.expose_secret()),
                 &event.idempotency_key,
                 time::OffsetDateTime::now_utc().unix_timestamp(),
                 &body,
@@ -752,8 +752,7 @@ fn payload_with_antwort(
 }
 
 /// The CloudEvent JSON `WebhookErpAdapter` posts for `event`.
-#[cfg(test)]
-pub(crate) fn cloud_event_json(event: &ErpEvent) -> serde_json::Value {
+pub fn cloud_event_json(event: &ErpEvent) -> serde_json::Value {
     serde_json::to_value(CloudEventEnvelope::from_erp_event(event)).expect("serialisable")
 }
 
@@ -1007,7 +1006,7 @@ mod tests {
         );
         let event = super::erp_event(&msg).expect("an ERP event");
         let key = event.idempotency_key.clone();
-        let secret = "marktd-inbound-secret";
+        let secret = "whsec_bWFya3RkLWluYm91bmQtc2VjcmV0";
         super::WebhookErpAdapter::new(
             format!("http://{addr}/inbound"),
             Some(secrecy::SecretString::from(secret.to_owned())),
@@ -1017,8 +1016,9 @@ mod tests {
         .expect("delivered");
 
         let (headers, body) = rx.recv().await.expect("one delivery");
-        let id = mako_service::webhook::verify_request(Some(secret.as_bytes()), &headers, &body)
-            .expect("marktd's verifier admits the signature");
+        let id =
+            mako_service::webhook::verify_request(Some(b"marktd-inbound-secret"), &headers, &body)
+                .expect("marktd's verifier admits the signature");
         assert_eq!(
             id.as_ref().map(mako_service::webhook::WebhookId::as_str),
             Some(key.as_str())

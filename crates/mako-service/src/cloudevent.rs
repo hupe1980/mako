@@ -551,22 +551,22 @@ mod tests {
     #[test]
     fn source_is_a_urn() {
         assert_eq!(
-            source("billingd", "9900000000001"),
-            "urn:mako:billingd:tenant:9900000000001"
+            source("billingd", "stadtwerke-musterstadt"),
+            "urn:mako:billingd:tenant:stadtwerke-musterstadt"
         );
     }
 
     #[test]
     fn new_sets_canonical_defaults() {
         let ce = CloudEvent::new(
-            source("billingd", "9900000000001"),
+            source("billingd", "stadtwerke-musterstadt"),
             mako_events::billing::RECHNUNG_ERSTELLT,
-            "DE0001",
-            serde_json::json!({"betrag": "42.00"}),
+            "51238696012",
+            serde_json::json!({"lf_mp_id":"9900357000028", "malo_id":"51238696012"}),
         );
         assert_eq!(ce.specversion, "1.0");
         assert_eq!(ce.datacontenttype.as_deref(), Some("application/json"));
-        assert_eq!(ce.subject.as_deref(), Some("DE0001"));
+        assert_eq!(ce.subject.as_deref(), Some("51238696012"));
         // id is a parseable UUID v4 by default.
         assert!(Uuid::parse_str(&ce.id).is_ok());
         // time round-trips as RFC3339.
@@ -756,8 +756,8 @@ mod publish_tests {
         CloudEvent::new(
             source("billingd", "t1"),
             mako_events::billing::RECHNUNG_ERSTELLT,
-            "DE0001",
-            serde_json::json!({"a": 1}),
+            "51238696012",
+            serde_json::json!({"lf_mp_id":"9900357000028", "malo_id":"51238696012"}),
         )
     }
 

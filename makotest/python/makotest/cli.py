@@ -1,21 +1,22 @@
 """`makotest` on the command line.
 
 A library you cannot point at a file from a shell is one only Python teams
-adopt. The three things worth reaching for without writing a test are: what is
+adopt. The questions worth reaching for without writing a test include what is
 wrong with this interchange, when is this answer due, is this identifier one a
 counterparty would accept, and what is a counterparty entitled to answer with.
 
-Everything here is a thin front end over the same bindings the assertions use,
-so the CLI and a test cannot disagree about an answer.
+The domain commands use the same bindings as the Python assertions. The shadow
+command compares independent local evidence for the selected traffic window.
 
     makotest validate inbound.edi --on 2026-04-01
     makotest frist 55001 --received 2026-03-02T09:00:00Z
     makotest id 9900357000004
     makotest pids UTILMD --on 2026-04-01 --sparte STROM
     makotest codes --pid 55001
+    makotest shadow reconcile --help
 
-Exit status is 0 when the answer is yes and 1 when it is no, so a shell can
-branch on it.
+Exit status is 0 for agreement, 1 for a disagreement or negative answer, and 2
+when a determination cannot be made.
 """
 
 from __future__ import annotations
@@ -24,32 +25,63 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
-from typing import Any
-
-from ._native import (
-    antwort_codes,
-    antwort_codes_for_pid,
-    antwort_obligation,
-    eic_is_valid,
-    eic_type_char,
-    format_versions,
-    malo_is_valid,
-    melo_is_valid,
-    message_types_of,
-    mp_id_authority,
-    mp_id_check_digit_schemes,
-    mp_id_is_valid,
-    pruefidentifikatoren,
-    release_for,
-    validate_edifact,
-)
+from pathlib import Path
+from typing import Any, Never
 
 __all__ = ["main"]
 
 
+class _InvalidShadowArguments(Exception):
+    """A shadow usage error may contain a private path or identifier."""
+
+
+class _ShadowParser(argparse.ArgumentParser):
+    def error(self, message: str) -> Never:
+        raise _InvalidShadowArguments
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = _parser()
-    args = parser.parse_args(argv)
+    words = sys.argv[1:] if argv is None else list(argv)
+    positional = (word for word in words if not word.startswith("-"))
+    command = next(positional, None)
+    parser = _parser(_ShadowParser if command == "shadow" else argparse.ArgumentParser)
+    try:
+        args = parser.parse_args(words)
+    except _InvalidShadowArguments:
+        action = next(positional, None)
+        if action in ("invoice", "pair"):
+            kind = "status" if action == "invoice" else "classification"
+            print(
+                json.dumps(
+                    {"version": 1, kind: "unassessed", "reason": "invalid_arguments"}
+                )
+            )
+            return 2
+        if action == "rehearse":
+            from .rehearsal import unassessed_report
+
+            print(
+                json.dumps(unassessed_report() | {"reason": "invalid_arguments"}),
+                file=sys.stderr,
+            )
+            return 2
+        from .shadow import unknown_report
+
+        return _emit_shadow(unknown_report("invalid_arguments"))
+    if args.command == "shadow":
+        if args.action == "pair":
+            from .shadow_pair import run
+
+            return run(args)
+        if args.action == "invoice":
+            from .invoice_review import run
+
+            return run(args)
+        if args.action == "rehearse":
+            from .rehearsal import run
+
+            return run(args)
+        return _shadow_reconcile(args)
     handler = {
         "validate": _validate,
         "frist": _frist,
@@ -68,26 +100,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+def _parser(
+    parser_type: type[argparse.ArgumentParser] = argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
+    parser = parser_type(
         prog="makotest",
         description=(
             "Validate EDIFACT, resolve answer Fristen and inspect BDEW "
-            "identifiers, through the same engine a MaKo platform runs."
+            "identifiers, or reconcile local shadow traffic against a source journal."
         ),
     )
     parser.add_argument(
         "--json",
         dest="json_global",
         action="store_true",
-        help="emit machine-readable JSON instead of a human report",
+        help="emit machine-readable JSON",
     )
     #: `--json` again on every subcommand, so it works on either side of it.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--json",
         action="store_true",
-        help="emit machine-readable JSON instead of a human report",
+        help="emit machine-readable JSON",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -147,7 +181,155 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "versions", parents=[common], help="every compiled BDEW format version"
     )
+    shadow = sub.add_parser(
+        "shadow", parents=[common], help="account for the input to a shadow comparison"
+    )
+    actions = shadow.add_subparsers(dest="action", required=True)
+    pair = actions.add_parser(
+        "pair", help="compare observed answers in two closed wire captures"
+    )
+    pair.add_argument(
+        "--incumbent", required=True, type=Path, help="incumbent capture directory"
+    )
+    pair.add_argument(
+        "--shadow", required=True, type=Path, help="shadow capture directory"
+    )
+    pair.add_argument("--case", required=True, type=Path, help="private NB case file")
+    invoice = actions.add_parser(
+        "invoice", help="compare an ESA invoice and its REMADV locally"
+    )
+    invoice.add_argument(
+        "--invoice", required=True, type=Path, help="captured BO4E Rechnung"
+    )
+    invoice.add_argument(
+        "--reference",
+        required=True,
+        type=Path,
+        help="independent price, quantity, facts and expected REMADV",
+    )
+    reconcile = actions.add_parser(
+        "reconcile",
+        parents=[common],
+        help="compare a closed source journal and a local mirror inventory",
+        description=(
+            "Compare per-message occurrences and bytes for a closed capture window. "
+            "Write one versioned JSON report to stdout. All inputs stay local."
+        ),
+        epilog=(
+            "Example (from the capture directory)\n"
+            "  makotest shadow reconcile --journal journal.json "
+            "--inventory inventory.json --mirror-root mirror\n\n"
+            "Exit status\n"
+            "  0 complete or confirmed_empty, 1 mismatch, 2 unknown or invalid input.\n\n"
+            "Recovery\n"
+            "  Missing or unlisted file? Reacquire the frozen mirror and its inventory"
+            " together.\n"
+            "  Scope mismatch or coverage gap? Obtain closed batches for the same"
+            " cohort,\n"
+            "  capture layer, time window and required directions on both sides.\n"
+            "  A confirmed_empty interval accounts for time and adds zero inbound"
+            " comparison\n"
+            "  candidates. Check eligible_for_comparison before comparing outcomes.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    rehearse = actions.add_parser(
+        "rehearse",
+        help="compare one offline Strom NB refusal with an independent expectation",
+        description="Recheck the capture and compare one validated NB reply.",
+        epilog=(
+            "From the private capture directory:\n"
+            "makotest shadow rehearse --journal journal.json --inventory inventory.json "
+            "--mirror-root mirror --coverage reports/complete.json --case case.json "
+            "--expected expected.json --emit summary\n\n"
+            "Exit 0: matched or no candidates. Exit 1: paired difference.\n"
+            "Exit 2: unavailable evidence. The answer stream contains private EDIFACT."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    rehearse.add_argument(
+        "--coverage", required=True, type=Path, help="saved reconciliation report"
+    )
+    rehearse.add_argument(
+        "--case", required=True, type=Path, help="local occurrence and NB facts"
+    )
+    rehearse.add_argument(
+        "--expected", required=True, type=Path, help="independent expected answer"
+    )
+    rehearse.add_argument(
+        "--makod-workspace",
+        type=Path,
+        help="compare a makod capture in a private occurrence directory",
+    )
+    rehearse.add_argument(
+        "--also",
+        nargs="+",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="add a case, expectation and optional receipt to the review",
+    )
+    rehearse.add_argument(
+        "--observation",
+        type=Path,
+        help="positive AS4 receipts for the request and incumbent answer",
+    )
+    rehearse.add_argument(
+        "--review-nb", help="expected recipient MP-ID of every inbound review row"
+    )
+    rehearse.add_argument(
+        "--emit",
+        choices=("report", "summary", "answer", "daemon-input", "review"),
+        default="report",
+        help="write the report, summary, private answer, makod input or NB review file",
+    )
+    for action in (reconcile, rehearse):
+        action.add_argument(
+            "--journal",
+            required=True,
+            type=Path,
+            metavar="FILE",
+            help="version 1 closed journal export from the source system",
+        )
+        action.add_argument(
+            "--inventory",
+            required=True,
+            type=Path,
+            metavar="FILE",
+            help="version 1 inventory of independently captured occurrences",
+        )
+        action.add_argument(
+            "--mirror-root",
+            required=True,
+            type=Path,
+            metavar="DIR",
+            help="stable read-only directory containing only the captured payload files",
+        )
     return parser
+
+
+def _shadow_reconcile(args: argparse.Namespace) -> int:
+    from .shadow import reconcile, unknown_report
+    from .shadow_io import ShadowInputError, Snapshot
+
+    try:
+        with Snapshot(args.mirror_root) as snapshot:
+            journal, inventory = snapshot.read_manifests(args.journal, args.inventory)
+            report = reconcile(journal, inventory, snapshot)
+    except ShadowInputError as exc:
+        report = unknown_report(exc.code)
+    except OSError:
+        report = unknown_report("input_unavailable")
+    except (ValueError, RecursionError):
+        report = unknown_report("invalid_manifest")
+    return _emit_shadow(report)
+
+
+def _emit_shadow(report: dict[str, Any]) -> int:
+    status = {"complete": 0, "confirmed_empty": 0, "mismatch": 1, "unknown": 2}
+    print(json.dumps(report, sort_keys=True, separators=(",", ":"), allow_nan=False))
+    return status[report["status"]]
 
 
 def _emit(args: argparse.Namespace, payload: dict[str, Any], lines: list[str]) -> None:
@@ -158,6 +340,8 @@ def _emit(args: argparse.Namespace, payload: dict[str, Any], lines: list[str]) -
 
 
 def _validate(args: argparse.Namespace) -> int:
+    from ._native import validate_edifact
+
     raw = sys.stdin.buffer.read() if args.file == "-" else _read(args.file)
     report = validate_edifact(raw, args.on)
     payload: dict[str, Any] = {
@@ -237,6 +421,8 @@ def _validate(args: argparse.Namespace) -> int:
 
 
 def _frist(args: argparse.Namespace) -> int:
+    from ._native import antwort_obligation
+
     obligation = antwort_obligation(args.pid)
     if obligation is None:
         _emit(
@@ -284,6 +470,17 @@ def _frist(args: argparse.Namespace) -> int:
 
 
 def _identify(args: argparse.Namespace) -> int:
+    from ._native import (
+        eic_is_valid,
+        eic_type_char,
+        malo_is_valid,
+        melo_is_valid,
+        message_types_of,
+        mp_id_authority,
+        mp_id_check_digit_schemes,
+        mp_id_is_valid,
+    )
+
     value = args.value
     payload: dict[str, Any] = {"value": value, "kinds": []}
     lines = []
@@ -333,6 +530,8 @@ def _identify(args: argparse.Namespace) -> int:
 
 
 def _pids(args: argparse.Namespace) -> int:
+    from ._native import pruefidentifikatoren, release_for
+
     codes = pruefidentifikatoren(args.message_type, args.on, args.sparte)
     release = release_for(args.message_type, args.on, args.sparte) if args.on else None
     _emit(
@@ -354,6 +553,8 @@ def _pids(args: argparse.Namespace) -> int:
 
 
 def _codes(args: argparse.Namespace) -> int:
+    from ._native import antwort_codes, antwort_codes_for_pid, antwort_obligation
+
     if args.ebd:
         tree, codes = args.ebd, antwort_codes(args.ebd)
     else:
@@ -404,6 +605,8 @@ def _codes(args: argparse.Namespace) -> int:
 
 
 def _versions(args: argparse.Namespace) -> int:
+    from ._native import format_versions
+
     versions = format_versions()
     _emit(args, {"format_versions": versions}, versions)
     return 0

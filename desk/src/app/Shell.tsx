@@ -11,6 +11,7 @@ import { CommandPalette } from "./CommandPalette";
 import { HoldProvider } from "./Holds";
 import { SHEET } from "./keys";
 import { LaufPills } from "./LaufPills";
+import { useLaufzeit } from "./laufzeit";
 import { RolleBadge } from "./RolleBadge";
 import { ROLLEN, useRolle } from "./rollen";
 import { ShortcutSheet } from "./ShortcutSheet";
@@ -67,6 +68,7 @@ function Group({ titel, children }: { titel: string; children: ReactNode }) {
 
 /** The views, the gallery in dev and the account: one sidebar, docked or as a sheet. */
 function Seitenleiste({ onShortcuts }: { onShortcuts: () => void }) {
+  const { shadowReview } = useLaufzeit();
   const { rolle } = useRolle();
   const t = useT();
   return (
@@ -108,6 +110,11 @@ function Seitenleiste({ onShortcuts }: { onShortcuts: () => void }) {
           <NavItem to="/zustellungen" icon="download">
             {t.zustellungen.titel}
           </NavItem>
+          {shadowReview && rolle === "netz" && (
+            <NavItem to="/schattenbetrieb" icon="flow">
+              {t.shadow.title}
+            </NavItem>
+          )}
           <NavItem to="/einrichtung" icon="tune">
             {t.einrichtung.nav}
           </NavItem>

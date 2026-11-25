@@ -1,8 +1,8 @@
 # AGENTS.md — desk/
 
 mako Desk, the operator's web UI: React 19, TypeScript (strict), Vite, Tailwind
-4, React Aria Components, TanStack Router/Query. It reads the services' MCP
-tools — the surface agents are granted — and writes through their REST routes.
+4, React Aria Components, TanStack Router/Query. It uses documented REST operations
+and typed MCP reads. Business writes use the services’ REST routes.
 
 ## Run it
 
@@ -26,10 +26,12 @@ script (`allowScripts` in `package.json`).
 - **Name no service.** An operator knows the Marktkommunikation, not
   `makod`: captions, errors and source chips name services through
   `src/app/dienste.ts`, never by their crate name.
-- **The assistant is agentd's run API**, the one REST read (`src/data/agent.ts`):
+- **The assistant uses agentd's run API** (`src/data/agent.ts`):
   a question starts a run, its answer arrives sentence by sentence with the
   check agentd made — the Desk shows `belegt`, it never decides it.
-- **A view reads typed tools only.** `call(service, tool, args)` accepts the
+- **Use the typed business read.** Lokation, Konto and Anlage use `lesen`
+  from `src/data/api/client.ts` with routes in the generated OpenAPI types.
+  Use this client for new documented REST reads. For MCP, `call(service, tool, args)` accepts the
   tools in `src/data/gen/<service>.ts`, generated from the service's
   `mcp.snapshot.json`; `<service>Untyped` lists the rest. To read a new tool,
   give it an output type in the service (`#[tool(output_schema = …)]` with a

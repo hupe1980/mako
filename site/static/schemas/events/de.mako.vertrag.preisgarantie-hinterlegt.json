@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PreisgarantieHinterlegt",
+  "type": "object",
+  "properties": {
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "preisgarantie_bis": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date"
+    }
+  },
+  "required": [
+    "vertrag_id"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.preisgarantie-hinterlegt.json"
+}

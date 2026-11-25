@@ -120,7 +120,8 @@ export function katalogErsetzen(k: Katalog | null) {
   for (const h of hoerer) h();
 }
 
-/** A row of a catalogue's table for a key a service returns, or the key itself. */
-export function eintrag(tabelle: Record<string, string>, key: string): string {
-  return tabelle[key] ?? key;
+/** Render a service code in the current language, including unfamiliar values. */
+export function eintrag(tabelle: Record<string, string>, key: string, fallback?: string): string {
+  const value = Object.hasOwn(tabelle, key) ? tabelle[key] : undefined;
+  return value ?? fallback ?? katalog().values.unbekannt;
 }

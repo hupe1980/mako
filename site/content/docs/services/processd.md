@@ -57,6 +57,53 @@ graph TB
 
 ---
 
+## Isolated shadow review
+
+Run one review installation for a tenant, a Strom NB and a closed capture window. Give it its own database. The service imports a locally produced cohort and serves review operations. Its startup bypasses the live clients, inbound webhook, decision queues and dispatch workers. The incumbent retains custody of all market sends.
+
+1. Run the capture rehearsal with the matching `makod` on `PATH`. Save the review on the trusted host. The fixture below is synthetic. A private capture requires the operator’s own MP-ID and independently obtained facts and expectations.
+2. Pin the resulting file digest, scope and generation in `processd.toml`. Supply the operator’s OIDC issuer, audience and explicitly appointed subjects. Start with generation 1. Restarting the same generation accepts the identical file. Install changed evidence under a greater generation.
+3. Route the Desk’s `/svc/processd/` to this installation and set `"shadowReview": true` in the Desk's `/config.json`. Wear the NB role and open **System → Schattenbetrieb**. Select an occurrence to see the expected and captured business fields, Prüfschritt and the request and reply digests. Enter opens the detail, Escape returns focus to the row.
+4. To accept an incumbent error, enter a reason and a local archive reference. A separately appointed resolver confirms the decision. A corrected mako answer requires a recheck against the same request and independent expectation. A stale decision receives HTTP 412. Reload before deciding on the current evidence.
+
+```sh
+umask 077
+capture=makotest/tests/fixtures/shadow
+workspace=$(mktemp -d)
+makotest shadow rehearse --journal "$capture/journal.json" \
+  --inventory "$capture/inventory.json" --mirror-root "$capture/mirror" \
+  --coverage "$capture/reports/complete.json" --case "$capture/case.json" \
+  --expected "$capture/expected.json" --makod-workspace "$workspace" \
+  --emit review --review-nb 9900357000003 > review.json
+# 0 = agreement or empty, 1 = difference with evidence, 2 = unavailable
+shasum -a 256 review.json
+jq -r .scope_fingerprint "$capture/reports/complete.json"
+```
+
+```toml
+[http]
+addr = "127.0.0.1:8580"
+[database]
+url = "env:REVIEW_DATABASE_URL"
+[identity]
+tenant = "stadtwerke-musterstadt"
+nb_mp_ids = ["9900357000003"]
+verbundene_lieferanten = []
+[oidc]
+issuer = "https://issuer.example.org"
+audience = "processd-review"
+[shadow_review]
+file = "/srv/review/review.json"
+sha256 = "<file SHA-256>"
+scope = "<scope_fingerprint from the independent coverage report>"
+generation = 1
+required_werktage = 5
+readers = ["nb-reviewer", "nb-resolver"]
+resolvers = ["nb-resolver"]
+```
+
+Read the same cohort through `GET /api/v1/shadow/review` or `get_shadow_review` on `/mcp`. Both require a signed token for the installation's tenant, role NB and a listed subject. Only REST exposes the resolution command. The checked-in fixture yields **1 of 2 assessed, 2 without receipt timing and 0 complete Werktage**. An empty interval has zero candidates. A positive readiness result requires both traffic directions, sufficient whole Werktage, every comparison and timing observation, and no open finding. The operator decides about cutover.
+
 ## Role isolation
 
 Feature flags select which decision paths compile in, so a deployment carries
@@ -1137,7 +1184,7 @@ notices then reach only the registered endpoints.
 | `de.mako.sperr.versuch.gescheitert` | The **first** Sperrversuch failed and the order stayed `pending` |
 | `de.mako.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
 | `de.mako.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
-| `de.mako.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open |
+| `de.mako.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open. The sweep claims each overdue order once, including across worker replicas. |
 | `de.mako.sperr.ausfuehrung.nach-storno` | An execution was reported for an order withdrawn beforehand |
 | `de.mako.sperr.iftsta.ausstehend` | The IFTSTA command was dead-lettered **or** the Kap. 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
 

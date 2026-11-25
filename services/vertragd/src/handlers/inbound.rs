@@ -17,14 +17,14 @@ use super::Ctx;
 use crate::{
     angebot_bo4e,
     domain::{self, Vertragsart},
-    events::{build_cloud_event, parse_mako_outcome},
+    events::{self, parse_mako_outcome},
     outbound, pg,
 };
 
 /// Reject a body whose signature does not match before it can mutate anything.
 fn verify_signature(ctx: &Ctx, headers: &HeaderMap, body: &Bytes) -> ApiResult<()> {
-    mako_service::webhook::verify_request(
-        ctx.cfg.inbound_secret.as_deref().map(str::as_bytes),
+    mako_service::webhook::verify_configured_request(
+        ctx.cfg.inbound_secret.as_deref(),
         headers,
         body,
     )
@@ -239,12 +239,14 @@ pub(super) async fn apply_outcome(
         .await
         .map_err(ApiError::Internal)?;
     if status == "AKTIV" {
-        let ce = build_cloud_event(
-            mako_events::vertrag::AKTIV,
+        let ce = events::typed_event(
             k.vertrag_id,
             ctx.tenant(),
-            serde_json::json!({ "vertrag_id": k.vertrag_id }),
-        );
+            &events::Aktiv {
+                vertrag_id: k.vertrag_id,
+            },
+        )
+        .map_err(|e| ApiError::Internal(e.into()))?;
         mako_service::outbox::enqueue(&mut *tx, &ce)
             .await
             .map_err(|e| ApiError::Internal(e.into()))?;

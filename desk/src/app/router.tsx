@@ -52,6 +52,9 @@ const KundeView = lazy(() => import("../views/Kunde").then((m) => ({ default: m.
 const FristenView = lazy(() =>
   import("../views/Fristen").then((m) => ({ default: m.FristenView })),
 );
+const ShadowReviewView = lazy(() =>
+  import("../views/ShadowReview").then((m) => ({ default: m.ShadowReviewView })),
+);
 const EinrichtungView = lazy(() =>
   import("../views/Einrichtung").then((m) => ({ default: m.EinrichtungView })),
 );
@@ -142,6 +145,13 @@ const fristen = createRoute({
   component: FristenView,
 });
 
+const shadowReview = createRoute({
+  getParentRoute: () => root,
+  path: "/schattenbetrieb",
+  validateSearch: (search: Record<string, unknown>): { id?: string } =>
+    typeof search.id === "string" && /^[0-9a-f]{64}$/.test(search.id) ? { id: search.id } : {},
+  component: ShadowReviewView,
+});
 const einrichtung = createRoute({
   getParentRoute: () => root,
   path: "/einrichtung",
@@ -250,6 +260,7 @@ const routeTree = root.addChildren(
         kunde,
         assistent,
         einrichtung,
+        shadowReview,
         gallery,
       ]
     : [
@@ -272,6 +283,7 @@ const routeTree = root.addChildren(
         kunde,
         assistent,
         einrichtung,
+        shadowReview,
       ],
 );
 

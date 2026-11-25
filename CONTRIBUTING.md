@@ -22,6 +22,7 @@ A bare `cargo build` or `cargo test` at the root builds every member except
 just test                     # the whole suite, under cargo-nextest when installed
 just test-crate mako-fristen   # cargo test -p mako-fristen --all-features
 just test-doc                  # doctests — `--all-targets` does not run them
+just recovery-drill --json     # measured cold restore with duplicate-delivery checks
 just test-db                   # the real-PostgreSQL suites (needs Docker)
 ```
 

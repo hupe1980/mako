@@ -20,6 +20,8 @@ test = false
 
 [dependencies]
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
+utoipa       = { workspace = true }
+utoipa-axum  = { workspace = true }
 axum         = { version = "0.8" }
 sqlx         = { workspace = true }
 tokio        = { version = "1", features = ["full"] }

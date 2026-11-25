@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tarifwechsel",
+  "type": "object",
+  "properties": {
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "komp_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "malo_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "old_product_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "new_product_code": {
+      "type": "string"
+    },
+    "wirksamkeit": {
+      "type": "string",
+      "format": "date"
+    },
+    "geplant": {
+      "type": "boolean"
+    },
+    "initiator": {
+      "$ref": "#/$defs/Initiator"
+    },
+    "preisanpassungsanzeige_erforderlich": {
+      "type": "boolean"
+    },
+    "sonderkuendigungsrecht": {
+      "$ref": "#/$defs/Sonderkuendigungsrecht"
+    }
+  },
+  "required": [
+    "vertrag_id",
+    "komp_id",
+    "new_product_code",
+    "wirksamkeit",
+    "geplant",
+    "initiator",
+    "preisanpassungsanzeige_erforderlich",
+    "sonderkuendigungsrecht"
+  ],
+  "$defs": {
+    "Initiator": {
+      "description": "Who brought a product slice about.\n\n§ 41 Abs. 5 Satz 1 EnWG obliges a supplier who reserved the right to change\nthe contract unilaterally to give notice of the *beabsichtigte Ausübung*\nof that right, and Satz 4 gives the customer a termination right *\"Übt der\nEnergielieferant ein Recht zur Änderung der Preise … aus\"*. Both hang on the\nsupplier exercising a right — a tariff the customer asked for is an agreed\nchange, owes no announcement, and carries no Sonderkündigungsrecht.",
+      "oneOf": [
+        {
+          "description": "The supplier changes the price; § 41 Abs. 5 EnWG applies in full.",
+          "type": "string",
+          "const": "LIEFERANT"
+        },
+        {
+          "description": "The customer asked for this tariff; the change is confirmed, not\nannounced.",
+          "type": "string",
+          "const": "KUNDE"
+        }
+      ]
+    },
+    "Sonderkuendigungsrecht": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "besteht": {
+              "type": "boolean",
+              "const": true
+            },
+            "rechtsgrundlage": {
+              "type": "string"
+            },
+            "wirksam_zum": {
+              "type": "string",
+              "format": "date"
+            },
+            "entgeltfrei": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "besteht",
+            "rechtsgrundlage",
+            "wirksam_zum",
+            "entgeltfrei"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "besteht": {
+              "type": "boolean",
+              "const": false
+            }
+          },
+          "required": [
+            "besteht"
+          ]
+        }
+      ]
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.tarifwechsel.json"
+}

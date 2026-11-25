@@ -816,10 +816,39 @@ impl ProductSlice {
     }
 }
 
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 struct SliceResponse {
-    #[serde(default)]
+    slice_count: usize,
+    fully_covered: bool,
     slices: Vec<ProductSlice>,
+}
+
+impl SliceResponse {
+    fn into_period(
+        self,
+        from: time::Date,
+        to: time::Date,
+    ) -> crate::error::BillingResult<Vec<ProductSlice>> {
+        let mut next = Some(from);
+        let mut last = None;
+        let contiguous = self.slices.iter().all(|slice| {
+            let start = slice.gueltig_von.max(from);
+            let end = slice.last_day(to);
+            let adjacent = next == Some(start) && start <= end;
+            next = end.next_day();
+            last = Some(end);
+            adjacent
+        });
+        if self.slice_count != self.slices.len()
+            || (!self.slices.is_empty() && (!self.fully_covered || !contiguous || last != Some(to)))
+        {
+            return Err(crate::error::BillingError::unprocessable(
+                "INCOMPLETE_PRODUCT_ASSIGNMENT",
+                "product assignments must cover each day of the billing period exactly once",
+            ));
+        }
+        Ok(self.slices)
+    }
 }
 
 /// The `[from, to)` instants of a billing period, as the German calendar means it.
@@ -909,6 +938,36 @@ mod slice_tests {
     fn a_slice_running_past_the_period_is_clipped_to_it() {
         let s = slice(date!(2026 - 03 - 01), Some(date!(2026 - 06 - 01)));
         assert_eq!(s.last_day(date!(2026 - 03 - 31)), date!(2026 - 03 - 31));
+    }
+
+    #[test]
+    fn a_gap_overlap_or_partial_product_assignment_refuses_the_whole_invoice() {
+        let from = date!(2026 - 03 - 01);
+        let to = date!(2026 - 03 - 31);
+        let cut = date!(2026 - 03 - 15);
+        for second in [cut.previous_day().unwrap(), cut.next_day().unwrap()] {
+            let roster = super::SliceResponse {
+                slice_count: 2,
+                fully_covered: true,
+                slices: vec![slice(from, Some(cut)), slice(second, None)],
+            };
+            assert_eq!(
+                roster.into_period(from, to).unwrap_err().code(),
+                "INCOMPLETE_PRODUCT_ASSIGNMENT"
+            );
+        }
+        let partial = super::SliceResponse {
+            slice_count: 1,
+            fully_covered: false,
+            slices: vec![slice(from, Some(cut))],
+        };
+        assert!(partial.into_period(from, to).is_err());
+        let whole = super::SliceResponse {
+            slice_count: 2,
+            fully_covered: true,
+            slices: vec![slice(from, Some(cut)), slice(cut, None)],
+        };
+        assert_eq!(whole.into_period(from, to).unwrap().len(), 2);
     }
 
     #[test]
@@ -1353,6 +1412,19 @@ pub struct VertragdClient {
     up: Upstream,
 }
 
+fn supply_lookup_error(error: mako_service::http::UpstreamError) -> crate::error::BillingError {
+    if let mako_service::http::UpstreamError::Status { status, .. } = &error
+        && *status == reqwest::StatusCode::CONFLICT
+    {
+        crate::error::BillingError::conflict(
+            "AMBIGUOUS_SUPPLY_PERIOD",
+            "more than one supply component covers this issuer and billing period",
+        )
+    } else {
+        crate::error::BillingError::upstream("vertragd", error)
+    }
+}
+
 impl VertragdClient {
     pub fn new(base_url: &str, api_key: Option<String>) -> Self {
         Self {
@@ -1392,21 +1464,25 @@ impl VertragdClient {
     pub async fn get_product_slices(
         &self,
         malo_id: &str,
+        lf_mp_id: &str,
         from: time::Date,
         to: time::Date,
-    ) -> Result<Vec<ProductSlice>> {
+    ) -> crate::error::BillingResult<Vec<ProductSlice>> {
         let path = format!("/api/v1/malo/{malo_id}/produkte");
-        let request = self
-            .up
-            .get(&path)
-            .query(&[("from", from.to_string()), ("to", to.to_string())]);
-        Ok(self
+        let request = self.up.get(&path).query(&[
+            ("from", from.to_string()),
+            ("to", to.to_string()),
+            ("lf_mp_id", lf_mp_id.to_owned()),
+        ]);
+        match self
             .up
             .json::<SliceResponse>(request)
             .await
-            .context("vertragd GET malo produkte")?
-            .map(|b| b.slices)
-            .unwrap_or_default())
+            .map_err(supply_lookup_error)?
+        {
+            Some(response) => response.into_period(from, to),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// `GET /api/v1/malo/{malo_id}/sect14a?from=…&to=…`
@@ -1417,23 +1493,25 @@ impl VertragdClient {
     pub async fn get_sect14a(
         &self,
         malo_id: &str,
+        lf_mp_id: &str,
         from: time::Date,
         to: time::Date,
-    ) -> Result<Vec<Sect14aSlice>> {
+    ) -> crate::error::BillingResult<Vec<Sect14aSlice>> {
         #[derive(serde::Deserialize)]
         struct Answer {
             slices: Vec<Sect14aSlice>,
         }
         let path = format!("/api/v1/malo/{malo_id}/sect14a");
-        let request = self
-            .up
-            .get(&path)
-            .query(&[("from", from.to_string()), ("to", to.to_string())]);
+        let request = self.up.get(&path).query(&[
+            ("from", from.to_string()),
+            ("to", to.to_string()),
+            ("lf_mp_id", lf_mp_id.to_owned()),
+        ]);
         Ok(self
             .up
             .json::<Answer>(request)
             .await
-            .context("vertragd GET malo sect14a")?
+            .map_err(supply_lookup_error)?
             .map(|a| a.slices)
             .unwrap_or_default())
     }
@@ -1450,6 +1528,33 @@ impl VertragdClient {
             .json(self.up.get(&path))
             .await
             .context("vertragd GET vertrag by malo")
+    }
+
+    /// Contract and invoice recipient for this issuer and inclusive supply interval.
+    pub async fn get_supply_contract(
+        &self,
+        malo_id: &str,
+        lf_mp_id: &str,
+        from: time::Date,
+        to: time::Date,
+    ) -> crate::error::BillingResult<Option<VertragByMalo>> {
+        let path = format!("/api/v1/vertraege/by-malo/{malo_id}");
+        match self
+            .up
+            .json(self.up.get(&path).query(&[
+                ("from", from.to_string()),
+                ("to", to.to_string()),
+                ("lf_mp_id", lf_mp_id.to_owned()),
+            ]))
+            .await
+        {
+            Ok(contract) => Ok(contract),
+            Err(e) if e.is_status() => Err(supply_lookup_error(e)),
+            Err(e) => {
+                tracing::warn!(%malo_id, error=%e, "supply contract and channel addresses unavailable");
+                Ok(None)
+            }
+        }
     }
 
     /// `GET /api/v1/ggv/{ggv_id}/betreiber`
@@ -1501,20 +1606,58 @@ impl VertragdClient {
 
     /// `GET /api/v1/vertraege/billing-candidates`
     ///
-    /// Active supply components with their §40b EnWG billing cadence — the
-    /// work list for the scheduled billing-run worker.
-    pub async fn get_billing_candidates(&self) -> Result<Vec<BillingCandidate>> {
-        let body: serde_json::Value = self
+    /// Current supplies and components that ended in the requested inclusive window.
+    pub async fn get_billing_candidates(
+        &self,
+        from: time::Date,
+        through: time::Date,
+    ) -> Result<Vec<BillingCandidate>> {
+        #[derive(serde::Deserialize)]
+        struct Feed {
+            ended_from: time::Date,
+            ended_through: time::Date,
+            count: usize,
+            candidates: Vec<BillingCandidate>,
+        }
+        let feed: Feed = self
             .up
-            .json(self.up.get("/api/v1/vertraege/billing-candidates"))
+            .json(
+                self.up
+                    .get("/api/v1/vertraege/billing-candidates")
+                    .query(&[("ended_from", from), ("ended_through", through)]),
+            )
             .await
             .context("vertragd GET billing-candidates")?
-            .unwrap_or_default();
-        let candidates = body
-            .get("candidates")
-            .cloned()
-            .unwrap_or(serde_json::Value::Array(vec![]));
-        serde_json::from_value(candidates).context("deserialize billing candidates")
+            .context("vertragd candidate feed is missing")?;
+        anyhow::ensure!(
+            feed.count == feed.candidates.len(),
+            "vertragd candidate count disagrees with its rows"
+        );
+        anyhow::ensure!(
+            feed.ended_from == from && feed.ended_through == through,
+            "vertragd enumerated a different range"
+        );
+        for row in &feed.candidates {
+            anyhow::ensure!(
+                matches!(
+                    row.abrechnungszyklus.as_str(),
+                    "MONATLICH" | "VIERTELJAEHRLICH" | "HALBJAEHRLICH" | "JAEHRLICH"
+                ),
+                "vertragd returned an unknown billing cadence"
+            );
+            anyhow::ensure!(
+                row.lieferende.is_none_or(|end| row.lieferbeginn <= end),
+                "vertragd returned a reversed supply interval"
+            );
+            anyhow::ensure!(
+                !row.beendet
+                    || row
+                        .lieferende
+                        .is_some_and(|end| (from..=through).contains(&end)),
+                "an ended supply falls outside the enumerated window"
+            );
+        }
+        Ok(feed.candidates)
     }
 }
 
@@ -1536,7 +1679,6 @@ pub struct BillingCandidate {
     pub lieferende: Option<time::Date>,
     /// Supply has ended: the period up to `lieferende` is owed an
     /// Abschlussrechnung (§ 40c Abs. 2 Satz 1 EnWG).
-    #[serde(default)]
     pub beendet: bool,
 }
 
@@ -2046,7 +2188,7 @@ impl AccountingdClient {
         }
     }
 
-    /// `GET /api/v1/accounts/{malo_id}/abschlaege?from=&to=`
+    /// Advances booked to the invoice issuer’s account for the supplied period.
     ///
     /// The advances a settling invoice for `[from, to]` may deduct: received
     /// (§ 14 Abs. 5 Satz 2 UStG „vereinnahmte Teilentgelte"), not already
@@ -2060,14 +2202,16 @@ impl AccountingdClient {
     pub async fn get_abschlaege(
         &self,
         malo_id: &str,
+        lf_mp_id: &str,
         from: time::Date,
         to: time::Date,
     ) -> Result<Option<Vec<energy_billing::AbschlagDeduction>>> {
         let path = format!("/api/v1/accounts/{malo_id}/abschlaege");
-        let request = self
-            .up
-            .get(&path)
-            .query(&[("from", from.to_string()), ("to", to.to_string())]);
+        let request = self.up.get(&path).query(&[
+            ("lf_mp_id", lf_mp_id.to_owned()),
+            ("from", from.to_string()),
+            ("to", to.to_string()),
+        ]);
         self.up
             .json(request)
             .await

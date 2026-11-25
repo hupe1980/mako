@@ -41,6 +41,16 @@ impl Operation {
         })
     }
 
+    /// A success response with a JSON schema permits a body probe for this operation.
+    #[must_use]
+    pub fn declares_success_json(&self) -> bool {
+        (200..300).any(|status| {
+            self.response(status).is_some_and(|response| {
+                !response["content"]["application/json"]["schema"].is_null()
+            })
+        })
+    }
+
     /// The response entry for `status`, by exact code, `NXX` range or `default`.
     #[must_use]
     pub fn response(&self, status: u16) -> Option<&Value> {
@@ -62,9 +72,38 @@ impl Document {
     ///
     /// When `text` is not JSON.
     pub fn parse(text: &str) -> anyhow::Result<Self> {
-        Ok(Self {
-            raw: serde_json::from_str(text)?,
-        })
+        let raw: Value = serde_json::from_str(text)?;
+        anyhow::ensure!(
+            raw["openapi"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("3.1.")),
+            "expected an OpenAPI 3.1 document"
+        );
+        let paths = raw["paths"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("missing OpenAPI paths"))?;
+        for (template, item) in paths {
+            anyhow::ensure!(
+                template.starts_with('/') && !template.starts_with("//") && item.is_object(),
+                "invalid OpenAPI path item"
+            );
+        }
+        let document = Self { raw };
+        for op in document.operations() {
+            let responses = op.spec["responses"]
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("missing OpenAPI responses"))?;
+            if op.method == "GET" && !op.has_path_params() && !op.requires_query() {
+                for response in responses.values() {
+                    let schema = &response["content"]["application/json"]["schema"];
+                    if !schema.is_null() {
+                        jsonschema::draft202012::new(&document.rooted(schema.clone()))
+                            .map_err(|_| anyhow::anyhow!("invalid reference response schema"))?;
+                    }
+                }
+            }
+        }
+        Ok(document)
     }
 
     /// Every operation, sorted by path and method.

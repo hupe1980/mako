@@ -95,13 +95,13 @@ pub(crate) async fn trace_ctx_middleware(
 /// [`mako_as4::constants::MAX_RETRY_DURATION_SECS`]) before dead-lettering.
 /// This window is the budget; the attempt count below is only a runaway belt —
 /// the backoff is full-jitter, so a count cannot promise a duration.
-const OUTBOX_RETRY_WINDOW: Duration =
+pub(crate) const OUTBOX_RETRY_WINDOW: Duration =
     Duration::from_secs(mako_as4::constants::MAX_RETRY_DURATION_SECS);
 
 /// Attempt belt for the outbox worker. At the 300 s backoff cap the expected
 /// cadence is ~150 s, so 72 h needs ≈ 1 700 attempts; 10 000 leaves jitter
 /// headroom while still bounding a pathological loop long before it matters.
-const OUTBOX_MAX_ATTEMPTS: u32 = 10_000;
+pub(crate) const OUTBOX_MAX_ATTEMPTS: u32 = 10_000;
 
 // ── Type aliases ──────────────────────────────────────────────────────────────
 
@@ -120,52 +120,77 @@ pub(crate) type MakodCtx = EngineContext<
 
 // ── lock_data_dir ─────────────────────────────────────────────────────────────
 
-/// Take an exclusive lock on the data directory, creating it if needed.
-///
-/// Two concurrent writers against one SlateDB path corrupt the write-ahead log
-/// and produce split-brain event sequences, so a second instance is refused
-/// rather than allowed to interleave.
-///
-/// Returns `None` in volatile mode, where there is no directory to guard.
-///
-/// The returned guard borrows `'static` because the underlying `RwLock<File>`
-/// is deliberately leaked: the lock must outlive every scope in `main`, and the
-/// file descriptor is reclaimed by the OS at process exit either way. `Box::leak`
-/// is safe std, so no `unsafe` is involved.
+/// Exclusive local writer ownership, held through store and runtime shutdown.
+pub struct LockedDataDir {
+    path: std::path::PathBuf,
+    _file: std::fs::File,
+}
+
+impl LockedDataDir {
+    /// The resolved directory for this lock.
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Open the local engine while holding this guard through its lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a redirected database directory or a failed store open.
+    #[must_use = "the opened store or its failure must be handled"]
+    pub async fn open_store(&self) -> anyhow::Result<SlateDbStore> {
+        use anyhow::Context as _;
+        // A redirected db/ could put two separately locked roots over the same writer epoch.
+        let db = self.path.join("db");
+        match std::fs::symlink_metadata(&db) {
+            Ok(meta) => anyhow::ensure!(
+                meta.is_dir(),
+                "{} must be a directory inside the locked data directory",
+                db.display()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("inspect {}", db.display())),
+        }
+        info!(path = %self.path.display(), "opening persistent local-filesystem SlateDB store");
+        Ok(SlateDbStore::open_local(&self.path).await?)
+    }
+}
+
+/// Own the local writer lock and the resolved path to open under that lock.
 ///
 /// # Errors
 ///
-/// Returns an error when the directory cannot be created or opened, or when
-/// another `makod` already holds the lock.
-pub(crate) fn lock_data_dir(
-    data_dir: Option<&std::path::Path>,
-) -> anyhow::Result<Option<fd_lock::RwLockWriteGuard<'static, std::fs::File>>> {
-    let Some(data_dir) = data_dir else {
-        return Ok(None);
-    };
-    std::fs::create_dir_all(data_dir)?;
-    let lock_path = data_dir.join(".makod.lock");
-    let lock_file = std::fs::OpenOptions::new()
+/// Returns an error if the directory is in use or the lock cannot be acquired.
+#[must_use = "the writer needs its lock until all store tasks have stopped"]
+pub fn lock_data_dir(data_dir: &std::path::Path) -> anyhow::Result<LockedDataDir> {
+    use anyhow::Context as _;
+
+    std::fs::create_dir_all(data_dir)
+        .with_context(|| format!("create data directory {}", data_dir.display()))?;
+    let path = data_dir
+        .canonicalize()
+        .with_context(|| format!("resolve data directory {}", data_dir.display()))?;
+    let lock_path = path.join(".makod.lock");
+    let file = std::fs::File::options()
         .create(true)
+        .read(true)
         .write(true)
         .truncate(false)
-        .open(&lock_path)?;
-    let lock_ref: &'static mut fd_lock::RwLock<std::fs::File> =
-        Box::leak(Box::new(fd_lock::RwLock::new(lock_file)));
-    match lock_ref.try_write() {
-        Ok(guard) => {
+        .open(&lock_path)
+        .with_context(|| format!("open writer lock {}", lock_path.display()))?;
+    match file.try_lock() {
+        Ok(()) => {
             info!(path = %lock_path.display(), "acquired exclusive data-dir lock");
-            Ok(Some(guard))
+            Ok(LockedDataDir { path, _file: file })
         }
-        // Returned, not `process::exit`: exiting here skips the OpenTelemetry
-        // guard's flush, so the span explaining the refusal never reaches the
-        // collector — on the one failure an operator most needs the trace for.
-        Err(e) => anyhow::bail!(
-            "another makod instance is already using the data directory {} ({e}). \
-             Refusing to start: two writers on one SlateDB path corrupt the \
-             write-ahead log and produce split-brain event sequences.",
-            lock_path.display(),
+        Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!(
+            "another makod instance is already using the data directory {}. Stop the local writer before opening its store.",
+            path.display()
         ),
+        Err(std::fs::TryLockError::Error(e)) => {
+            Err(e).with_context(|| format!("acquire exclusive writer lock {}", lock_path.display()))
+        }
     }
 }
 

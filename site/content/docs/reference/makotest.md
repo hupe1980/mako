@@ -121,6 +121,104 @@ emits the same report machine-readably.
 
 ---
 
+## Reconcile a shadow capture
+
+A mirror can contain two files and still be missing the second expected message. Run this offline check before comparing the business answers of two installations. Prepare a closed journal from the source system and an inventory from the mirror acquisition. Hold both manifests and the dedicated mirror tree stable for the duration of the run.
+
+From a checkout, build the development package with `just test-makotest`. Run the synthetic example from the repository root on Linux or macOS.
+
+```sh
+capture=makotest/tests/fixtures/shadow
+makotest/.venv/bin/makotest shadow reconcile \
+  --journal "$capture/journal.json" --inventory "$capture/inventory.json" \
+  --mirror-root "$capture/mirror" > coverage.json
+```
+
+| JSON status | Exit | What to do |
+|---|---:|---|
+| `complete` | 0 | Check `eligible_for_comparison` and the eligible inbound count before starting a business comparison. |
+| `confirmed_empty` | 0 | Count the interval toward continuity. It contributes zero inbound comparison candidates. |
+| `mismatch` | 1 | Use the issue list to find missing, extra, repeated or changed occurrences. Check the two acquisitions and rerun. |
+| `unknown` | 2 | Read the reason codes. Obtain both closed inputs for the same scope, resolve gaps or overlaps, or take a fresh stable snapshot. |
+
+**Prepare the inputs.** Give both JSON objects `version: 1`, an opaque `scope` revision, a `capture_layer`, `start`, `end`, the required `directions` and a `batches` array. The scope identifies the tenant, own Marktrolle and cohort through a private local mapping. Both sources must describe bytes at the same capture layer. The closed journal defines the expected directions independently of the mirror.
+
+Each batch supplies `id`, `revision`, `direction`, `start`, `end`, `closed`, `count` and `entries`. A journal entry has an occurrence `id` and its `sha256` digest. An inventory entry has the corresponding `id` and a relative `path` to the actual bytes. Give two genuine sends separate occurrence IDs even if their bytes match. Use random local aliases, keep their reverse mapping private, and use explicit offsets on both ends of each half-open interval. Timestamps support up to nine fractional digits. A sealed empty batch has `closed: true`, `count: 0` and `entries: []`.
+
+**Read the evidence.** The command reads ordinary files from the dedicated snapshot directory. Store messages from this capture only. An indexed file that cannot be read or a file on disk absent from the inventory leaves the acquisition unknown. A sealed inventory that omits a journal occurrence yields a mismatch. Supply the same input revisions on a rerun to reproduce the report. Recompute after a late file, revised journal or change of scope. The fingerprints let a consumer check which observation it is using. A restored pair of old inputs reproduces its old result. Check the fingerprints against current independently acquired inputs before relying on a saved report. Unmeasured counts are JSON `null`.
+
+| Reason | Recovery |
+|---|---|
+| `missing_file` / `unlisted_file` | Compare the mirror snapshot with its export. Regenerate both from the same frozen capture. |
+| `coverage_gap` / `coverage_overlap` | Check the boundaries for each required direction. Export adjacent intervals with an explicit empty batch for a closed quiet period. |
+| `scope_mismatch` / `revision_mismatch` | Select the matching scope, acquisition layer, window and revision in the two sources. |
+| `unsafe_path` / `snapshot_changed` | Use regular, singly linked files in a dedicated local snapshot. Keep writers stopped while it is read. |
+| `input_limit_exceeded` | Split the window and its captures into smaller adjacent exports, preserving occurrence IDs and closure. |
+| `unsupported_platform` | Use a host with descriptor-relative POSIX file access. |
+
+Each UTF-8 JSON manifest may contain up to 8 MiB with at most 64 nested containers. Each batch admits 10,000 entries. The dedicated mirror may contain up to 10,000 files and 10,000 descendant directories, with a maximum of 16 MiB per message and 1 GiB of file data in total. Relative paths have at most 32 components and 4,096 UTF-8 bytes. Keep mount points outside the snapshot. Keep output, the source journal and the mirror inventory outside it too.
+
+To locate an issue locally, recompute its two report keys from the private aliases supplied in the manifests.
+
+```python
+from makotest.shadow import issue_tokens
+
+batch_key, occurrence_key = issue_tokens(
+    scope, capture_layer, direction, batch_id, revision, occurrence_id
+)
+```
+
+The tool checks input coverage. A go-live decision also needs business comparison results and separate authorization to send.
+
+---
+
+## Rehearse a Strom NB refusal
+
+Run the following command from the checkout. The case file identifies a private inbound occurrence, its receipt instant, the receiving NB and the grid and supply facts at receipt. The expected answer independently identifies the scope, batch revision, occurrence, request digest and Vorgangsnummer. Keep these files outside the mirror.
+
+```sh
+capture=makotest/tests/fixtures/shadow
+makotest/.venv/bin/makotest shadow rehearse \
+  --journal "$capture/journal.json" --inventory "$capture/inventory.json" \
+  --mirror-root "$capture/mirror" --coverage "$capture/reports/complete.json" \
+  --case "$capture/case.json" --expected "$capture/expected.json"
+```
+
+The tool rechecks the complete coverage report, selects the verified bytes and runs the NB decision for a consuming Strom MaLo with an attested Stilllegung. The reference reply has PID 55003 and Antwortcode A02. The printed result reports two eligible occurrences, one assessed and one unassessed. The comparison covers the reply PID, Codeliste and code after correlating the parties and transaction and validating the rendered interchange. The generated envelope uses the supplied receipt instant as its simulated clock. Dispatch timing stays unassessed because the example contains no independent dispatch observation. [BDEW Entscheidungsbaum-Diagramme und Codelisten 4.3, chapter 6.6.1, p. 74](https://www.bdew-mako.de/api/downloadFile/12242)
+
+| Status | Exit | Operator action |
+|---|---:|---|
+| `matched` | 0 | Read the eligible and unassessed counts before drawing a cohort conclusion. |
+| `different` | 1 | Compare the expected and actual values in the named fields. |
+| `unassessed` | 2 | Use the reason to check scope, receipt, case facts or the capture revision. Regenerate coverage when the private inputs change. |
+| `no_candidates` | 0 | The verified window contains zero eligible inbound occurrences. |
+
+Use `--emit summary` for the counts, expected and actual reply, Prüfschritt and reply deadline. For the fixture receipt, the deadline is 2 November at 11:00 Berlin time. The comparison keeps delivery timing unassessed until an independent receipt is available. [BNetzA BK6-24-174, GPKE Teil 2, SD Lieferbeginn, steps 5–6, p. 22](https://bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK6-GZ/2024/BK6-24-174/Beschluss/BK6-24-174_GPKE_Teil2_Lesefassung.pdf?__blob=publicationFile&v=1)
+
+Add `--emit answer` to write the validated EDIFACT bytes to standard output. Use a private destination outside the mirror. This output carries the parties and transaction reference. If the evidence cannot be paired, the command leaves standard output empty and writes the reason to standard error. The default rehearsal runs in process.
+
+Add `--makod-workspace "$work/occ-a"` to run the same case through a local `makod` binary on `PATH`. Set `work=$(mktemp -d)` outside the mirror. The JSON report includes the kinds of effects the daemon captured. A repeat reads the original reply bytes. Across fresh workspaces, compare the decoded business fields because makod generates transport references and timestamps. The workspace contains private EDIFACT and ERP data. [Inspect the capture](@/docs/services/makod.md#shadow-capture)
+
+### Review all inbound occurrences
+
+Use `--emit review --review-nb MP_ID` with `--makod-workspace` to export a private cohort for processd. Add `--also CASE EXPECTED [OBSERVATION]` for each additional occurrence. All selections must reconcile to the same coverage fingerprints. An outstanding input retains its own stable identifier and a null assessment. The export includes local evidence digests and business fields. The ordinary report remains suitable for sharing. [Install the cohort](@/docs/services/processd.md#isolated-shadow-review)
+
+Pass `--observation FILE` when the transport custodian has independently verified the positive AS4 receipts for the request and the incumbent reply. Version 1 takes `scope` and two records, `inbound` and `outbound`. Each carries `positive: true`, the wire `sha256`, a `receipt_sha256` locator in the custodian’s archive, and the receiver’s RFC 3339 `received_at`. The importer trusts this normalized export from that custodian. It validates the captured reply’s direction, parties, request reference and business answer and refuses ambiguous pairing. Its timing verdict describes delivery by the incumbent. The reference window has no outbound reply and therefore no timing verdict. The receiver’s time in a positive receipt is the basis for EDIFACT Fristen. [BNetzA, GPKE Teil 1, chapter 7, p. 27](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK6-GZ/2024/BK6-24-174/Beschluss/BK6-24-174_GPKE_Teil1_Lesefassung.pdf?__blob=publicationFile&v=1)
+
+### Compare two closed transport captures
+
+`makotest shadow pair --incumbent DIR --shadow DIR --case FILE` reads each directory's `journal.json`, `inventory.json` and `mirror/`. Both must independently cover inbound and outbound wire traffic in the same window. For the selected NB request, the result reports agreement (`gleich`), different business fields (`antwort`), or an answer observed only in the shadow or incumbent window (`nur_mako` or `nur_alt`). Two empty answer sets, ambiguous references and incomplete capture remain unassessed. A one-sided observation describes only the covered interval. Use the positive receipts to assess timing.
+
+### Compare an ESA invoice
+
+```sh
+settlement=makotest/tests/fixtures/shadow/settlement
+makotest shadow invoice --invoice "$settlement/invoice.json" \
+  --reference "$settlement/reference.json"
+```
+
+The reference records the invoice number, canonical invoice fingerprint, receipt time, order and duplicate checks, expected REMADV and one commercial record per position. The fingerprint is SHA-256 of the UTF-8 bytes of Python's `json.dumps(invoice, sort_keys=True, separators=(",", ":"))`. Each record supplies the position number, article, unit, quantity, agreed EUR unit price, service confirmation and any previous billing reference. Supply decimal values as strings. Use `null` for an unknown price. The command compares cent-rounded line nets and delegates the first-round ESA decision to `invoic-checker`. The example yields **EUR 13.95 and REMADV 33001**. A one-cent position difference remains visible even if the checker accepts the invoice. [BDEW, Entscheidungsbaum-Diagramme und Codelisten 4.3, chapter 8.27.1, pp. 623–628](https://www.bdew-mako.de/api/downloadFile/12242)
+
 ## Identifiers
 
 A random 11-digit string is a valid Marktlokations-ID one time in ten, and a

@@ -4,7 +4,7 @@
 
 import type { Anker } from "../data/agent";
 import type { GeparkteBuchung } from "../data/gen/accountingd";
-import type { Pruefposten } from "../data/gen/billingd";
+import type { Discovery, Pruefposten } from "../data/gen/billingd";
 import type { Disput, GehalteneRechnung } from "../data/gen/invoicd";
 import type { Freigabe } from "../data/gen/processd";
 import type { Instant } from "../format/brands";
@@ -105,6 +105,7 @@ export function warumAnker(e: Eintrag): Anker | null {
 
 /** One source's answer this refresh. */
 export interface Stand {
+  discovery?: Discovery | null;
   quelle: QuelleId;
   /** `Freigaben`, `Überfällige Prozesse` — what the footer names. */
   label: string;

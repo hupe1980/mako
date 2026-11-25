@@ -29,6 +29,7 @@ describe("the Desk image", () => {
     const services = [
       ...readdirSync(resolve(root, "src/data/gen")).map((f) => f.replace(/\.ts$/, "")),
       "agentd",
+      "outputd",
     ];
     for (const s of services) expect(gateway).toContain(`path: ^/svc/${s}/(`);
   });
@@ -101,6 +102,8 @@ describe("the Desk image", () => {
       "/svc/invoicd/api/v1/receipts/r-1/feststellungen",
       "/svc/invoicd/api/v1/leistungsnachweise",
       "/svc/billingd/mcp",
+      "/svc/outputd/api/v1/openapi.json",
+      "/svc/outputd/api/v1/documents/by-subject/INVOICE",
       "/svc/billingd/api/v1/billing/b-1/release",
       "/svc/billingd/api/v1/billing/b-1/reviewed",
       "/svc/accountingd/mcp",
@@ -118,9 +121,29 @@ describe("the Desk image", () => {
       expect(forwarded(path), path).toBe(true);
   });
 
+  it("routes shadow reads and resolutions only when an isolated upstream is configured", () => {
+    const template = read("deploy/gateway.yaml");
+    const optional =
+      /# - id: shadowreview\n\s+#\s+path: (.+)\n\s+#\s+rewriteTarget: .+\n\s+#\s+uri: (.+)/.exec(
+        template,
+      );
+    expect(optional?.[2]).toBe("http://processd-review:8580");
+    const isolated = new RegExp(optional?.[1] ?? "(?!)");
+    for (const path of [
+      "/svc/processd/api/v1/shadow/review",
+      "/svc/processd/api/v1/shadow/review/row/resolve",
+    ]) {
+      expect(forwarded(path)).toBe(false);
+      expect(isolated.test(path)).toBe(true);
+    }
+    expect(isolated.test("/svc/processd/api/v1/queue/q-1/approve")).toBe(false);
+  });
+
   it("forwards no admin or metrics path", () => {
     const services = routes().map((r) => r.service);
     expect(services.length).toBeGreaterThan(5);
+    expect(forwarded("/svc/outputd/api/v1/documents/by-subject/MAHNUNG/R-1")).toBe(false);
+    expect(forwarded("/svc/outputd/api/v1/documents/d-1/content")).toBe(false);
     for (const s of services)
       for (const path of [
         `/svc/${s}/admin/einrichtung`,
@@ -173,7 +196,11 @@ describe("the demo edge (deploy/demo/desk/nginx.conf)", () => {
     const services = [...gateway.matchAll(/path: \^\/svc\/([a-z]+)\//g)].map((m) => m[1]);
     expect(services.length).toBeGreaterThan(5);
     for (const s of services) {
-      const block = new RegExp(`location /svc/${s}/ \\{[^}]*\\}`).exec(demo())?.[0];
+      const location =
+        s === "outputd"
+          ? String.raw`location ~ ^/svc/outputd/(api/v1/openapi\.json|api/v1/documents/by-subject/INVOICE)$ {`
+          : `location /svc/${s}/ {`;
+      const block = demo().split(location)[1]?.split("}")[0];
       expect(block, s).toBeTruthy();
       expect(block).toContain(s === "makod" ? "Bearer dev-makod-key" : "$mako_authorization");
     }

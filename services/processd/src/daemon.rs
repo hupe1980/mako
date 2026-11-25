@@ -121,7 +121,21 @@ impl Daemon for Processd {
     }
 
     fn validate(cfg: &Self::Config) -> Vec<mako_service::Befund> {
+        if let Some(review) = &cfg.shadow_review {
+            return review.validate(cfg);
+        }
         let mut out = cfg.lf.validate();
+        for (configured, path) in [
+            (cfg.makod.is_some(), "makod"),
+            (cfg.marktd.is_some(), "marktd"),
+        ] {
+            if !configured {
+                out.push(mako_service::Befund::blockiert(
+                    path,
+                    "Configure the upstream service for market operation.",
+                ));
+            }
+        }
         out.extend(identitaet(&cfg.identity));
         out.extend(cfg.subscriptions.befunde());
         if let Err(e) = cfg.check_auth_posture() {
@@ -148,16 +162,20 @@ impl Daemon for Processd {
     }
 
     async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<axum::Router> {
+        if let Some(review) = &cfg.shadow_review {
+            return crate::shadow::install(review, &cfg, ctx).await;
+        }
         // Fail closed on both doors before anything else: the REST/MCP surfaces
         // and the inbound webhook each decide what this operator answers a
         // market partner.
         cfg.check_auth_posture()?;
 
         // ── Resolve env-var references ────────────────────────────────────────
-        let makod_api_key =
-            config::resolve_env_secret(&cfg.makod.api_key).context("makod.api_key")?;
+        let makod = cfg.makod.as_ref().context("missing makod config")?;
+        let marktd = cfg.marktd.as_ref().context("missing marktd config")?;
+        let makod_api_key = config::resolve_env_secret(&makod.api_key).context("makod.api_key")?;
         let marktd_api_key =
-            config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
+            config::resolve_env_secret(&marktd.api_key).context("marktd.api_key")?;
         let inbound_secret = cfg
             .webhook
             .inbound_secret
@@ -221,9 +239,9 @@ impl Daemon for Processd {
         crate::server::build_router(
             crate::server::RunConfig {
                 inbound_secret,
-                makod_url: cfg.makod.url.clone(),
+                makod_url: makod.url.clone(),
                 makod_api_key,
-                marktd_url: cfg.marktd.url.clone(),
+                marktd_url: marktd.url.clone(),
                 marktd_api_key,
                 identitaet: cfg.identity.identitaet(),
                 tenant,

@@ -2,11 +2,9 @@
 //!
 //! # Emitted
 //!
-//! Every emission goes through [`build_cloud_event`] and is HMAC-signed by the
-//! caller. The table is checked against the sources by
-//! `the_emitted_event_table_lists_every_type_vertragd_emits`, so a new emitter
-//! without a row here fails the build rather than leaving a subscriber with no
-//! way to learn the event exists.
+//! The subscription worker signs each delivery. The source inventory test
+//! `the_emitted_event_table_lists_every_type_vertragd_emits` checks that each emitter
+//! appears here.
 //!
 //! | Event type | When |
 //! |---|---|
@@ -24,7 +22,7 @@
 //! | `de.mako.vertrag.tarifwechsel` | Product change applied immediately |
 //! | `de.mako.vertrag.tarifwechsel-geplant` | Future-dated product change stored |
 //! | `de.mako.vertrag.preisgarantie-hinterlegt` | Price guarantee stored/replaced |
-//! | `de.mako.vertrag.preisaenderung.ankuendigung` | Notice worker, ≤ 42 days before Wirksamkeit |
+//! | `de.mako.vertrag.preisaenderung.ankuendigung` | The notice worker issues a pending supplier price change before Wirksamkeit |
 //! | `de.mako.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal |
 //! | `de.mako.vertrag.ablauf.ankuendigung` | 30 days before vertragsende / preisgarantie_bis |
 //! | `de.mako.vertrag.abgeschlossen` | Every component's Lieferende has passed; supply is over and the contract is `ABGELAUFEN` (`workers::ablauf`) |
@@ -40,54 +38,35 @@
 //! off. A subscriber that took `gekuendigt` for the end of supply would invoice
 //! a final bill for a customer still being supplied.
 
+mod lifecycle;
+pub use lifecycle::*;
+
 use serde_json::Value;
 use uuid::Uuid;
-
-/// Build a `de.mako.vertrag.*` CloudEvent.
-///
-/// `event_type` is a full CloudEvents type from the workspace catalog
-/// (`mako_events::vertrag::*`).
-///
-/// Every event carries the workspace-standard tracing attributes:
-/// `tenantid` (data-isolation scope) and `correlationid` (the Vertrag the
-/// event belongs to — same value as `subject`, so consumers correlate all
-/// lifecycle events of one contract without parsing `data`).
-pub fn build_cloud_event(
-    event_type: &str,
-    vertrag_id: Uuid,
-    tenant: &str,
-    data: Value,
-) -> mako_service::CloudEvent {
-    mako_service::CloudEvent::new(
-        mako_service::source("vertragd", tenant),
-        event_type,
-        vertrag_id.to_string(),
-        data,
-    )
-    .extension("tenantid", tenant)
-    .extension("correlationid", vertrag_id.to_string())
-}
 
 /// Build a `de.mako.vertrag.bestellung.*` / `de.mako.vertrag.widerruf.*` CloudEvent.
 ///
 /// `subject` is the partner's own `bestellreferenz` — the reference the front
 /// end that posted the order knows it by — and `correlationid` the
 /// Bestellung, so every event of one order correlates without parsing `data`.
-pub fn build_bestell_event(
-    event_type: &str,
+///
+/// # Errors
+///
+/// Returns the serialization error if the payload cannot be encoded.
+#[must_use = "the order event is part of the transaction"]
+pub fn typed_bestell_event<P: mako_service::EventPayload>(
     bestellreferenz: &str,
     bestellung_id: Uuid,
     tenant: &str,
-    data: Value,
-) -> mako_service::CloudEvent {
-    mako_service::CloudEvent::new(
+    payload: &P,
+) -> Result<mako_service::CloudEvent, serde_json::Error> {
+    Ok(mako_service::CloudEvent::typed(
         mako_service::source("vertragd", tenant),
-        event_type,
-        bestellreferenz.to_owned(),
-        data,
-    )
+        bestellreferenz,
+        payload,
+    )?
     .extension("tenantid", tenant)
-    .extension("correlationid", bestellung_id.to_string())
+    .extension("correlationid", bestellung_id.to_string()))
 }
 
 /// Read a MaKo process outcome off an inbound CloudEvent.
@@ -373,7 +352,7 @@ impl mako_service::EventPayload for KuendigungVorversorgerAbgelehnt {
 }
 
 /// A typed `de.mako.vertrag.*` event of one contract: subject and `correlationid`
-/// the Vertrag, like [`build_cloud_event`].
+/// the Vertrag.
 ///
 /// # Errors
 ///
@@ -396,6 +375,21 @@ pub fn typed_event<P: mako_service::EventPayload>(
 #[cfg(test)]
 fn event_schemas() -> Vec<(&'static str, Value)> {
     vec![
+        mako_service::cloudevent::event_schema::<Aktiv>(),
+        mako_service::cloudevent::event_schema::<KuendigungWiderrufen>(),
+        mako_service::cloudevent::event_schema::<Gekuendigt>(),
+        mako_service::cloudevent::event_schema::<Kuendigung>(),
+        mako_service::cloudevent::event_schema::<Tarifwechsel>(),
+        mako_service::cloudevent::event_schema::<PreisgarantieHinterlegt>(),
+        mako_service::cloudevent::event_schema::<PreisaenderungAnkuendigung>(),
+        mako_service::cloudevent::event_schema::<AutoerneuerungAnkuendigung>(),
+        mako_service::cloudevent::event_schema::<Abgeschlossen>(),
+        mako_service::cloudevent::event_schema::<AblaufAnkuendigung>(),
+        mako_service::cloudevent::event_schema::<BestellungEingegangen>(),
+        mako_service::cloudevent::event_schema::<BestellungAngenommen>(),
+        mako_service::cloudevent::event_schema::<BestellungAbgelehnt>(),
+        mako_service::cloudevent::event_schema::<WiderrufEingegangen>(),
+        mako_service::cloudevent::event_schema::<TarifwechselGeplant>(),
         mako_service::cloudevent::event_schema::<LieferbeginnBestaetigt>(),
         mako_service::cloudevent::event_schema::<LieferbeginnAbgelehnt>(),
         mako_service::cloudevent::event_schema::<ErsatzversorgungBegonnen>(),
@@ -412,10 +406,22 @@ mod tests {
     /// rewrites it).
     #[test]
     fn the_committed_event_schemas_are_current() {
+        let schemas = super::event_schemas();
+        let catalog: std::collections::BTreeSet<_> = mako_events::all()
+            .iter()
+            .copied()
+            .filter(|t| t.starts_with("de.mako.vertrag."))
+            .collect();
+        assert_eq!(
+            schemas
+                .iter()
+                .map(|(ty, _)| *ty)
+                .collect::<std::collections::BTreeSet<_>>(),
+            catalog,
+            "every vertragd event binds its emitted data to a schema"
+        );
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("events");
-        if let Err(e) =
-            mako_service::cloudevent::compare_event_schemas(&dir, &super::event_schemas())
-        {
+        if let Err(e) = mako_service::cloudevent::compare_event_schemas(&dir, &schemas) {
             panic!("{e}");
         }
     }

@@ -16,6 +16,8 @@ import { formatBusinessDate } from "../format/date";
 import { formatEuro } from "../format/money";
 import { eintrag, useT } from "../i18n";
 
+import { InvoiceDelivery } from "./InvoiceDelivery";
+
 type Nachrechnung = ToolOutput<"billingd", "recompute_invoice">;
 
 /** billingd's amounts are decimal strings; shown through the one money formatter. */
@@ -190,6 +192,9 @@ export function NachrechnenView() {
       {n && (
         <>
           <Urteil n={n} />
+          {rolle === "lieferant" && (
+            <InvoiceDelivery reference={n.rechnungsnummer} dispatchedAt={n.dispatched_at} />
+          )}
           {n.public_link && <KundenLink link={n.public_link} />}
           <Panel className="overflow-hidden">
             <h2 className="m-0 px-6 pt-5 text-title2 font-semibold">{k.berechnetAus}</h2>

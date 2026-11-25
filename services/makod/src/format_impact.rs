@@ -86,8 +86,8 @@ pub struct Impact {
     pub not_revalidated: BTreeMap<String, usize>,
     /// Interchanges of a message type no candidate covers, per type.
     pub message_types_not_covered: BTreeMap<String, usize>,
-    /// Files not read, per reason (`compressed`, `unnamed`, `unparseable`,
-    /// `no_binding_profile`).
+    /// Unassessed input by reason. `compressed`, `unnamed` and `unparseable`
+    /// count files. `no_binding_profile` counts messages.
     pub not_read: BTreeMap<String, usize>,
 }
 
@@ -168,6 +168,8 @@ pub enum ImpactError {
     NotFound(String),
     /// A candidate that does not load.
     Invalid { dir: String, reason: String },
+    /// The configured candidate catalogue could not be listed.
+    Catalog(std::io::Error),
     /// The archive could not be listed.
     Archive { dir: String, reason: String },
 }
@@ -181,6 +183,7 @@ impl std::fmt::Display for ImpactError {
             ),
             Self::NotFound(fv) => write!(f, "no candidate {fv} is imported"),
             Self::Invalid { dir, reason } => write!(f, "candidate {dir}: {reason}"),
+            Self::Catalog(error) => write!(f, "the candidate catalogue cannot be read: {error}"),
             Self::Archive { dir, reason } => {
                 write!(f, "the interchange archive {dir} cannot be read: {reason}")
             }
@@ -200,6 +203,9 @@ impl From<ImpactError> for ApiError {
             ImpactError::NotFound(_) => ApiError::not_found(msg).with_code("candidate_not_found"),
             ImpactError::Invalid { .. } => {
                 ApiError::unprocessable(msg).with_code("candidate_invalid")
+            }
+            ImpactError::Catalog(_) => {
+                ApiError::unavailable(msg).with_code("candidate_catalog_unavailable")
             }
             ImpactError::Archive { .. } => {
                 ApiError::unavailable(msg).with_code("archive_unavailable")
@@ -272,18 +278,25 @@ pub fn get_format_impact(
     }
     let cfg = &state.config;
     let mut candidates: BTreeMap<String, Candidate> = BTreeMap::new();
-    for ty in std::fs::read_dir(&cfg.candidates_dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
+    for ty in std::fs::read_dir(&cfg.candidates_dir).map_err(ImpactError::Catalog)? {
+        let ty = ty.map_err(ImpactError::Catalog)?;
+        if !ty.file_type().map_err(ImpactError::Catalog)?.is_dir() {
+            continue;
+        }
         let dir = ty.path().join(fv);
-        if dir.join("candidate.json").is_file() {
-            let c = Candidate::load_dir(&dir).map_err(|e| ImpactError::Invalid {
+        if !dir.try_exists().map_err(ImpactError::Catalog)? {
+            continue;
+        }
+        let candidate = Candidate::load_dir(&dir).map_err(|e| ImpactError::Invalid {
+            dir: dir.display().to_string(),
+            reason: e.to_string(),
+        })?;
+        let ty = candidate.manifest().message_type.clone();
+        if candidates.insert(ty, candidate).is_some() {
+            return Err(ImpactError::Invalid {
                 dir: dir.display().to_string(),
-                reason: e.to_string(),
-            })?;
-            candidates.insert(c.manifest().message_type.clone(), c);
+                reason: "duplicate message type in the candidate catalogue".to_owned(),
+            });
         }
     }
     if candidates.is_empty() {
@@ -452,11 +465,16 @@ fn row(refusal: NewRefusal) -> ImpactRow {
 
 fn archive_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            archive_files(&path, out)?;
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            archive_files(&entry.path(), out)?;
+        } else if kind.is_file() {
+            out.push(entry.path());
         } else {
-            out.push(path);
+            return Err(std::io::Error::other(
+                "archive contains a link or special file",
+            ));
         }
     }
     Ok(())
@@ -515,7 +533,7 @@ pub struct ImpactQuery {
 /// # Errors
 ///
 /// `invalid_format_version`, `candidate_not_found`, `candidate_invalid`,
-/// `archive_unavailable`, `invalid_format`.
+/// `candidate_catalog_unavailable`, `archive_unavailable`, `invalid_format`.
 #[utoipa::path(
     get,
     path = "/api/v1/format-candidates/{fv}/impact",
@@ -529,7 +547,7 @@ pub struct ImpactQuery {
         (status = 400, description = "invalid_format_version or invalid_format"),
         (status = 404, description = "candidate_not_found"),
         (status = 422, description = "candidate_invalid"),
-        (status = 503, description = "archive_unavailable"),
+        (status = 503, description = "archive_unavailable or candidate_catalog_unavailable"),
     ),
     security(("bearer_token" = []))
 )]
@@ -648,6 +666,14 @@ mod tests {
             &format!("UTILMD_{OWN}_9900000000003_261110_0700_1.txt"),
             &skeleton(55001),
         );
+        // The message ends before the archive is truncated. Its verdict would
+        // otherwise look like another fully assessed interchange.
+        let wire = skeleton(55001);
+        let trailer = wire.windows(4).rposition(|w| w == b"UNZ+").unwrap();
+        put(
+            &format!("UTILMD_{OWN}_9900000000003_261110_0700_6.txt"),
+            &wire[..trailer],
+        );
         // Inbound 55002: a PID the candidate does not change.
         put(
             &format!("UTILMD_9900000000003_{OWN}_261111_0800_2.txt"),
@@ -714,6 +740,7 @@ mod tests {
             "the candidate AHB's words: {row:?}"
         );
         assert_eq!(impact.not_revalidated.get("55002"), Some(&1));
+        assert_eq!(impact.not_read.get("unparseable"), Some(&1));
         assert_eq!(impact.not_read.get("compressed"), Some(&1));
         assert_eq!(impact.not_read.get("unnamed"), Some(&1));
         assert_eq!(impact.message_types_not_covered.get("MSCONS"), Some(&1));
@@ -737,6 +764,35 @@ mod tests {
                 .nth(1)
                 .is_some_and(|l| l.starts_with("UTILMD;55001;ausgang;9900000000003;2026-11-10;"))
         );
+    }
+
+    #[test]
+    fn missing_catalogue_and_incomplete_import_cannot_report_an_absent_candidate() {
+        let (root, state) = setup("catalogue");
+        std::fs::remove_file(
+            state
+                .config
+                .candidates_dir
+                .join("utilmd/fv20270401/candidate.json"),
+        )
+        .unwrap();
+        assert!(matches!(
+            get_format_impact(&state, "fv20270401", today()),
+            Err(ImpactError::Invalid { .. })
+        ));
+        std::fs::rename(&state.config.candidates_dir, root.path().join("offline")).unwrap();
+        assert!(matches!(
+            get_format_impact(&state, "fv20270401", today()),
+            Err(ImpactError::Catalog(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_scope_requires_regular_files_and_directories() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(root.path(), root.path().join("linked")).unwrap();
+        assert!(archive_files(root.path(), &mut Vec::new()).is_err());
     }
 
     #[test]

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "scope": "cohort-a-r1",
+  "capture_layer": "ingress-egress",
+  "start": "2026-10-25T00:00:00Z",
+  "end": "2026-10-25T01:00:00Z",
+  "directions": [
+    "inbound",
+    "outbound"
+  ],
+  "batches": [
+    {
+      "id": "zero-inbound",
+      "revision": "r1",
+      "direction": "inbound",
+      "start": "2026-10-25T00:00:00Z",
+      "end": "2026-10-25T01:00:00Z",
+      "closed": true,
+      "count": 0,
+      "entries": []
+    },
+    {
+      "id": "zero-outbound",
+      "revision": "r1",
+      "direction": "outbound",
+      "start": "2026-10-25T00:00:00Z",
+      "end": "2026-10-25T01:00:00Z",
+      "closed": true,
+      "count": 0,
+      "entries": []
+    }
+  ]
+}

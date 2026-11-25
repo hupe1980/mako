@@ -245,6 +245,7 @@ pub async fn speichern(
     crate::pg::attach_gebuehrenbescheid(&mut *tx, id, view).await?;
     if !held {
         let ce = crate::handlers::rechnung_erstellt_ce(
+            &cfg.tenant,
             id,
             &ctx.malo_id,
             &ctx.lf_mp_id,

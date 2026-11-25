@@ -2,6 +2,7 @@
   "recompute_invoice": {
     "record_id": "b-1",
     "rechnungsnummer": "R-2026-0042",
+    "dispatched_at": "2026-11-03T05:00:07Z",
     "malo_id": "51238696012",
     "period_from": "2025-10-01",
     "period_to": "2026-09-30",

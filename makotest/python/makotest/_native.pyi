@@ -41,6 +41,7 @@ class Vorgang:
     dates: list[tuple[str, str]]
     references: list[tuple[str, str]]
     transaktionsgrund: str | None
+    transaktionsgrund_ergaenzung: str | None
     antwort_code: str | None
     antwort_codeliste: str | None
     sparte: str
@@ -450,6 +451,7 @@ def aperak_gas_initialprozess_due_at(received: str) -> str: ...
 def format_303(instant: str) -> str:
     """An RFC 3339 instant as EDIFACT DE 2379 format `303` — `CCYYMMDDHHMMZZZ`."""
 
+def in_berlin(instant: str) -> str: ...
 def berlin_day_bounds(date: str) -> tuple[str, str]:
     """The half-open UTC bounds of one Europe/Berlin day — 23, 24 or 25 hours."""
 
@@ -496,6 +498,11 @@ class AntwortCode:
     braucht_bemerkung: bool
     @property
     def ist_zustimmung(self) -> bool | None: ...
+
+def decommissioned_nb_refusal(
+    malo: str, delivery: str, receipt: str
+) -> tuple[str, str, int]:
+    """Tree, code and Prüfschritt for a decommissioned, consuming Strom MaLo."""
 
 def entscheidungsbaeume() -> list[str]: ...
 def antwort_code(tree: str, code: str) -> AntwortCode | None: ...
@@ -553,3 +560,12 @@ def parse_cloudevent_time(value: str) -> str:
 
 def bo4e_schema_version() -> str:
     """The BO4E generation the bundled object model is generated from."""
+
+def esa_invoice_verdict(
+    invoice: str,
+    receipt: str,
+    known_order: bool,
+    duplicate_invoice: bool,
+    prices: list[tuple[str, str]],
+    services: list[tuple[int, bool, str | None]],
+) -> tuple[int | None, list[str], list[int]]: ...

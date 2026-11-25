@@ -149,8 +149,8 @@ pub async fn webhook(
         .secrets
         .inbound_hmac_secret
         .as_ref()
-        .map(|s| s.expose_secret().as_bytes().to_vec());
-    match mako_service::webhook::verify_request(secret.as_deref(), &headers, &body) {
+        .map(|s| s.expose_secret());
+    match mako_service::webhook::verify_configured_request(secret, &headers, &body) {
         Ok(_deduplicated_on_the_cloudevent_pair_instead) => {}
         Err(err) => {
             tracing::warn!(%err, "agentd: inbound webhook refused");

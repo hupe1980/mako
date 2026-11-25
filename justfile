@@ -166,7 +166,7 @@ ci:
 
 [private]
 [group('gate')]
-_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-docker-build check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-openapi-routes api-catalog-check event-catalog-check check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-tenant-not-mp-id check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-eval-cases check-translations check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+_ci: check check-fuzz test test-doc check-features machete examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-db-suites check-expected-tenant check-vorlauf-consulted check-behg-prices check-referenzreihen check-runner-disk check-docker-build check-runner-routes check-wire-timestamps check-business-dates check-workflow-purity check-workflow-interpolation check-outbox-notify check-openapi-routes api-catalog-check event-catalog-check check-atomic-spawn check-command-constructors check-approval-commands check-occupancy check-event-payloads check-event-verlauf check-cedar-roles check-tenant-predicate check-tenant-not-mp-id check-as4-controls check-citations check-known-wrong check-quotations check-policy-settings check-frist-literals check-controls-consulted check-rounding check-pid-coverage check-release-coverage check-action-pins check-ci-guards check-clippy-bans check-vex check-malo-ids check-bo4e-attributes check-ledger-drafts check-dynamic-sql check-request-bodies check-thin-main check-config-findings check-sts-codes check-desk desk-check check-error-tuples check-process-verdict check-event-durability check-prompt-tools check-tool-grants check-eval-cases check-translations check-mcp-surface check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest test-recovery-checkpoint
 
 # `--all-targets` so bench targets are built and their `main` runs in test mode;
 # without it a panicking Criterion bench is invisible to `just ci`. Under
@@ -497,7 +497,18 @@ test-seed-payloads:
 
 # All database integration suites in one go.
 [group('database')]
-test-db: check-sql test-conformance-db test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-invoicd-db test-netzbilanzd-db test-outbox-db test-policy-db
+test-db: check-sql test-conformance-db test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-invoicd-db test-netzbilanzd-db test-outbox-db test-policy-db recovery-drill
+
+# Check the offline recovery reader against incomplete and redirected checkpoints
+[group('gate')]
+test-recovery-checkpoint:
+    python3 -m unittest discover -s deploy/recovery -p 'test_*.py'
+
+# Restore a synthetic LF close in isolation and reconcile its pending delivery.
+[group('database')]
+recovery-drill *args:
+    python3 deploy/recovery/drill.py {{ args }}
+
 
 # Every service's SQL literals prepare against its own schema.
 #
@@ -658,7 +669,7 @@ test-policy-db:
 test-processd-db:
     cargo test -p processd --no-default-features --features integrated --test it -- \
         --include-ignored --test-threads=1 \
-        sql_integration:: worker_integration:: rebuild:: webhook_fanout:: db_scenarios:: webhook_delivery:: klaerfall::
+        sql_integration:: worker_integration:: rebuild:: webhook_fanout:: db_scenarios:: webhook_delivery:: klaerfall:: shadow_review::
 
 # Every real-PostgreSQL suite is `#[ignore]`d and named by a `test-*-db` recipe.
 #
@@ -1446,7 +1457,7 @@ wasm:
     rustup target add wasm32-unknown-unknown >/dev/null
     cargo build -q -p mako-wasm --profile wasm --target wasm32-unknown-unknown
     mkdir -p site/static/validator
-    cp target/wasm32-unknown-unknown/wasm/mako_wasm.wasm site/static/validator/mako.wasm
+    cp "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/wasm/mako_wasm.wasm" site/static/validator/mako.wasm
     node tools/mako-wasm/parity.mjs site/static/validator/mako.wasm
 
 # Live reload on http://127.0.0.1:1111, the validator's module built first.
@@ -1496,9 +1507,10 @@ build-site: wasm
 # page with no built HTML, an `llms.txt` group missing for a section, and a
 # search index that holds a different number of pages than the content tree.
 #
-# Mermaid, links, the full build and zola check: the site's gate
+# Check diagrams, links, the deployed build and landing page reflow
 [group('site')]
 check-site: check-mermaid check-links build-site
+    cd site && npx playwright install --only-shell chromium && npm run --silent check:layout
     cd site && zola check
 
 # ── Integrations ──────────────────────────────────────────────────────────────
@@ -1510,8 +1522,9 @@ check-site: check-mermaid check-links build-site
 #
 # Check a service, mako's own or a replacement, against its published contract
 [group('integrations')]
-conformance service url *args:
-    cargo run -q -p mako-conformance -- {{ service }} {{ url }} {{ args }}
+[positional-arguments]
+conformance *args:
+    @cargo run -q -p mako-conformance -- "$@"
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -1590,7 +1603,9 @@ zugferd-verify: zugferd-specimen
 test-makotest:
     cd makotest && test -d .venv || python3 -m venv .venv
     cd makotest && .venv/bin/pip install -q --upgrade pip 'maturin>=1.9,<2.0' pytest hypothesis ruff
-    cd makotest && .venv/bin/maturin develop && .venv/bin/pytest -q
+    cargo build --locked -p makod --bin makod
+    test -x "${CARGO_TARGET_DIR:-target}/debug/makod"
+    export PATH="$(cd "${CARGO_TARGET_DIR:-target}/debug" && pwd):$PATH" && cd makotest && .venv/bin/maturin develop && .venv/bin/pytest -q
 
 # Lint and format-check the Python layer (ruff).
 #

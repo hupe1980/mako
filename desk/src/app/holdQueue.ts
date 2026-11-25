@@ -5,6 +5,7 @@
 // back.
 
 import type { Versand } from "../data/versand";
+import type { Rolle } from "./rollen";
 
 /** How long a decision waits before it is sent. */
 export const HOLD_MS = 5_000;
@@ -22,6 +23,7 @@ interface Entry extends Hold {
   /** The decision's Idempotency-Key: one per hold, a new one after an undo. */
   readonly schluessel: string;
   readonly undo: () => void;
+  readonly reconcileAs: Rolle | undefined;
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
@@ -46,14 +48,23 @@ export class HoldQueue {
    * Hold a decision. A pending hold with the same `key` is superseded: it is
    * dropped unsent, since the later decision replaces it at the service too.
    */
-  hold(key: string, label: string, send: Entry["send"], undo: () => void): number {
+  hold(
+    key: string,
+    label: string,
+    send: Entry["send"],
+    undo: () => void,
+    reconcileAs?: Rolle,
+  ): number {
     const superseded = this.entries.find((e) => e.key === key);
     if (superseded) this.drop(superseded);
     const id = this.nextId++;
     const timer = setTimeout(() => this.release(id, false), this.ms);
     const schluessel = crypto.randomUUID();
     // A new array on every change: it is the snapshot React compares.
-    this.entries = [...this.entries, { id, key, label, send, undo, timer, schluessel }];
+    this.entries = [
+      ...this.entries,
+      { id, key, label, send, undo, timer, schluessel, reconcileAs },
+    ];
     this.emit();
     return id;
   }
@@ -87,13 +98,22 @@ export class HoldQueue {
     this.drop(entry);
     // Sent as the page closes, its answer may never be read here: it is noted
     // until it is, and the next load asks the service (`Unbestaetigt.tsx`).
-    if (keepalive) merken({ key: entry.key, label: entry.label, schluessel: entry.schluessel });
+    const track = keepalive || Boolean(entry.reconcileAs);
+    if (track)
+      merken({
+        key: entry.key,
+        label: entry.label,
+        schluessel: entry.schluessel,
+        ...(entry.reconcileAs && { rolle: entry.reconcileAs }),
+      });
     // The caller's `send` reports its own failure in place; the queue only
     // keeps a rejection from going unhandled.
     entry
       .send({ keepalive, schluessel: entry.schluessel })
-      .then(() => keepalive && vergessen(entry.schluessel))
-      .catch(() => keepalive && vergessen(entry.schluessel));
+      // The closing page cannot show the reply, even if keepalive receives it.
+      .then(() => track && !(keepalive && entry.reconcileAs) && vergessen(entry.schluessel))
+      // A caller opting into reconciliation rejects on an *uncertain* outcome.
+      .catch(() => keepalive && !entry.reconcileAs && vergessen(entry.schluessel));
   }
 
   private drop(entry: Entry): void {
@@ -109,6 +129,8 @@ export class HoldQueue {
 
 /** A decision sent as the page closed, whose answer the page did not read. */
 export interface Unbestaetigt {
+  /** The role that initiated a write whose outcome must survive a lost reply. */
+  rolle?: Rolle;
   /** The hold's key: `freigabe/<id>`, `disput/<id>`, … (`aktionen.ts` `schluessel`). */
   key: string;
   label: string;

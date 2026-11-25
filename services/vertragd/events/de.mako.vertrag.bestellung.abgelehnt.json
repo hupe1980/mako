@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BestellungAbgelehnt",
+  "type": "object",
+  "properties": {
+    "bestellung_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "bestellreferenz": {
+      "type": "string"
+    },
+    "grund": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "bestellung_id",
+    "bestellreferenz",
+    "grund"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.bestellung.abgelehnt.json"
+}

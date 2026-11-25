@@ -53,7 +53,7 @@ export class ToolRefusal extends Error {
 
 /** The service could not be reached or failed before answering. */
 /** A service the Desk reads over REST alone, with no MCP client of its own. */
-export type NurRest = "productd";
+export type NurRest = "productd" | "outputd" | "portald";
 
 export class ServiceUnavailable extends Error {
   override name = "ServiceUnavailable";

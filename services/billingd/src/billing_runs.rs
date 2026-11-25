@@ -1,28 +1,6 @@
-//! §40b EnWG scheduled billing runs.
-//!
-//! The worker sweeps once per day (after `billing_runs.run_hour_utc`):
-//!
-//! 1. Pull the active supply components + their contract's
-//!    `abrechnungszyklus` from vertragd (`/api/v1/vertraege/billing-candidates`).
-//! 2. For each, compute the most recently **completed** billing period:
-//!    - `MONATLICH` — the previous calendar month (§40b: monthly option);
-//!    - `VIERTELJAEHRLICH` — the previous calendar quarter;
-//!    - `HALBJAEHRLICH` — the previous calendar half-year;
-//!    - `JAEHRLICH` — the 12-month window ending the day before the most
-//!      recent `vertragsbeginn` anniversary (rolling Stichtag, the common
-//!      German annual-billing practice).
-//!      The window is clipped to the component's supply dates.
-//! 3. Skip periods that already have a `billing_records` row (per-invoice
-//!    idempotency — the same guard the on-demand endpoint relies on), then
-//!    run the exact `dispatch → persist → emit` pipeline the HTTP endpoint
-//!    uses. §40c EnWG is why this worker exists: an invoice the customer
-//!    must receive within six weeks (three for monthly billing) cannot wait
-//!    for someone to call an endpoint.
-//! 4. Accumulate the month's `billing_run_log` row (audit).
-//! 5. For iMSys MaLos, deliver the free monthly **Abrechnungsinformation**
-//!    (§ 40b Abs. 3 EnWG) as a `de.mako.billing.abrechnungsinformation.monatlich`
-//!    CloudEvent — a preview calculation, not a persisted invoice, logged in
-//!    `abrechnungsinfo_log` so each month is delivered exactly once.
+//! Scheduled and manual billing use the same issuer-scoped discovery and invoice decisions.
+//! The run records its window before reading active and ended supplies from vertragd.
+//! A durable refusal keeps an unbilled period visible until its issuer dispatches an eligible invoice.
 
 use std::sync::Arc;
 
@@ -234,14 +212,9 @@ fn plan_periods(
 
 /// The stable code a failed period is recorded under: the refusal's own code
 /// when billing refused it, `INTERNAL` otherwise.
-fn reason_of(e: &anyhow::Error) -> (&'static str, String) {
-    match e.downcast_ref::<crate::error::BillingError>() {
-        Some(crate::error::BillingError::Internal(_)) | None => (
-            "INTERNAL",
-            "the run failed unexpectedly — the billingd log carries the cause".to_owned(),
-        ),
-        Some(b) => (b.code(), b.to_string()),
-    }
+fn reason_of(e: &anyhow::Error) -> &'static str {
+    e.downcast_ref::<crate::error::BillingError>()
+        .map_or("INTERNAL", crate::error::BillingError::code)
 }
 
 /// Spawn the §40b billing-run worker. No-op when disabled in config.
@@ -256,47 +229,76 @@ pub fn spawn_billing_run_worker(
         return;
     }
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut last_sweep: Option<Date> = None;
         loop {
-            tokio::select! {
-                _ = interval.tick() => {}
-                () = shutdown.cancelled() => {
-                    tracing::info!("billingd: billing-run worker shutting down");
-                    return;
-                }
-            }
-            // The trigger is a UTC hour — an operator schedules the run against
-            // a clock, not a calendar. What it sweeps *for* is a German business
-            // day, so both the once-a-day guard and the date handed to `sweep`
-            // are Berlin dates: an invoice must not be dated into the previous
-            // month because the worker woke an hour before German midnight.
             let now = time::OffsetDateTime::now_utc();
-            let today = mako_fristen::heute();
-            if now.hour() < cfg.billing_runs.run_hour_utc || last_sweep == Some(today) {
-                continue;
+            let next = next_scheduled_at(&cfg.billing_runs, now).expect("worker is enabled");
+            if now.hour() >= cfg.billing_runs.run_hour_utc
+                && let Err(error) =
+                    sweep(&deps, &pool, mako_fristen::heute(), Some(next), None).await
+            {
+                tracing::error!(%error, "billing sweep could not finish");
             }
-            last_sweep = Some(today);
-            sweep(&deps, &pool, today).await;
+            let wait = (next - time::OffsetDateTime::now_utc())
+                .try_into()
+                .unwrap_or_default();
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                () = shutdown.cancelled() => return,
+            }
         }
     });
 }
 
-/// One daily sweep: bill everything due, deliver monthly infos, log the run.
-async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
+/// First configured UTC slot strictly after the supplied instant.
+#[must_use]
+pub fn next_scheduled_at(
+    cfg: &crate::config::BillingRunsConfig,
+    now: time::OffsetDateTime,
+) -> Option<time::OffsetDateTime> {
+    let hour = time::Time::from_hms(cfg.run_hour_utc, 0, 0).ok()?;
+    let now = now.to_offset(time::UtcOffset::UTC);
+    let slot = now.replace_time(hour);
+    cfg.enabled.then_some(if slot > now {
+        slot
+    } else {
+        slot + time::Duration::DAY
+    })
+}
+
+/// Run the scheduled discovery and invoice decisions for one Berlin business date.
+pub async fn sweep(
+    deps: &Arc<BillingDeps>,
+    pool: &PgPool,
+    today: Date,
+    next: Option<time::OffsetDateTime>,
+    requested: Option<uuid::Uuid>,
+) -> anyhow::Result<Option<uuid::Uuid>> {
     let cfg = &deps.cfg;
-    // One id for this sweep, not one per invoice. Every invoice it produces
-    // carries it as `billingRunId`, which is what lets an ERP ask "did all of
-    // last night's run arrive?".
-    let run_id = uuid::Uuid::new_v4().to_string();
-    let candidates = match deps.vertragd.get_billing_candidates().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "billing-run: vertragd candidates unavailable — sweep skipped");
-            return;
+    let mut attempt =
+        match crate::discovery::Attempt::start(pool, &cfg.tenant, today, next, requested).await? {
+            crate::discovery::Start::Busy => return Ok(None),
+            crate::discovery::Start::Replay(id) => return Ok(Some(id)),
+            crate::discovery::Start::New(attempt) => attempt,
+        };
+    if let Err(error) = pg::purge_settled_unbilled(&mut attempt.conn, &cfg.tenant).await {
+        attempt.fail(&cfg.tenant, "evidence_write_failed").await?;
+        return Err(error);
+    }
+    let run_id = attempt.id.to_string();
+    let candidates = match deps
+        .vertragd
+        .get_billing_candidates(attempt.from, attempt.through)
+        .await
+    {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            attempt
+                .fail(&cfg.tenant, "candidate_source_unavailable")
+                .await?;
+            return Err(error);
         }
     };
+    let mut incomplete = false;
     tracing::info!(count = candidates.len(), %today, "billing-run: daily sweep");
 
     // Counters per Lieferant, because `billing_run_log` is keyed per Lieferant.
@@ -308,6 +310,7 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
 
     for cand in &candidates {
         let counters = per_lf.entry(cand.lf_mp_id.clone()).or_default();
+        counters.candidates += 1;
 
         // §40 Abs. 1 EnWG: a Jahresrechnung itemises and deducts the paid
         // Abschläge, and §14 Abs. 5 Satz 2 UStG makes each one's rate part of
@@ -341,6 +344,7 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
                 Err(e) => {
                     tracing::warn!(malo_id = %cand.malo_id, error = %e, "billing-run: last billed day unreadable — skipping");
                     counters.errors += 1;
+                    incomplete = true;
                     continue;
                 }
             }
@@ -354,14 +358,22 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
             latest_billed_to,
         );
         for Planned { from, to, schluss } in periods {
-            match pg::billing_record_exists_for_period(pool, &cfg.tenant, &cand.malo_id, from, to)
-                .await
+            match pg::billing_record_exists_for_period(
+                pool,
+                &cfg.tenant,
+                &cand.malo_id,
+                &cand.lf_mp_id,
+                from,
+                to,
+            )
+            .await
             {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(e) => {
                     tracing::warn!(malo_id = %cand.malo_id, error = %e, "billing-run: idempotency check failed — skipping");
                     counters.errors += 1;
+                    incomplete = true;
                     continue;
                 }
             }
@@ -379,7 +391,7 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
             match outcome {
                 Ok(()) => counters.billed += 1,
                 Err(e) => {
-                    let (reason_code, message) = reason_of(&e);
+                    let reason_code = reason_of(&e);
                     if refuse_settlement {
                         counters.skipped += 1;
                     } else {
@@ -408,7 +420,6 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
                             period_to: to,
                             final_invoice: schluss,
                             reason_code,
-                            message: &message,
                             due_on,
                         },
                     )
@@ -418,6 +429,7 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
                         // exists for, so it fails the month even when the
                         // refusal itself was a deliberate skip.
                         tracing::error!(malo_id = %cand.malo_id, %from, %to, error = %e, "billing-run: the unbilled period could not be recorded");
+                        incomplete = true;
                         counters.errors += 1;
                     }
                 }
@@ -431,15 +443,41 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
         }
     }
 
-    let (mut billed, mut skipped, mut errors) = (0, 0, 0);
-    for (lf, c) in &per_lf {
-        billed += c.billed;
-        skipped += c.skipped;
-        errors += c.errors;
-        // committed apart: the run summary; each invoice committed with its own event.
-        if let Err(e) = pg::record_billing_run(
-            pool,
-            &cfg.tenant,
+    let finish = record_outcome(
+        &mut attempt,
+        &cfg.tenant,
+        today,
+        &per_lf,
+        candidates.len(),
+        incomplete,
+    )
+    .await;
+    if let Err(error) = finish {
+        attempt.fail(&cfg.tenant, "evidence_write_failed").await?;
+        return Err(error);
+    }
+    anyhow::ensure!(
+        !incomplete,
+        "billing discovery evidence could not be recorded"
+    );
+    tracing::info!(%run_id, "billing sweep finished");
+    Ok(Some(attempt.id))
+}
+
+async fn record_outcome(
+    attempt: &mut crate::discovery::Attempt,
+    tenant: &str,
+    today: Date,
+    results: &std::collections::HashMap<String, SweepCounters>,
+    count: usize,
+    incomplete: bool,
+) -> anyhow::Result<()> {
+    use sqlx::Connection as _;
+    let mut tx = attempt.conn.begin().await?;
+    for (lf, c) in results {
+        pg::record_billing_run(
+            &mut *tx,
+            tenant,
             lf,
             today.year() as i16,
             i16::from(u8::from(today.month())),
@@ -447,17 +485,25 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
             c.skipped,
             c.errors,
         )
-        .await
-        {
-            tracing::warn!(lf, error = %e, "billing-run: could not record run log");
-        }
+        .await?;
+        sqlx::query("INSERT INTO billing_discovery_issuers (tenant, run_id, lf_mp_id, candidates, billed, skipped, errors) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+            .bind(tenant).bind(attempt.id).bind(lf).bind(c.candidates).bind(c.billed).bind(c.skipped).bind(c.errors).execute(&mut *tx).await?;
     }
-    tracing::info!(billed, skipped, errors, %run_id, "billing-run: sweep complete");
+    let (status, error, count) = if incomplete {
+        ("failed", Some("evidence_write_failed"), None)
+    } else {
+        ("completed", None, Some(i64::try_from(count)?))
+    };
+    sqlx::query("UPDATE billing_discovery SET status=$3, error_code=$4, candidate_count=$5, finished_at=clock_timestamp()
+        WHERE tenant=$1 AND run_id=$2 AND status='running'").bind(tenant).bind(attempt.id).bind(status).bind(error).bind(count).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// What one Lieferant's share of a sweep did.
 #[derive(Debug, Default, Clone, Copy)]
 struct SweepCounters {
+    candidates: i32,
     billed: i32,
     skipped: i32,
     errors: i32,
@@ -485,7 +531,7 @@ async fn bill_one(
     let settles = settles_advances(&cand.abrechnungszyklus);
     let abschlaege = match (settles, deps.accountingd.as_ref()) {
         (true, Some(accounting)) => accounting
-            .get_abschlaege(&cand.malo_id, from, to)
+            .get_abschlaege(&cand.malo_id, &cand.lf_mp_id, from, to)
             .await
             .map_err(|e| crate::error::BillingError::upstream("accountingd", e))?
             .unwrap_or_default(),
@@ -628,6 +674,7 @@ async fn bill_one(
         );
     } else {
         let ce = handlers::rechnung_erstellt_ce(
+            &cfg.tenant,
             record_id,
             &cand.malo_id,
             &cand.lf_mp_id,
@@ -719,6 +766,29 @@ async fn deliver_abrechnungsinfo(
         return;
     };
 
+    // Without a sink this information cannot leave the service.
+    if cfg.erp_webhook_url.is_none() {
+        return;
+    }
+    let (year, month) = (from.year() as i16, i16::from(u8::from(from.month())));
+    match pg::abrechnungsinfo_queued(
+        pool,
+        &cfg.tenant,
+        &cand.lf_mp_id,
+        &cand.malo_id,
+        year,
+        month,
+    )
+    .await
+    {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(malo_id = %cand.malo_id, %error, "abrechnungsinfo: reading issued months failed");
+            return;
+        }
+    }
+
     // Only fernauslesbare (iMSys) MaLos get the monthly info — § 40b Abs. 3
     // attaches the duty to remote read-out, and Abs. 2 covers the rest on a
     // six-month cadence.
@@ -743,29 +813,6 @@ async fn deliver_abrechnungsinfo(
         );
         return;
     }
-
-    let (year, month) = (from.year() as i16, u8::from(from.month()) as i16);
-    // committed apart: a claim, released on every path that does not enqueue.
-    match pg::claim_abrechnungsinfo(pool, &cfg.tenant, &cand.malo_id, year, month).await {
-        Ok(true) => {}
-        Ok(false) => return, // already delivered this month
-        Err(e) => {
-            tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: claim failed");
-            return;
-        }
-    }
-
-    // From here the claim is held. Every path that does not deliver must give
-    // it back: holding a claim whose delivery failed suppresses that month's
-    // § 40b Abs. 3 information for good, and the customer's statutory
-    // entitlement is not something a transient edmd outage may consume.
-    let release = || async {
-        if let Err(e) =
-            pg::release_abrechnungsinfo_claim(pool, &cfg.tenant, &cand.malo_id, year, month).await
-        {
-            tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: claim release failed");
-        }
-    };
 
     let req = CalculateRequest {
         lf_mp_id: cand.lf_mp_id.clone(),
@@ -802,21 +849,12 @@ async fn deliver_abrechnungsinfo(
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: preview failed");
-            release().await;
             return;
         }
     };
 
-    // Unlike an invoice, the § 40b Abs. 3 information *is* the CloudEvent — there
-    // is no record to persist and nothing else delivers it. Without a webhook
-    // there is nowhere to send it, so the claim goes back and the month stays
-    // open for a sweep that runs once one is configured.
-    if cfg.erp_webhook_url.is_none() {
-        release().await;
-        return;
-    }
     let ce = mako_service::CloudEvent::new(
-        mako_service::source("billingd", &cand.lf_mp_id),
+        mako_service::source("billingd", &cfg.tenant),
         mako_events::billing::ABRECHNUNGSINFORMATION_MONATLICH,
         cand.malo_id.clone(),
         serde_json::json!({
@@ -830,23 +868,23 @@ async fn deliver_abrechnungsinfo(
             "hinweis": "Monatliche Abrechnungsinformation — keine Rechnung",
         }),
     );
-    // Through the outbox, like every other event this service emits: the info
-    // is a statutory obligation with a monthly deadline, and posting it inline
-    // dropped it whenever the ERP happened to be restarting.
-    let enqueued = async {
-        let mut tx = pool.begin().await?;
-        mako_service::outbox::enqueue(&mut tx, &ce).await?;
-        tx.commit().await?;
-        Ok::<_, anyhow::Error>(())
-    }
-    .await;
-    match enqueued {
-        Ok(()) => {
-            tracing::info!(malo_id = %cand.malo_id, %from, %to, "abrechnungsinfo: enqueued");
+    match pg::enqueue_abrechnungsinfo(
+        pool,
+        &cfg.tenant,
+        &cand.lf_mp_id,
+        &cand.malo_id,
+        year,
+        month,
+        &ce,
+    )
+    .await
+    {
+        Ok(true) => {
+            tracing::info!(malo_id = %cand.malo_id, %from, %to, "abrechnungsinfo: enqueued")
         }
-        Err(e) => {
-            tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: enqueue failed");
-            release().await;
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(malo_id = %cand.malo_id, %error, "abrechnungsinfo: enqueue failed")
         }
     }
 }
@@ -1060,11 +1098,9 @@ mod tests {
             "NO_METER_DATA",
             "no reading",
         ));
-        assert_eq!(reason_of(&refused).0, "NO_METER_DATA");
+        assert_eq!(reason_of(&refused), "NO_METER_DATA");
         let internal = anyhow::anyhow!("connection to 10.0.0.5 refused");
-        let (code, message) = reason_of(&internal);
-        assert_eq!(code, "INTERNAL");
-        assert!(!message.contains("10.0.0.5"));
+        assert_eq!(reason_of(&internal), "INTERNAL");
     }
 
     #[test]

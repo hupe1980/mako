@@ -1,0 +1,50 @@
+- main:
+  - 'button "Rolle: Netz. Rolle wechseln"': Netz
+  - button "Suchen oder Befehl ⌘K"
+  - heading "Schattenbetrieb" [level=1]
+  - paragraph: 1 von 2 Eingängen geprüft · 1 offene Abweichung · 2 ohne Zeitnachweis
+  - button "Erneut prüfen"
+  - strong: Weitere Prüfung erforderlich
+  - paragraph: NB 9900357000003 · 01.11.2026, 01:00 bis 01.11.2026, 02:00
+  - paragraph: 0 von 1 vollständigem Werktag · Generation 1
+  - paragraph: Übereinstimmend 0 · Abweichend 1 · Ungeprüft 1
+  - status
+  - heading "Eingänge" [level=2]
+  - grid "Eingänge":
+    - row "Eingang b284f03e9a8a Abweichung" [selected]:
+      - gridcell "Eingang b284f03e9a8a Abweichung"
+    - row "Eingang 6b7918f12e63 Antwort ungeprüft":
+      - gridcell "Eingang 6b7918f12e63 Antwort ungeprüft"
+  - region "Eingänge":
+    - heading "Abweichung" [level=2]
+    - table "Antwortvergleich":
+      - caption: Antwortvergleich
+      - rowgroup:
+        - row "Erwartet Von mako ermittelt":
+          - cell
+          - columnheader "Erwartet"
+          - columnheader "Von mako ermittelt"
+      - rowgroup:
+        - row "PID 55003 55003":
+          - rowheader "PID"
+          - cell "55003"
+          - cell "55003":
+            - strong: "55003"
+        - row "Entscheidungsbaum E_0622 E_0622":
+          - rowheader "Entscheidungsbaum"
+          - cell "E_0622"
+          - cell "E_0622":
+            - strong: E_0622
+        - row "Antwortcode A02 A07 Abweichung":
+          - rowheader "Antwortcode"
+          - cell "A02"
+          - cell "A07 Abweichung":
+            - strong: A07
+            - text: Abweichung
+    - term: Prüfschritt
+    - definition: 30 · UTILMD S2.2 · EBD 4.3
+    - term: Frist
+    - definition: 02.11.2026, 11:00
+    - term: Zustellung des Bestandssystems
+    - definition: Beleg fehlt
+    - group: Vergleichsbelege

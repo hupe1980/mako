@@ -10,9 +10,7 @@ carry that work: what it covers, how to try it on your own data without
 sending anything, and what a deployment needs.
 
 > [!WARNING]
-> mako is experimental and pre-1.0. Interfaces change between releases, and a
-> production deployment needs your own testing against your own
-> counterparties.
+> mako is in development ahead of its first official platform release. Interfaces can change. Test with your own counterparties before production use.
 
 ## What mako covers
 
@@ -75,16 +73,17 @@ Three steps, none of which sends a message to a market partner:
 `just erstlauf` runs the second and third steps end to end from an empty
 `makod` and times each.
 
-## Migrating: a Schattenbetrieb
+**Rehearse a lost delivery acknowledgement.** Run `just recovery-drill` to restore the LF’s invoice and open credit. Check which evidence releases the queued financial event after the recipient has already accepted it. Each refusal names the evidence to recover before retrying. [Cold restore guide](@/docs/reference/recovery.md)
 
-The way to move a live market role onto mako is a Schattenbetrieb: mako
-receives the same inbound messages as the system in production, decides them,
-and its answers are compared with the ones actually sent — before mako sends
-anything itself. mako has no shadow mode today: it does not mirror an existing
-system's traffic and does not compare answers. What exists for that path is
-what the evaluation above uses — the configuration check, the Probelauf, and
-[makotest](@/docs/reference/makotest.md) with counterparties that answer under
-the published Fristen.
+## Preparing a Schattenbetrieb
+
+Before comparing answers, establish which traffic reached the mirror. Export a closed source journal for one Marktrolle and time window. Independently inventory the captured files. Run `makotest shadow reconcile` locally. It checks each occurrence and its bytes, reports duplicates and gaps, and distinguishes a confirmed quiet interval from missing evidence. You can try it first with the synthetic capture included in the checkout. [Capture format and worked example](@/docs/reference/makotest.md#reconcile-a-shadow-capture)
+
+Rehearse one Strom NB refusal with the synthetic capture and compare it with an independent expected answer. The example assesses one of two inbound Anmeldungen. [Run the rehearsal](@/docs/reference/makotest.md#rehearse-a-strom-nb-refusal)
+
+Add `--makod-workspace <dir>` to exercise the daemon. Keep the mirror and the private rehearsal store separate. After a restart, retrieve the same captured reply. The sending installation retains responsibility for outstanding acknowledgements. Before handing over sending authority, reconcile messages and postings added since the snapshot. [Daemon rehearsal](@/docs/services/makod.md#shadow-capture)
+
+Open **System → Schattenbetrieb** in the NB Desk of the isolated review installation. Every captured inbound occurrence has its own row. In the synthetic window one of two answers is assessed. Select the other row to see which evidence is missing. A named resolver can acknowledge a discrepancy with an archive reference and reason. Changed evidence requires a fresh decision. [Configure the review installation](@/docs/services/processd.md#isolated-shadow-review)
 
 ## What running it takes
 
@@ -98,8 +97,6 @@ the published Fristen.
 - **AS4 key material.** TLS, signing and encryption certificates from an
   SM-PKI CA with your MP-ID in the subject, for every role you play
   ([makod — AS4](@/docs/services/makod.md#as4-as4-ebms3-inbound-and-outbound)).
-- **Published MP-IDs.** Only a BDEW- or DVGW-Codenummer published in the code
-  registry may be used in production messages (Allgemeine Festlegungen V6.1d
-  Kap. 2.14).
+- **Published MP-IDs.** Use a BDEW-Codenummer or GLN for Strom and a DVGW-Codenummer or GLN for Gas, published in the respective register. [BDEW, Allgemeine Festlegungen 6.1d, Kap. 2.13–2.14, S. 17–18](https://www.bdew-mako.de/api/downloadFile/12145)
 - **Your own tests.** Against your own counterparties, before the first live
   message.

@@ -1,0 +1,265 @@
+{
+  "de.mako.vertrag.abgeschlossen": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "status": "ABGELAUFEN"
+  },
+  "de.mako.vertrag.ablauf.ankuendigung": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "vertragsart": "SONDERVERTRAG",
+    "vertragsende": "2026-06-30",
+    "preisgarantie_bis": null,
+    "faellig_am": "2026-06-30",
+    "auto_renewal": false,
+    "kundentyp": "B2C",
+    "standort_bezeichnung": null
+  },
+  "de.mako.vertrag.aktiv": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001"
+  },
+  "de.mako.vertrag.autoerneuerung.ankuendigung": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "vertragsende": "2026-06-30",
+    "verlaengerung": {
+      "art": "BEFRISTET",
+      "neues_vertragsende": "2027-06-30",
+      "monate": 12
+    },
+    "kuendigungsfrist_monate": 1
+  },
+  "de.mako.vertrag.bestellung.abgelehnt": {
+    "bestellung_id": "00000000-0000-4000-8000-000000000004",
+    "bestellreferenz": "REF-B1",
+    "grund": "Referenz"
+  },
+  "de.mako.vertrag.bestellung.angenommen": {
+    "bestellung_id": "00000000-0000-4000-8000-000000000004",
+    "bestellreferenz": "REF-B1",
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "vertrags_nr": "REF-V1",
+    "vertragsschluss_am": "2026-04-01T10:00:00+02:00",
+    "widerrufsfrist": {
+      "beginn": "2026-04-01",
+      "ende": "2026-04-15",
+      "erloeschen": "2027-04-15"
+    }
+  },
+  "de.mako.vertrag.bestellung.eingegangen": {
+    "bestellung_id": "00000000-0000-4000-8000-000000000004",
+    "bestellreferenz": "REF-B1",
+    "bestellnachweis": {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "eingegangen_am": "2026-04-01T10:00:00+02:00"
+  },
+  "de.mako.vertrag.gekuendigt": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "rahmenvertrag_id": "00000000-0000-4000-8000-000000000004",
+    "rahmenvertrag_nr": "REF-R1",
+    "lieferende": "2026-06-30",
+    "grund": "ORDENTLICH",
+    "rechtsgrundlage": "Vertrag",
+    "kuendigungsbestaetigung": {
+      "erforderlich": true,
+      "form": "Textform",
+      "rechtsgrundlage": "§ 41 Abs. 8 Nr. 2 EnWG",
+      "vertragsende": "2026-06-30"
+    }
+  },
+  "de.mako.vertrag.kuendigung": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "lieferende": "2026-06-30",
+    "eingang": "2026-04-01",
+    "grund": "ORDENTLICH",
+    "frist": "1 Monat",
+    "rechtsgrundlage": "Vertrag",
+    "mako_dispatched": 1,
+    "kuendigungsbestaetigung": {
+      "erforderlich": true,
+      "form": "Textform",
+      "rechtsgrundlage": "§ 41 Abs. 8 Nr. 2 EnWG",
+      "vertragsende": "2026-06-30"
+    }
+  },
+  "de.mako.vertrag.kuendigung-neulieferant.eingegangen": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "erp_contract_id": null,
+    "bestellreferenz": null,
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "sparte": "STROM",
+    "malo_id": "51238696012",
+    "lieferbeginn": "2026-04-01",
+    "neulieferant": "9900357000004",
+    "kuendigung_zum": "2026-06-30",
+    "naechstmoeglicher_termin": false
+  },
+  "de.mako.vertrag.kuendigung-vorversorger.abgelehnt": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "erp_contract_id": null,
+    "bestellreferenz": null,
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "sparte": "STROM",
+    "malo_id": "51238696012",
+    "lieferbeginn": "2026-04-01",
+    "vorversorger_mp_id": "9900357000004",
+    "antwortcode": "A05",
+    "codeliste": "E_0614",
+    "reason": null,
+    "klasse": "vertragsbindung",
+    "reaktion": "gehalten"
+  },
+  "de.mako.vertrag.kuendigung-vorversorger.bestaetigt": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "erp_contract_id": null,
+    "bestellreferenz": null,
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "sparte": "STROM",
+    "malo_id": "51238696012",
+    "lieferbeginn": "2026-04-01",
+    "vorversorger_mp_id": "9900357000004",
+    "kuendigung_zum": "2026-06-30",
+    "antwortcode": null,
+    "codeliste": null,
+    "reaktion": "angemeldet"
+  },
+  "de.mako.vertrag.kuendigung-widerrufen": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001"
+  },
+  "de.mako.vertrag.lieferbeginn.abgelehnt": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "erp_contract_id": null,
+    "bestellreferenz": null,
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "sparte": "STROM",
+    "malo_id": "51238696012",
+    "lieferbeginn": "2026-04-01",
+    "antwortcode": "A02",
+    "codeliste": "E_0622",
+    "reason": null
+  },
+  "de.mako.vertrag.lieferbeginn.bestaetigt": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "erp_contract_id": null,
+    "bestellreferenz": null,
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "sparte": "STROM",
+    "malo_id": "51238696012",
+    "lieferbeginn": "2026-04-01"
+  },
+  "de.mako.vertrag.preisaenderung.ankuendigung": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "malo_id": "51238696012",
+    "sparte": "STROM",
+    "current_product_code": "STROM-A",
+    "new_product_code": "STROM-B",
+    "wirksamkeit": "2026-06-30",
+    "vorlauf_tage": 90,
+    "erforderliche_frist": "1 Monat",
+    "fruehestens_wirksam": "2026-05-01",
+    "frist_gewahrt": true,
+    "rechtsgrundlage": "§ 41 Abs. 5 EnWG",
+    "dokument_id": null,
+    "anlass": "Referenz",
+    "umfang": [
+      {
+        "bezeichnung": "Arbeitspreis",
+        "einheit": "ct/kWh",
+        "bisher": "30",
+        "neu": "31"
+      }
+    ],
+    "umfang_vollstaendig": true,
+    "sonderkuendigungsrecht": {
+      "besteht": true,
+      "rechtsgrundlage": "§ 41 Abs. 5 Satz 4 EnWG",
+      "wirksam_zum": "2026-06-30",
+      "entgeltfrei": true
+    }
+  },
+  "de.mako.vertrag.preisgarantie-hinterlegt": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "preisgarantie_bis": "2026-06-30"
+  },
+  "de.mako.vertrag.tarifwechsel": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "malo_id": "51238696012",
+    "old_product_code": "STROM-A",
+    "new_product_code": "STROM-B",
+    "wirksamkeit": "2026-04-01",
+    "initiator": "KUNDE",
+    "preisanpassungsanzeige_erforderlich": false,
+    "sonderkuendigungsrecht": {
+      "besteht": false
+    },
+    "geplant": false
+  },
+  "de.mako.vertrag.tarifwechsel-geplant": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "malo_id": "51238696012",
+    "old_product_code": "STROM-A",
+    "new_product_code": "STROM-B",
+    "wirksamkeit": "2026-04-01",
+    "initiator": "KUNDE",
+    "preisanpassungsanzeige_erforderlich": false,
+    "sonderkuendigungsrecht": {
+      "besteht": false
+    },
+    "geplant": true
+  },
+  "de.mako.vertrag.widerruf.eingegangen": {
+    "bestellung_id": "00000000-0000-4000-8000-000000000004",
+    "bestellreferenz": "REF-B1",
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "widerruf": {
+      "widerruf_id": "00000000-0000-4000-8000-000000000005",
+      "rechtzeitig": true,
+      "frist": {
+        "beginn": "2026-04-01",
+        "ende": "2026-04-15",
+        "erloeschen": "2027-04-15"
+      },
+      "wirkung": null,
+      "lieferende": null,
+      "wertersatz_geschuldet": false,
+      "eingegangen_am": "2026-04-01T10:00:00+02:00",
+      "eingangsbestaetigung": "00000000-0000-4000-8000-000000000005"
+    }
+  },
+  "de.mako.vertrag.zuordnung.beendet": {
+    "vertrag_id": "00000000-0000-4000-8000-000000000001",
+    "vertrags_nr": "REF-V1",
+    "kunden_id": "00000000-0000-4000-8000-000000000002",
+    "erp_contract_id": null,
+    "bestellreferenz": null,
+    "komp_id": "00000000-0000-4000-8000-000000000003",
+    "sparte": "STROM",
+    "malo_id": "51238696012",
+    "lieferbeginn": "2026-04-01",
+    "zuordnungsende": "2026-06-30",
+    "grund": "E03",
+    "wechsel": true,
+    "netzbetreiber": "9900000000001"
+  }
+}

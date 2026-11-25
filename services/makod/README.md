@@ -32,6 +32,10 @@ a credential on the HTTP port (`auth_keys` or `[oidc]`), and without a path for
 outbound EDIFACT (`[party.as4]` key material, `[erp] edifact_outbox_webhook_url`
 or `[as4] allow_no_signing`).
 
+With local storage, the daemon, `--check` and `migrate` take the same writer lock before opening SlateDB. Use `--check-config` to inspect configuration while the daemon is running. An operating-system process exit releases the lock. Keep `.makod.lock` in place. The configured data directory may be a symlink to the real directory. Its managed `db/` must stay inside that directory.
+
+For a local Strom NB rehearsal, `makod shadow` opens its own SlateDB and captures workflow effects. Use the reconciled example to compare its validated reply with an independent expectation. [Operator guide](https://hupe1980.github.io/mako/docs/services/makod/#shadow-capture)
+
 ## API
 
 | Route | Purpose |
@@ -40,6 +44,7 @@ or `[as4] allow_no_signing`).
 | `POST /api/v1/probe/{command}` | Rehearse a command — an Anmeldung or any Freigabe answer; writes nothing |
 | `POST /edifact` | Raw EDIFACT interchange |
 | `POST /as4/inbox/<MP-ID>` (`:4080`) | AS4 inbox per `[[party]]`, signed and encrypted |
+| `GET /api/v1/format-candidates/{fv}/impact` | Compare a consultation profile with the operator’s local archive. The response reports findings by rule and separates unread files from messages without a binding profile. |
 | `GET /api/v1/invoic/{process_id}/rechnung` | BO4E billing data of an INVOIC process |
 | `/admin/partners`, `/admin/malo`, `/admin/migrations` | Partner registry, MaLo cache, live format-version migration |
 | `GET /admin/einrichtung`, `GET /api/v1/policy` | Configuration findings and policy report |

@@ -857,6 +857,85 @@ async fn a_vertragsbestaetigung_is_found_by_its_contract() {
     );
 }
 
+/// A reference belongs to its issuer. Separators survive the HTTP round trip
+/// as query data, and a different tenant's matching document stays private.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_invoice_watch_reads_an_opaque_reference_under_the_callers_tenant() {
+    let (url, _db) = pg_container().await.expect("PostgreSQL starts");
+    let pool = PgPool::connect(&url).await.unwrap();
+    let mut service: outputd::config::OutputdConfig =
+        toml::from_str(include_str!("../../../../deploy/demo/outputd.toml")).unwrap();
+    service.database.url = url;
+    service.delivery.enabled = false;
+    let tenant = service.tenant.clone();
+    let router = mako_service::build_for_test_on::<outputd::Outputd>(service, pool.clone())
+        .await
+        .unwrap();
+    let reference = "R/2026 + #?&";
+    let doc = docs::NewDocument {
+        tenant: &tenant,
+        kind: "INVOICE",
+        ..a_document(reference, b"invoice")
+    };
+    docs::issue(&pool, &doc, &[Channel::Portal], &cfg())
+        .await
+        .unwrap();
+    let private = docs::NewDocument {
+        tenant: "another-tenant",
+        subject_ref: "private",
+        ..doc
+    };
+    docs::issue(&pool, &private, &[Channel::Portal], &cfg())
+        .await
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let http = mako_service::http::default_client();
+    let served: serde_json::Value = http
+        .get(format!("http://{address}/api/v1/openapi.json"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let committed: serde_json::Value =
+        serde_json::from_str(include_str!("../../openapi.json")).unwrap();
+    assert_eq!(served, committed);
+    let lookup = |r: &str| {
+        http.get(format!(
+            "http://{address}/api/v1/documents/by-subject/INVOICE"
+        ))
+        .query(&[("subject_ref", r)])
+        .bearer_auth(mako_service::oidc::demo::mint(
+            mako_service::oidc::demo::persona("lf").unwrap(),
+        ))
+    };
+    let response = lookup(reference).send().await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let evidence: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(evidence["subject_ref"], reference);
+    assert_eq!(evidence.as_object().unwrap().len(), 3);
+    assert!(evidence.get("recipient_email").is_none());
+    assert!(evidence["deliveries"][0].get("target").is_none());
+    assert_eq!(evidence["deliveries"][0]["status"], "DELIVERED");
+    assert_eq!(
+        lookup("private").send().await.unwrap().status(),
+        axum::http::StatusCode::NOT_FOUND
+    );
+    let invalid = lookup(" ").send().await.unwrap();
+    assert_eq!(invalid.status(), axum::http::StatusCode::BAD_REQUEST);
+    let rejection: serde_json::Value = invalid.json().await.unwrap();
+    assert_eq!(rejection["error"]["code"], "SUBJECT_REF_REQUIRED");
+    server.abort();
+}
+
 /// A Vertragsbestätigung whose delivery the outbox gave up on is listed for
 /// the operator with the contract it confirms — and nothing delivered is.
 #[tokio::test]

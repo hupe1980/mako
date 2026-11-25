@@ -143,6 +143,8 @@ pub struct Vorgang {
     pub references: Vec<(String, String)>,
     /// `SG4 STS+7` DE 9013 element 2 — the Transaktionsgrund.
     pub transaktionsgrund: Option<String>,
+    /// The Transaktionsgrundergänzung on SG4 STS+7.
+    pub transaktionsgrund_ergaenzung: Option<String>,
     /// `SG4 STS+E01` DE 9013 — the Antwortcode, on an Antwortnachricht.
     pub antwort_code: Option<String>,
     /// `SG4 STS+E01` DE 1131 — the Codeliste the code is drawn from. This is
@@ -267,6 +269,7 @@ fn vorgaenge_of(msg: &edi_energy::AnyMessage) -> Vec<Vorgang> {
                         .map(|v| (r.qualifier.clone(), v.clone()))
                 })
                 .collect(),
+            transaktionsgrund_ergaenzung: tx.transaktionsgrund().and_then(|g| g.ergaenzung),
             transaktionsgrund: tx.transaktionsgrund().map(|g| g.grund),
             antwort_code: tx.antwort().map(|a| a.code.clone()),
             antwort_codeliste: tx.antwort().and_then(|a| a.codeliste.clone()),

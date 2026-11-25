@@ -17,16 +17,10 @@
       <span>Rust · MIT or Apache-2.0 · BDEW EDI@Energy {{ config.extra.format_versions }}</span>
     </p>
     <a class="hero-pill" href="{{ get_url(path='@/tools.md') | safe }}"><strong>Tools</strong> — the EDIFACT validator and four energy calculators, in your browser <span aria-hidden="true">→</span></a>
-    <h1 class="hero-title">AI-first German energy-market operations,<br>from raw EDIFACT to production — in Rust.</h1>
-    <p class="hero-sub">Every German electricity and gas market participant is required to
-      exchange regulated messages with its counterparties — <em>Marktkommunikation</em>, MaKo.
-      That is a few hundred prescribed processes carried over EDIFACT and AS4, each with a
-      published decision tree and a deadline. <strong>mako implements them</strong>: the BDEW
-      formats are read as data, every process runs as an event-sourced workflow, and
-      settlement, billing and the ledger sit on the same events. <strong>AI-first</strong>:
-      the services speak MCP, and the operator Desk reads the same typed tools the agents
-      are granted — a model reads, explains and proposes; every Frist, amount and verdict
-      is computed by code.</p>
+    <h1 class="hero-title">Market communication and settlement<br>for German electricity and gas.</h1>
+    <p class="hero-sub">Check an EDIFACT message against its BDEW profile. Follow a change of supplier
+      from Anmeldung to reply. In the Desk, inspect the rule behind a finding and decide
+      whether to send the proposed answer.</p>
     <div class="hero-cta">
       <a class="btn btn-primary" href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
       <a class="btn btn-ghost" href="{{ get_url(path='@/validator.md') | safe }}">Check a message</a>
@@ -272,7 +266,7 @@ graph TB
         domain layer is deliberately split from transport and format, so when the market
         moves, the platform moves with an import run — not a rewrite.</p>
       <ul class="check">
-        <li><strong>AI-first, code decides</strong> — agents and people work one typed tool surface; no model sits in a calculation path, and no agent sends a market message.</li>
+        <li><strong>Operator approval</strong> — an assistant can propose a response. You inspect its evidence and decide whether to send it.</li>
         <li><strong>Auditable by construction</strong> — event-sourced processes, replayable state, hash-chained ledger with § 147 AO period seals.</li>
         <li><strong>Six market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, the BKV takes its MaBiS share, the EIV its Redispatch 2.0 share, and a deployment registers only the processes of the roles it declares.</li>
         <li><strong>Validation that fails loudly</strong> — an unregistered Prüfidentifikator is reported, never quietly accepted.</li>

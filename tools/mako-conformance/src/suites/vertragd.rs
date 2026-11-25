@@ -13,6 +13,10 @@ impl Suite for Vertragd {
         "vertragd"
     }
 
+    fn definition(&self) -> &'static str {
+        include_str!("vertragd.rs")
+    }
+
     /// Every `de.mako.vertrag.*` type: vertragd is their only emitter.
     fn emits(&self) -> Vec<&'static str> {
         mako_events::all()
@@ -65,7 +69,7 @@ impl Suite for Vertragd {
                     kunde.body
                 )
             })?;
-            let heute = time::OffsetDateTime::now_utc().date();
+            let heute = mako_fristen::heute();
             let ende = heute + time::Duration::days(60);
             let vertrag = ctx
                 .operator(

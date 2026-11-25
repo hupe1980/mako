@@ -27,10 +27,10 @@
 //!
 //! ```text
 //! 1. identity      [[party]] entries → MpIdRegistry → roles, tenant key
-//! 2. store         object store opens; exclusive data-dir lock
+//! 2. store         take local directory lock, then open SlateDB
 //! 3. engine        domain modules → EngineContext → PidRouter
 //! 4. validation    profiles, adapter coverage, dispatch completeness, preflight
-//!    ── `--check` exits here: everything above only reads ──
+//!    ── `--check` closes the store here, before domain writes ──
 //! 5. reconcile     rebuild missing ProcessRegistry routing entries (writes)
 //! 6. transports    HTTP :8080, AS4 :4080, API-Webdienste :8090
 //! 7. workers       outbox, ERP webhook, deadlines, projections, retention purge
@@ -54,6 +54,7 @@ mod api;
 mod core;
 mod format_impact;
 mod orchestrator;
+mod shadow;
 mod startup;
 mod transport;
 
@@ -872,6 +873,8 @@ enum CliCommand {
     /// makod --config makod.toml migrate
     /// ```
     Migrate,
+    /// Rehearse a Strom NB occurrence with a private, local capture store.
+    Shadow(shadow::Args),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
@@ -944,6 +947,12 @@ impl From<LogFormat> for mako_service::telemetry::LogFormat {
 fn main() -> anyhow::Result<()> {
     use clap::{CommandFactory, FromArgMatches};
 
+    // Live environment defaults can fail clap validation even for a subcommand.
+    let mut args = std::env::args_os().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "shadow") {
+        return shadow::start(&shadow::Args::parse_from(args));
+    }
+
     // If MAKOD_DATA_DIR is set to an empty string (e.g. Docker `-e MAKOD_DATA_DIR=`
     // to clear the image's baked-in default), remove it from the environment before
     // clap parses arguments.  Clap treats an env var that is present-but-empty as
@@ -967,6 +976,11 @@ fn main() -> anyhow::Result<()> {
     let matches = Cli::command().get_matches();
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
+    // A shadow process must enter its composition before live config, credentials or exporters load.
+    if let Some(CliCommand::Shadow(args)) = &cli.command {
+        return shadow::start(args);
+    }
+
     // Load and apply the TOML config file (if --config / MAKOD_CONFIG is set).
     // Must happen before init_tracing so the file can control log level/format.
     if let Some(ref path) = cli.config.clone() {
@@ -989,15 +1003,20 @@ fn main() -> anyhow::Result<()> {
             .map(std::num::NonZero::get)
             .unwrap_or(1),
     };
+    // A startup error can leave store tasks on the runtime. Drop the runtime before releasing its writer lock.
+    let mut writer_lock = None;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(worker_threads)
         .enable_all()
         .build()
         .expect("failed to build Tokio runtime");
-    rt.block_on(async_main(cli))
+    rt.block_on(async_main(cli, &mut writer_lock))
 }
 
-async fn async_main(cli: Cli) -> anyhow::Result<()> {
+async fn async_main(
+    cli: Cli,
+    writer_lock: &mut Option<startup::LockedDataDir>,
+) -> anyhow::Result<()> {
     // Hold the guard for the process lifetime — dropping it flushes OTel spans.
     // `--check-config` installs none: its stdout is the report, and a log line
     // there would break `--check-config --json` for every consumer.
@@ -1175,7 +1194,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         cli.marktrollen.iter().map(|s| s.to_uppercase()).collect()
     };
 
-    let store = open_store(&cli).await?;
+    let store = open_store(&cli, writer_lock).await?;
     // Apply per-stream event quota — a circuit-breaker that prevents
     // runaway streams from causing unbounded replay latency.  Disabled when
     // --max-stream-events=0.
@@ -1185,15 +1204,13 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         store
     };
 
-    // Refuse a second writer on the same SlateDB path before anything else
-    // touches it. Held for the process lifetime.
-    let _data_dir_lock = startup::lock_data_dir(cli.data_dir.as_deref())?;
-
     // `makod migrate` runs pending FV migrations and exits, so an operator can
     // use it as a Kubernetes initContainer or a Compose `depends_on` step
     // without starting the HTTP/AS4 servers.
     if matches!(cli.command, Some(CliCommand::Migrate)) {
-        return run_migrations(&store).await;
+        let migrated = run_migrations(&store).await;
+        store.close_owned().await?;
+        return migrated;
     }
 
     // ── Dead-letter sink ─────────────────────────────────────────────
@@ -1229,11 +1246,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         pid_count,
         "Mako engine started",
     );
-    info!(
-        "AS4 inbox deduplication store wired (SlateDbInboxStore); \
-         SSI transactions provide linearisable dedup within this process, \
-         and the data-directory lock keeps it the only writer"
-    );
+    info!("AS4 inbox deduplication uses SlateDbInboxStore with serializable transactions");
 
     // Verify every PidRouter-registered workflow has a dispatch arm.
     // Panics if a domain crate registers a new PID without a matching arm in
@@ -1249,10 +1262,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     //
     // All configuration-derived checks have now run: profile validator, adapter
     // coverage, dispatch completeness, store connectivity, data-dir lock, and
-    // the preflight above. In check mode we exit here — no workers, no
-    // transports, no listeners, and nothing written: everything above this line
-    // reads, so a pipeline can point `--check` at a live data directory.
+    // the preflight above. A storage check owns a writer because opening SlateDB
+    // updates its manifest. Domain reconciliation belongs below this exit.
     if cli.check {
+        store.close_owned().await?;
         info!(
             as4_partners = checked.as4.as_ref().map_or(0, |c| c.partners().len()),
             maloid_partners = checked.maloid_partners.len(),
@@ -1277,19 +1290,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // process.  Reconciliation scans all `process/` streams, loads the first
     // event from each, and re-registers any entries missing from the registry.
     //
-    // Below the `--check` exit deliberately: this is the one startup step that
-    // *writes*. `--check` is run by deployment pipelines against live data
-    // directories and must be able to answer "would this config start?" without
-    // changing the store it was pointed at.
+    // Deployment checks only open the engine. Rebuilding its domain projections
+    // belongs to the running daemon.
     //
-    // A one-time operation — it does NOT block the server from accepting
-    // requests.
+    // Reconcile routing entries before the first request can use them.
     match reconcile_process_registry(&store).await {
-        // Logged unconditionally, including the zero case. This is the boot's
-        // only write step, and "it ran and found nothing to do" is a different
-        // statement from "it did not run" — the second is what `--check`
-        // promises, and only an unconditional line can distinguish them in a
-        // log or a test.
+        // A zero count confirms that the running daemon finished its scan.
         Ok(0) => info!(count = 0, "ProcessRegistry reconciliation complete"),
         Ok(n) => tracing::warn!(
             count = n,
@@ -2338,12 +2344,15 @@ async fn reconcile_process_registry(store: &SlateDbStore) -> anyhow::Result<usiz
 // ── Store initialisation ──────────────────────────────────────────────────────
 
 /// Open the event store based on the CLI / environment configuration.
-async fn open_store(cli: &Cli) -> anyhow::Result<SlateDbStore> {
+async fn open_store(
+    cli: &Cli,
+    writer_lock: &mut Option<startup::LockedDataDir>,
+) -> anyhow::Result<SlateDbStore> {
     match cli.object_store {
         ObjectStoreBackend::Local => match &cli.data_dir {
             Some(dir) => {
-                info!(path = %dir.display(), "opening persistent local-filesystem SlateDB store");
-                Ok(SlateDbStore::open_local(dir).await?)
+                let locked = writer_lock.insert(startup::lock_data_dir(dir)?);
+                locked.open_store().await
             }
             None => {
                 if !cli.allow_volatile {

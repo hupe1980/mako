@@ -10,6 +10,71 @@
 import type { RolleAntwort } from "../data/gen/makod";
 
 export const de = {
+  shadow: {
+    rule: (step: number, release: string, revision: string) =>
+      `${step} · UTILMD ${release} · EBD ${revision}`,
+    window: (nb: string, start: string, end: string) => `NB ${nb} · ${start} bis ${end}`,
+
+    comparison: "Antwortvergleich",
+    accepted: "Bestandsfehler bestätigt",
+    corrected: "Korrektur bestätigt",
+    checkCorrection: "Korrektur prüfen",
+
+    stale: "Die Belege haben sich geändert. Prüfe den neuen Stand, bevor du entscheidest.",
+    already: "Zu diesem Stand liegt bereits eine Entscheidung vor.",
+    required: "Gib eine Begründung und eine Belegreferenz mit jeweils höchstens 1.000 Byte ein.",
+
+    references: "Vergleichsbelege",
+    facts: "Fakten",
+    expectation: "Erwartete Antwort",
+    received: "Empfang laut Quittung",
+    agreed: "Übereinstimmend",
+    diff: "Abweichend",
+    unknownCount: "Ungeprüft",
+
+    title: "Schattenbetrieb",
+    rows: "Eingänge",
+    row: "Eingang",
+    denied: "Für diese Kohorte fehlt dir die Leseberechtigung.",
+    unavailable: "Die Prüfinstallation ist nicht erreichbar oder nicht eingerichtet.",
+    loading: "Kohorte wird geladen …",
+    empty: "Im geprüften Zeitraum gibt es keine Eingänge.",
+    ready: "Kohorte zur Entscheidung bereit",
+    blocked: "Weitere Prüfung erforderlich",
+    matched: "Antwort stimmt überein",
+    different: "Abweichung",
+    unassessed: "Antwort ungeprüft",
+    missing:
+      "Für diesen Eingang fehlt der Vergleich. Prüfe den zugehörigen Beleg in der lokalen Erfassung.",
+    expected: "Erwartet",
+    actual: "Von mako ermittelt",
+    pid: "PID",
+    tree: "Entscheidungsbaum",
+    code: "Antwortcode",
+    timing: "Zustellung des Bestandssystems",
+    late: "Verspätet",
+    on_time: "Fristgerecht",
+    unknown: "Beleg fehlt",
+    reason: "Begründung",
+    evidence: "Belegreferenz",
+    save: "Bestandsantwort als fehlerhaft bestätigen",
+    saved: "Entscheidung gespeichert.",
+    refresh: "Erneut prüfen",
+    refreshed: "Aktueller Stand geladen.",
+    failed: "Prüfung fehlgeschlagen. Lade den aktuellen Stand erneut.",
+    closed: "Entschieden",
+    reopened: "Frühere Entscheidung · neue Belege prüfen",
+    receipt: "Anfrage (SHA-256)",
+    capture: "Antwort (SHA-256)",
+    step: "Prüfschritt",
+    due: "Frist",
+    revision: "Generation",
+    fix: "Korrektur nach erneuter Prüfung bestätigen",
+    counts: (n: number, total: number, open: number, timing: number) =>
+      `${n} von ${total} ${total === 1 ? "Eingang" : "Eingängen"} geprüft · ${open} ${open === 1 ? "offene Abweichung" : "offene Abweichungen"} · ${timing} ohne Zeitnachweis`,
+    days: (n: number, target: number) =>
+      `${n} von ${target} ${target === 1 ? "vollständigem Werktag" : "vollständigen Werktagen"}`,
+  },
   shell: {
     ansichten: "Ansichten",
     heute: "Heute",
@@ -443,6 +508,49 @@ export const de = {
     wasFehltePlatzhalter: "Was fehlte? (optional, ↵ sendet)",
     danke: "Danke — das bleibt beim Lauf.",
   },
+  billingWatch: {
+    title: "Ermittlung der abzurechnenden Verträge",
+    never: "Noch kein Lauf erfasst. Der Umfang ist unbekannt.",
+    running: "Die Ermittlung läuft. Der Umfang ist noch unbekannt.",
+    sourceFailed:
+      "Die Vertragsverwaltung konnte den Bestand nicht liefern. Der Umfang ist unbekannt.",
+    writeFailed:
+      "Der Lauf konnte sein Ergebnis nicht vollständig speichern. Der Umfang ist unbekannt.",
+    interrupted: "Der Lauf wurde unterbrochen. Das Ergebnis ist offen.",
+    unknown: "Der Umfang ist unbekannt.",
+    empty: "Keine abzurechnenden Vertragskomponenten gefunden.",
+    found: (n: string) => `Ermittelte Vertragskomponenten: ${n}`,
+    source: (who: string) => `Quelle: ${who}`,
+    started: (at: string) => `Beginn: ${at}`,
+    finished: (at: string) => `Ende: ${at}`,
+    next: (at: string) => `Nächster geplanter Versuch: ${at}`,
+    failedAt: (at: string) => `Letzter fehlgeschlagener Versuch: ${at}`,
+    range: (a: string, b: string) => `Suchfenster für das Lieferende: ${a} bis ${b}`,
+    issuer: (id: string) => `Lieferant ${id}`,
+    unscheduled: "Kein automatischer Versuch geplant.",
+    runDetails: "Laufdetails",
+    availability: "Bereitstellung beim Kunden",
+    issuance: "Rechnungsstellung",
+    unissued: "Kein Ausstellungszeitpunkt erfasst",
+    issuedAt: (at: string) => `Ausgestellt am ${at}`,
+    noEvidence: "Für die Bereitstellung liegt kein Nachweis vor.",
+    denied: "Du hast keinen Zugriff auf die Zustellnachweise.",
+    unavailable: "Die Zustellnachweise sind derzeit nicht abrufbar.",
+    loading: "Zustellnachweise werden geladen.",
+    deliveredAt: (weg: string, at: string) => `${weg}: Zustellung bestätigt am ${at}`,
+    portalAt: (at: string) => `Im Kundenportal bereitgestellt am ${at}`,
+    openedAt: (at: string) => `Im Kundenportal geöffnet am ${at}`,
+    channel: { PORTAL: "Kundenportal", EMAIL: "E-Mail", POST: "Post", ERP: "ERP" },
+    state: {
+      SENT: "versendet",
+      PENDING: "ausstehend",
+      SUPPRESSED: "Versand unterdrückt",
+      FAILED: "Zustellung fehlgeschlagen",
+      DELIVERED: "Übergabe bestätigt",
+    },
+    unknownChannel: "Weiterer Zustellweg",
+    unknownState: "Stand unbekannt",
+  },
   ueberblick: {
     titel: "Überblick",
     untertitel: (rolle: string) =>
@@ -453,7 +561,7 @@ export const de = {
     abrechnungsfristen: "Abrechnungen überfällig",
     abrechnungsfristenVon: (lf: string) => `Abrechnungen überfällig · ${lf}`,
     fristenStand: (geschuldet: string, puenktlich: string, spaet: string) =>
-      `${geschuldet} geschuldet, ${puenktlich} pünktlich, ${spaet} verspätet abgerechnet`,
+      `${geschuldet} geschuldet, ${puenktlich} pünktlich ausgestellt, ${spaet} verspätet ausgestellt`,
     anmeldungen: "Anmeldungen offen",
     deadLetters: "Dead Letters",
     pruefung: "Rechnungsprüfung",
@@ -800,7 +908,7 @@ export const de = {
       B2B_RLM: "Gewerbe (RLM)",
       B2B_HV: "Hochspannung",
     } as Record<string, string>,
-    unknownStatus: (code: string) => `Vertragsstatus „${code}“`,
+    unknownStatus: "Vertragsstatus unbekannt",
     anmeldungLaeuft: "Anmeldung läuft",
     bestaetigtAb: (ab: string) => `bestätigt ab ${ab}`,
     beliefertBis: (bis: string) => `beliefert bis ${bis}`,
@@ -1190,6 +1298,31 @@ export const de = {
     zeileGuthaben: "Guthaben fällig",
   },
   klaerfall: {
+    ursacheCode: (code: string) => `Ursache ${code}`,
+    ohneWortlaut: "Kein Wortlaut zur Ursache hinterlegt.",
+    aktionsdetails: "Aktionsdetails",
+    befehlsdetails: "Befehlsdetails",
+    uebermittelt: "Entscheidung übermittelt. Prüfe den Verlauf.",
+    ergebnis: "Ergebnis der Entscheidung",
+    fristUnbekannt: "Frist unbekannt",
+    rolle: "Zuständige Rolle",
+    rolleOhne: "Keine Marktrolle zugeordnet",
+    aktionUnbekannt: "Aktion unbekannt. Prüfe die Details.",
+    vorgemerkt: "Zum Senden vorgemerkt",
+    zurueckgenommen: "Zurückgenommen. Es wurde nichts gesendet.",
+    uebermittlung: "Entscheidung wird übermittelt …",
+    unbekannt: "Ergebnis unbekannt. Prüfe den Verlauf.",
+    vorgeschlagen: "vorgeschlagen",
+    alternative: "Weitere Antwort",
+    antwort: {
+      bestaetigen: "Bestätigen",
+      ablehnen: "Ablehnen",
+      "angebot-senden": "Angebot senden",
+      "anfrage-ablehnen": "Anfrage ablehnen",
+      "bestellung-beantworten": "Bestellung beantworten",
+      "abbestellung-beantworten": "Abbestellung beantworten",
+      "stornierung-beantworten": "Stornierung beantworten",
+    } as Record<string, string>,
     keiner: "Diesen Klärfall gibt es nicht",
     zustand: { open: "offen", resolved: "erledigt", dispatched: "korrigiert gesendet" },
     korrigieren: "Korrigieren & senden",
@@ -1224,10 +1357,13 @@ export const de = {
       "Die Marktkommunikation kann diese Nachricht nicht vorab darstellen — das ist der Inhalt, den sie bekäme:",
   },
   unbestaetigt: {
+    fall: "Klärfall",
+    fallUnbekannt: "Ergebnis der Anfrage unbekannt.",
+    fallStand: (stand: string) => `Erfasster Fallstatus · ${stand}`,
     titel: "Beim letzten Mal gesendet",
     fragt: "fragt nach …",
     unbekannt: "der Dienst sagt nicht, was daraus wurde — sieh in der Liste nach",
-    inDerListe: "ob sie ankam, zeigt ihre Liste",
+    inDerListe: "Ergebnis der Anfrage unbekannt. Prüfe den Eintrag in der Liste.",
     status: (status: string, von: string | null) =>
       status === "Approved"
         ? `freigegeben${von ? ` von ${von}` : ""}`
@@ -1319,7 +1455,7 @@ export const de = {
     klaerfaelle: "Klärfälle",
     mal: (n: string) => `${n}×`,
     ursacheOhneWortlaut: (code: string, liste: string) =>
-      `${code} aus ${liste} — die Liste veröffentlicht keinen Wortlaut dazu`,
+      `${code} aus ${liste} — kein Wortlaut im Klärfall hinterlegt`,
     schlussrechnung: "Schlussrechnung",
     faelligAm: (tag: string) => `fällig am ${tag}`,
     tageOffen: (n: number, text: string) =>
@@ -1390,6 +1526,7 @@ export const de = {
     },
   },
   values: {
+    unbekannt: "Unbekannt",
     /** processd's process families, as the market names them. */
     family: {
       gpke: "GPKE",
@@ -1426,6 +1563,8 @@ export const de = {
       NO_METER_DATA:
         "Für den Zeitraum fehlen Messwerte — fordere sie beim Messstellenbetreiber an.",
       INCOMPLETE_METER_DATA: "Die Messwerte sind lückenhaft — prüf die fehlenden Tage.",
+      AMBIGUOUS_SUPPLY_PERIOD:
+        "Zwei Vertragskomponenten desselben Lieferanten decken den Zeitraum ab. Kläre die Zuordnung und starte den Lauf erneut.",
       RATE_REFUSED: "Der Tarif für den Zeitraum ließ sich nicht anwenden — prüf das Produkt.",
       REGULATORY_RATES: "Ein gesetzlicher Satz für den Zeitraum fehlt — pflege ihn nach.",
       ABSCHLAEGE_UNBEKANNT:
@@ -1436,6 +1575,8 @@ export const de = {
       INTERNAL:
         "Die Abrechnung ist an einem internen Fehler gescheitert — melde ihn mit der Fehler-ID.",
       VALIDATION_BLOCKED: "Die Prüfung der Rechnung hat sie angehalten — sieh dir die Befunde an.",
+      INCOMPLETE_PRODUCT_ASSIGNMENT:
+        "Die Produktzuordnung hat eine Lücke oder überlappt sich. Prüfe den gesamten Abrechnungszeitraum.",
       NO_ACTIVE_PRODUCT: "Für die Marktlokation ist kein Produkt aktiv — ordne eines zu.",
     },
     readingReason: {

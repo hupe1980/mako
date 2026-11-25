@@ -363,7 +363,12 @@ pub fn interchange_messages(bytes: &[u8]) -> Result<Vec<InterchangeMessage>, Err
     let segments: Vec<OwnedSegment> = edifact::from_reader_with_config(decoded.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
-    let mut out = Vec::new();
+    // A complete prefix of a damaged archive file cannot establish its coverage.
+    let envelope = edifact::validate_envelope(&segments).map_err(Error::Parse)?;
+    if envelope.messages.is_empty() {
+        return Err(Error::MissingSegment("UNH"));
+    }
+    let mut out = Vec::with_capacity(envelope.messages.len());
     let mut current: Option<Vec<OwnedSegment>> = None;
     for segment in segments {
         match &*segment.tag {

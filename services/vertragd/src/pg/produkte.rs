@@ -25,7 +25,7 @@ use uuid::Uuid;
 /// Energielieferant ein Recht zur Änderung der Preise … aus"*. Both hang on the
 /// supplier exercising a right — a tariff the customer asked for is an agreed
 /// change, owes no announcement, and carries no Sonderkündigungsrecht.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Initiator {
     /// The supplier changes the price; § 41 Abs. 5 EnWG applies in full.
@@ -311,6 +311,19 @@ pub async fn malo_slices(
     von: Date,
     bis: Date,
 ) -> Result<Vec<MaloProduktSlice>> {
+    malo_slices_for_component(pool, tenant, malo_id, von, bis, None).await
+}
+
+/// Restrict the period feed to the supply component selected for its issuer.
+#[must_use = "a failed read cannot establish the period"]
+pub async fn malo_slices_for_component(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    von: Date,
+    bis: Date,
+    component: Option<Uuid>,
+) -> Result<Vec<MaloProduktSlice>> {
     anyhow::ensure!(von <= bis, "von ({von}) darf nicht nach bis ({bis}) liegen");
     // `bis` is inclusive for the caller and exclusive in the range algebra.
     let bis_exkl = bis.next_day().unwrap_or(bis);
@@ -329,7 +342,7 @@ pub async fn malo_slices(
           FROM komponenten_produkte p
           JOIN vertragskomponenten k ON k.id = p.komp_id
           WHERE p.tenant = $1 AND k.malo_id = $2
-            AND k.status IN {komponente}
+            AND ($5::uuid IS NULL OR k.id = $5) AND k.status IN {komponente}
             AND daterange(p.gueltig_von, p.gueltig_bis, '[)')
                 && daterange($3::DATE, $4::DATE, '[)')
           ORDER BY p.gueltig_von",
@@ -339,6 +352,7 @@ pub async fn malo_slices(
         .bind(malo_id)
         .bind(von)
         .bind(bis_exkl)
+        .bind(component)
         .fetch_all(pool)
         .await?,
     )

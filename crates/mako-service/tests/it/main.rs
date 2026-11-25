@@ -8,3 +8,4 @@ mod policy_integration;
 mod published_verifiers;
 #[cfg(all(feature = "cedar", feature = "oidc"))]
 mod subscriptions;
+mod support;

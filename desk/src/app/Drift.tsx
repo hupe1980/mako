@@ -58,7 +58,7 @@ export function Drift() {
   });
   // Each REST document the Desk was generated against, asked for as served:
   // another `info.version` or another document is drift as well.
-  const rest = Object.keys(STAND) as Service[];
+  const rest = Object.keys(STAND) as (keyof typeof DIENST)[];
   const dokumente = useQueries({
     queries: rest.map((service) => ({
       queryKey: driftRestKey(service),

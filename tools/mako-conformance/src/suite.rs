@@ -38,6 +38,9 @@ pub trait Suite: Sync {
     /// The service's name — the directory under `services/`.
     fn service(&self) -> &'static str;
 
+    /// Versioned source of the suite, including its seed and refusal fixtures.
+    fn definition(&self) -> &'static str;
+
     /// The event types it emits.
     fn emits(&self) -> Vec<&'static str>;
 
@@ -79,6 +82,8 @@ pub struct Ctx {
     pub document: Document,
     /// The tools its reference snapshot declares.
     pub mcp_tools: Vec<String>,
+    /// Validators compiled from the selected service's published event schemas.
+    pub(crate) event_schemas: std::collections::BTreeMap<&'static str, jsonschema::Validator>,
     /// The client every call goes through.
     pub http: reqwest::Client,
     /// What the run found.
@@ -88,6 +93,8 @@ pub struct Ctx {
 /// An answer: status and the body as JSON (`Null` when it was not).
 #[derive(Debug, Clone)]
 pub struct Answer {
+    /// Whether the response body is valid JSON, including a JSON null.
+    pub json_body: bool,
     /// The HTTP status.
     pub status: u16,
     /// The body as JSON, `Null` when it was not.
@@ -118,17 +125,18 @@ impl Ctx {
         if let Some(b) = body {
             req = req.json(b);
         }
-        let r = req.send().await?;
-        let status = r.status().as_u16();
+        let r = crate::transport::send(req).await?;
+        let status = r.status.as_u16();
         let etag = r
-            .headers()
+            .headers
             .get(reqwest::header::ETAG)
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        let text = r.text().await.unwrap_or_default();
+        let json = serde_json::from_slice(&r.body);
         Ok(Answer {
             status,
-            body: serde_json::from_str(&text).unwrap_or(Value::Null),
+            json_body: json.is_ok(),
+            body: json.unwrap_or(Value::Null),
             etag,
         })
     }

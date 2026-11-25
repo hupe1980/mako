@@ -87,7 +87,7 @@ impl Vertragsart {
 
 /// Why a contract is being terminated. The reason, not the contract, decides
 /// the notice period — a Sonderkündigung overrides whatever the contract says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Kuendigungsgrund {
     /// Ordinary termination on the contractual notice period.

@@ -46,10 +46,21 @@ const zeile = (position: number, stated: string, recomputed: string, matches: bo
   estimated: false,
 });
 
-function billingd(verdict: Record<string, unknown>, lines: unknown[]) {
+function billingd(
+  verdict: Record<string, unknown>,
+  lines: unknown[],
+  delivery?: () => Response,
+  reference = "R-2026-0042",
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/svc/outputd/api/v1/documents/")) {
+        const read = new URL(url, "http://localhost");
+        expect(read.pathname).toBe("/svc/outputd/api/v1/documents/by-subject/INVOICE");
+        expect(read.searchParams.get("subject_ref")).toBe(reference);
+        return delivery?.() ?? Response.json({ code: "DOCUMENT_NOT_FOUND" }, { status: 404 });
+      }
       if (url.startsWith("/svc/agentd/")) return Response.json([]);
       if (!init?.body) return Response.json({});
       const m = JSON.parse(String(init.body));
@@ -58,7 +69,8 @@ function billingd(verdict: Record<string, unknown>, lines: unknown[]) {
           ? {
               structuredContent: {
                 record_id: "b-1",
-                rechnungsnummer: "R-2026-0042",
+                rechnungsnummer: reference,
+                dispatched_at: "2026-11-03T11:00:00Z",
                 public_link: "https://portal.example/nachrechnen/tok-123",
                 malo_id: "51238696012",
                 period_from: "2026-01-01",
@@ -100,6 +112,84 @@ function billingd(verdict: Record<string, unknown>, lines: unknown[]) {
 }
 
 describe("Nachrechnen", () => {
+  it("preserves a supplier’s invoice separators through the gateway", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    const reference = "R/2026 + #?&";
+    billingd(
+      {},
+      [],
+      () => Response.json({ kind: "INVOICE", subject_ref: reference, deliveries: [] }),
+      reference,
+    );
+    await open("/rechnung/b-1");
+    expect(await screen.findByText("Für die Bereitstellung liegt kein Nachweis vor.")).toBeTruthy();
+  });
+  it("keeps recorded issuance separate from failed and suppressed delivery tracks", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    billingd({}, [], () =>
+      Response.json({
+        subject_ref: "R-2026-0042",
+        kind: "INVOICE",
+        deliveries: [
+          { channel: "EMAIL", status: "FAILED" },
+          { channel: "POST", status: "SUPPRESSED" },
+        ],
+      }),
+    );
+    await open("/rechnung/b-1");
+    expect(await screen.findByText(/Ausgestellt am 03.11.2026, 12:00/)).toBeTruthy();
+    expect(await screen.findByText(/Für die Bereitstellung liegt kein Nachweis vor/)).toBeTruthy();
+    expect(screen.getByText(/E-Mail · Zustellung fehlgeschlagen/)).toBeTruthy();
+    expect(screen.getByText(/Post · Versand unterdrückt/)).toBeTruthy();
+  });
+
+  it("reports when the portal published a document even if its email only reached a relay", async () => {
+    localStorage.setItem("mako-desk.rolle", "lieferant");
+    billingd({}, [], () =>
+      Response.json({
+        subject_ref: "R-2026-0042",
+        kind: "INVOICE",
+        deliveries: [
+          { channel: "EMAIL", status: "SENT", first_sent_at: "2026-11-03T13:00:00Z" },
+          {
+            channel: "PORTAL",
+            status: "DELIVERED",
+            delivered_at: "2026-11-03T12:00:00Z",
+            read_at: "2026-11-03T16:00:00Z",
+          },
+        ],
+      }),
+    );
+    await open("/rechnung/b-1");
+    expect(
+      await screen.findByText(/Im Kundenportal bereitgestellt am 03.11.2026, 13:00/),
+    ).toBeTruthy();
+    expect(screen.getByText(/Im Kundenportal geöffnet am 03.11.2026, 17:00/)).toBeTruthy();
+    expect(screen.getByText(/E-Mail · versendet · 03.11.2026, 14:00/)).toBeTruthy();
+  });
+
+  it.each([
+    [
+      () => Response.json({ code: "DOCUMENT_NOT_FOUND" }, { status: 404 }),
+      "Für die Bereitstellung liegt kein Nachweis vor.",
+    ],
+    [() => Response.json({}, { status: 403 }), "Du hast keinen Zugriff auf die Zustellnachweise."],
+    [() => Response.json({}, { status: 503 }), "Die Zustellnachweise sind derzeit nicht abrufbar."],
+    [
+      () => Response.json({ subject_ref: "another", kind: "INVOICE", deliveries: [] }),
+      "Die Zustellnachweise sind derzeit nicht abrufbar.",
+    ],
+  ] as const)(
+    "keeps missing, denied and unreadable channel evidence distinct",
+    async (reply, expected) => {
+      localStorage.setItem("mako-desk.rolle", "lieferant");
+      billingd({}, [], reply);
+      await open("/rechnung/b-1");
+      expect(await screen.findByText(expected)).toBeTruthy();
+      expect(screen.getByText(/Ausgestellt am/)).toBeTruthy();
+    },
+  );
+
   it("leads with „Stimmt überein“ and the recomputed total, then each line with its sources", async () => {
     localStorage.setItem("mako-desk.rolle", "lieferant");
     billingd({}, [zeile(1, "998.40", "998.40", true), zeile(2, "142.80", "142.80", true)]);

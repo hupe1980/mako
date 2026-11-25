@@ -18,6 +18,7 @@ use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
 use super::{CedarEnforcer, Ctx, authorize, ok, require_vertrag};
+use crate::events;
 use crate::{
     bestellung::{
         self, BestellungInput, DokumentArt, Wiederholung, fehlende_angaben, idempotency_codes,
@@ -244,15 +245,17 @@ pub async fn bestellen(
     enqueue_bestell_event(
         &mut tx,
         &ctx,
-        mako_events::vertrag::BESTELLUNG_EINGEGANGEN,
         &input.bestellreferenz,
         bestellung_id,
-        serde_json::json!({
-            "bestellung_id": bestellung_id,
-            "bestellreferenz": input.bestellreferenz,
-            "bestellnachweis": { "id": nachweis.id(), "sha256": nachweis.sha256() },
-            "eingegangen_am": dokumente::berlin_iso(jetzt),
-        }),
+        &events::BestellungEingegangen {
+            bestellung_id,
+            bestellreferenz: input.bestellreferenz.clone(),
+            bestellnachweis: events::Bestellnachweis {
+                id: nachweis.id(),
+                sha256: nachweis.sha256().to_owned(),
+            },
+            eingegangen_am: dokumente::berlin_iso(jetzt),
+        },
     )
     .await?;
 
@@ -674,17 +677,17 @@ impl Abschluss {
             "vertrags_nr": self.vertrags_nr,
             "vertragsschluss_am": dokumente::berlin_iso(self.am),
             "bestellnachweis": { "id": nachweis.id(), "sha256": nachweis.sha256() },
-            "widerrufsfrist": self.widerrufsfrist.map(frist_json),
+            "widerrufsfrist": self.widerrufsfrist.map(fristdaten),
         })
     }
 }
 
-fn frist_json(f: mako_fristen::vorlauf::Widerrufsfrist) -> serde_json::Value {
-    serde_json::json!({
-        "beginn": f.beginn.map(|d| d.to_string()),
-        "ende": f.ende.to_string(),
-        "erloeschen": f.erloeschen.to_string(),
-    })
+fn fristdaten(f: mako_fristen::vorlauf::Widerrufsfrist) -> events::Widerrufsfrist {
+    events::Widerrufsfrist {
+        beginn: f.beginn.map(|d| d.to_string()),
+        ende: f.ende.to_string(),
+        erloeschen: f.erloeschen.to_string(),
+    }
 }
 
 /// Conclude an order into a contract inside `tx`: the Kunde, the contract
@@ -765,18 +768,17 @@ async fn schliesse_vertrag(
     enqueue_bestell_event(
         &mut *tx,
         ctx,
-        mako_events::vertrag::BESTELLUNG_ANGENOMMEN,
         &input.bestellreferenz,
         bestellung_id,
-        serde_json::json!({
-            "bestellung_id": bestellung_id,
-            "bestellreferenz": input.bestellreferenz,
-            "vertrag_id": inserted.id,
-            "kunden_id": kunden_id,
-            "vertrags_nr": inserted.vertrags_nr,
-            "vertragsschluss_am": dokumente::berlin_iso(am),
-            "widerrufsfrist": widerrufsfrist.map(frist_json),
-        }),
+        &events::BestellungAngenommen {
+            bestellung_id,
+            bestellreferenz: input.bestellreferenz.clone(),
+            vertrag_id: inserted.id,
+            kunden_id,
+            vertrags_nr: inserted.vertrags_nr,
+            vertragsschluss_am: dokumente::berlin_iso(am),
+            widerrufsfrist: widerrufsfrist.map(fristdaten),
+        },
     )
     .await?;
 
@@ -932,16 +934,15 @@ async fn rechtsdokument_text(
 
 /// Enqueue a `de.mako.vertrag.bestellung.*` / `de.mako.vertrag.widerruf.*` CloudEvent
 /// whose `subject` is the partner's `bestellreferenz`.
-async fn enqueue_bestell_event(
+async fn enqueue_bestell_event<P: mako_service::EventPayload>(
     tx: &mut sqlx::PgConnection,
     ctx: &Ctx,
-    typ: &str,
     bestellreferenz: &str,
     bestellung_id: Uuid,
-    data: serde_json::Value,
+    payload: &P,
 ) -> ApiResult<()> {
-    let ce =
-        crate::events::build_bestell_event(typ, bestellreferenz, bestellung_id, ctx.tenant(), data);
+    let ce = events::typed_bestell_event(bestellreferenz, bestellung_id, ctx.tenant(), payload)
+        .map_err(internal)?;
     mako_service::outbox::enqueue(&mut *tx, &ce)
         .await
         .map_err(|e| ApiError::Internal(e.into()))
@@ -1050,14 +1051,13 @@ pub async fn ablehnen(
     enqueue_bestell_event(
         &mut tx,
         &ctx,
-        mako_events::vertrag::BESTELLUNG_ABGELEHNT,
         &b.bestellreferenz,
         id,
-        serde_json::json!({
-            "bestellung_id": id,
-            "bestellreferenz": b.bestellreferenz,
-            "grund": body.grund,
-        }),
+        &events::BestellungAbgelehnt {
+            bestellung_id: id,
+            bestellreferenz: b.bestellreferenz.clone(),
+            grund: body.grund.clone(),
+        },
     )
     .await?;
     tx.commit().await.map_err(internal)?;
@@ -1259,7 +1259,10 @@ pub async fn widerruf_bestellung(
     .await
     .map_err(internal)?
     {
-        return Ok((StatusCode::OK, Json(widerruf_antwort(&w))));
+        return Ok((
+            StatusCode::OK,
+            Json(serde_json::json!(widerruf_antwort(&w))),
+        ));
     }
     if !store::schliessen(&mut tx, ctx.tenant(), id, "WIDERRUFEN", None)
         .await
@@ -1289,7 +1292,10 @@ pub async fn widerruf_bestellung(
     .map_err(internal)?;
     widerruf_folgen(&mut tx, &ctx, &b, &w, &input, &b.bestellreferenz).await?;
     tx.commit().await.map_err(internal)?;
-    Ok((StatusCode::CREATED, Json(widerruf_antwort(&w))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!(widerruf_antwort(&w))),
+    ))
 }
 
 fn kein_online_vertrag() -> ApiError {
@@ -1343,7 +1349,10 @@ async fn widerruf_des_vertrags(
     .await
     .map_err(internal)?
     {
-        return Ok((StatusCode::OK, Json(widerruf_antwort(&w))));
+        return Ok((
+            StatusCode::OK,
+            Json(serde_json::json!(widerruf_antwort(&w))),
+        ));
     }
     let schluss_am = vertrag.vertragsschluss_am.ok_or_else(|| {
         internal(anyhow::anyhow!(
@@ -1433,7 +1442,10 @@ async fn widerruf_des_vertrags(
     widerruf_folgen(&mut tx, ctx, b, &w, input, &vertrag.vertrags_nr).await?;
     tx.commit().await.map_err(internal)?;
     if rechtzeitig {
-        Ok((StatusCode::CREATED, Json(widerruf_antwort(&w))))
+        Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!(widerruf_antwort(&w))),
+        ))
     } else {
         Err(ApiError::unprocessable(
             "the Widerruf was sent after the Widerrufsfrist ended — recorded, its receipt \
@@ -1441,7 +1453,7 @@ async fn widerruf_des_vertrags(
         )
         .with_code("widerrufsfrist_abgelaufen")
         .with_fields(serde_json::json!({
-            "frist": frist_json(frist),
+            "frist": fristdaten(frist),
             "abgesendet_am": dokumente::berlin_iso(input.abgesendet_am),
             "widerruf_id": w.id,
         })))
@@ -1479,15 +1491,14 @@ async fn widerruf_folgen(
     enqueue_bestell_event(
         &mut *tx,
         ctx,
-        mako_events::vertrag::WIDERRUF_EINGEGANGEN,
         &b.bestellreferenz,
         b.id,
-        serde_json::json!({
-            "bestellung_id": b.id,
-            "bestellreferenz": b.bestellreferenz,
-            "vertrag_id": w.vertrag_id,
-            "widerruf": widerruf_antwort(w),
-        }),
+        &events::WiderrufEingegangen {
+            bestellung_id: b.id,
+            bestellreferenz: b.bestellreferenz.clone(),
+            vertrag_id: w.vertrag_id,
+            widerruf: widerruf_antwort(w),
+        },
     )
     .await?;
     let empfaenger = PartyView {
@@ -1527,21 +1538,21 @@ async fn widerruf_folgen(
     Ok(())
 }
 
-fn widerruf_antwort(w: &store::WiderrufRow) -> serde_json::Value {
-    serde_json::json!({
-        "widerruf_id": w.id,
-        "rechtzeitig": w.rechtzeitig,
-        "frist": {
-            "beginn": w.frist_beginn.map(|d| d.to_string()),
-            "ende": w.frist_ende.map(|d| d.to_string()),
-            "erloeschen": w.erloeschen.map(|d| d.to_string()),
+fn widerruf_antwort(w: &store::WiderrufRow) -> events::Widerruf {
+    events::Widerruf {
+        widerruf_id: w.id,
+        rechtzeitig: w.rechtzeitig,
+        frist: events::WiderrufTermine {
+            beginn: w.frist_beginn.map(|d| d.to_string()),
+            ende: w.frist_ende.map(|d| d.to_string()),
+            erloeschen: w.erloeschen.map(|d| d.to_string()),
         },
-        "wirkung": w.wirkung,
-        "lieferende": w.lieferende.map(|d| d.to_string()),
-        "wertersatz_geschuldet": w.wertersatz_geschuldet,
-        "eingegangen_am": dokumente::berlin_iso(w.eingegangen_am),
-        "eingangsbestaetigung": w.id,
-    })
+        wirkung: w.wirkung.clone(),
+        lieferende: w.lieferende.map(|d| d.to_string()),
+        wertersatz_geschuldet: w.wertersatz_geschuldet,
+        eingegangen_am: dokumente::berlin_iso(w.eingegangen_am),
+        eingangsbestaetigung: w.id,
+    }
 }
 
 #[cfg(test)]

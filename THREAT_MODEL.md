@@ -145,6 +145,10 @@ flowchart LR
 | `dsr-incomplete` — an access or erasure request misses a service holding the subject's data | medium | agentd crypto-shredding per case; no cross-service Art. 15/20 DSGVO answer | `agentd/src/config.rs` `[keyring]` | Partial |
 | `decision-repudiation` — a command, Freigabe or agent run cannot be attributed | high | processd `decided_by` from the token; agentd `[attestation]` and `[witness]`; AS4 evidence record and NRR | `processd/src/freigabe.rs`, `agentd/src/config.rs` | Control |
 
+An LF billing watch read requires the tenant’s supplier role in REST and MCP. The recovery command requires its own LF write action and UUID key. A tenant-scoped database session lock fences concurrent runs. Scoped contract resolution and the eligible-original view bind the billed period to its issuer. Closed working exceptions have bounded retention and store a refusal code. The Desk reads channel evidence through a distinct authorization check. [Billing controls](site/content/docs/services/billingd.md#billing-watch-and-recovery)
+
+The cold-restore rehearsal compares a quiesced billing and accounting cut with independently recorded business evidence, a re-folded local protocol stream and a separate receiver receipt. The local sender resumes only after they agree. A local makod writer owns its directory before opening SlateDB, including for startup checks and migrations. The rehearsal uses temporary stores and loopback recipients. [Recovery procedure](https://hupe1980.github.io/mako/docs/reference/recovery/)
+
 ### LLM and agent plane
 
 | Threat | Sev | Mitigation | Evidence | Status |

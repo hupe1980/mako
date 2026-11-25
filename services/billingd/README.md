@@ -22,12 +22,17 @@ just dev    # the whole estate, billingd on deploy/demo/billingd.toml, seeded
 BILLINGD_CONFIG=deploy/demo/billingd.toml cargo run -p billingd -- --check-config
 ```
 
+## Billing watch
+
+The LF workspace shows the latest discovery attempt, its closed range of ended supplies and each issuer’s outstanding periods. A failed candidate read has an unknown count. Replaying a recorded run key reuses the receipt. The watch and its MCP tools require the LF role in the installation’s tenant. [Operator guide](https://hupe1980.github.io/mako/docs/services/billingd/#billing-watch-and-recovery)
+
 ## API
 
 | Route | Purpose |
 |---|---|
 | `POST /api/v1/billing/{malo_id}/calculate` · `/preview` · `/tarifwechsel` | bill a period, dry-run it, split it at a tariff change |
 | `GET /api/v1/billing` · `/{id}` · `/review-queue` | records and the review queue |
+| `POST /api/v1/billing/runs/sweep` | run one bounded billing sweep with a UUID Idempotency-Key |
 | `GET /api/v1/billing/unbilled` · `/deadline-summary` | the § 40c Abs. 2 EnWG watch: periods the run could not bill, and per Lieferant owed / on time / late / overdue |
 | `GET /api/v1/billing/{id}/nachrechnung` · `POST /nachrechnen` (token in the body) · `POST /{id}/verify-token/revoke` | Rechnung nachrechnen: the recomputation and seal verdict, the masked view portald renders, revoking the link |
 | `POST /api/v1/billing/{id}/correction` | Storno, releasing the period for a fresh original |

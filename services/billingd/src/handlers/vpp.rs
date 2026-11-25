@@ -483,8 +483,8 @@ pub async fn post_vpp_webhook(
     // A dispatch settles money, so a replay is a second Gutschrift. The shared
     // verifier refuses a stale `webhook-timestamp`; a bare signature compare
     // cannot.
-    if let Err(err) = mako_service::webhook::verify_request(
-        cfg.inbound_webhook_secret.as_deref().map(str::as_bytes),
+    if let Err(err) = mako_service::webhook::verify_configured_request(
+        cfg.inbound_webhook_secret.as_deref(),
         &headers,
         &body,
     ) {

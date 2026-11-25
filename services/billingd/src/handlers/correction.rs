@@ -177,6 +177,7 @@ pub async fn post_correction(
     .await?;
 
     let ce = rechnung_erstellt_ce(
+        &cfg.tenant,
         correction_id,
         &original.malo_id,
         &original.lf_mp_id,

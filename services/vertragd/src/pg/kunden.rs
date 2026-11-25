@@ -963,6 +963,20 @@ fn email_from_kontaktwege(kontaktwege: Option<&[rubo4e::current::Kontaktweg]>) -
         .or_else(|| entries.iter().find(is_mail).and_then(value))
 }
 
+/// Project the buyer from the customer on the selected supply contract.
+#[must_use]
+pub fn rechnungsempfaenger_of(k: super::KundeRow) -> RechnungsempfaengerRow {
+    buyer_from_geschaeftspartner(BuyerCols {
+        geschaeftspartner: k.geschaeftspartner,
+        umsatzsteuer_id: k.umsatzsteuer_id,
+        stromwiederverkaeufer: k.stromwiederverkaeufer,
+        kundentyp: k.kundentyp,
+        zustimmung_sonstige_erechnung: k.zustimmung_sonstige_erechnung,
+        edi_zustimmung: k.edi_zustimmung,
+        edi_extrahierbar: k.edi_extrahierbar,
+    })
+}
+
 /// The BG-7 buyer behind `malo_id`, or `None` when no contract/Kunde is on file.
 ///
 /// # Errors

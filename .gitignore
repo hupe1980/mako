@@ -54,6 +54,7 @@ concepts/
 # local like concepts/, which every spec links into.
 specs/
 .specify/
+/.agents/skills/speckit-*/
 
 # Local agent configuration, skills included.
 .claude/

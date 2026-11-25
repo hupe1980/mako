@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "invoice_fingerprint": "1ec90f6344e2d67e35cdbfa867abca882341b348734c9f52d13b6520b9669dd7",
+  "invoice_number": "RE-2026-0001",
+  "received_at": "2026-04-01T10:00:00Z",
+  "known_order": true,
+  "duplicate_invoice": false,
+  "expected_remadv": 33001,
+  "lines": [
+    {
+      "position": 1,
+      "article": "9990001100002",
+      "unit": "TAG",
+      "quantity": "31",
+      "unit_price": "0.45",
+      "performed": true,
+      "already_billed": null
+    }
+  ]
+}

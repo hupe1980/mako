@@ -40,8 +40,7 @@ is the [security policy](https://github.com/hupe1980/mako/blob/main/SECURITY.md)
   manufacturers should not be considered to be a commercial activity", and „the
   mere presence of regular releases should not in itself lead to the conclusion
   that a product with digital elements is supplied in the course of a
-  commercial activity". mako's semi-annual release rhythm therefore does not
-  decide the question.
+  commercial activity". Release frequency alone therefore does not decide the question.
 - **Recital 15** — names what does characterise a commercial supply: „not only
   … charging a price for a product with digital elements, but also … charging a
   price for technical support services where this does not serve only the

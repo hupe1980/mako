@@ -312,13 +312,9 @@ mod tests {
         assert!(abmeldung.iter().any(|c| c.ist_zustimmung() == Some(false)));
     }
 
-    /// The NB trees must be in the catalogue without `role-nb`.
-    ///
-    /// Only the Codelisten are bound here, and they are not role-gated — which
-    /// is what lets the wheel leave out the one feature that would drag an
-    /// async runtime into an extension module that never runs one.
+    /// Every NB tree is available for inspecting a counterparty answer.
     #[test]
-    fn codelisten_do_not_depend_on_the_role_features() {
+    fn catalogue_includes_nb_trees() {
         for tree in ["E_0622", "E_0623", "E_0607", "E_0608"] {
             assert!(
                 !antwort_codes(tree).unwrap_or_default().is_empty(),

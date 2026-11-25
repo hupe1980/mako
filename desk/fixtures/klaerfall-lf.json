@@ -1,0 +1,41 @@
+{
+  "klaerfall": {
+    "id": "4f7a8612-46e8-4587-a05a-44263d5d1ebf",
+    "message_ref": "UTILMD-LF-DEMO-94ad6c92286647b48aae62190f551472",
+    "partner_mp_id": "9900357000004",
+    "process_id": "d12e6327-3f0c-4041-bc97-496cb0a4cb23",
+    "pid": null,
+    "owner_role": "LF",
+    "origins": ["aperak"],
+    "zustand": "open",
+    "ursache_code": "Z29",
+    "ursache_liste": "ERC",
+    "bedeutung": null,
+    "aktion": "retry_with_correction",
+    "hinweis": "correct: message",
+    "korrektur": {
+      "befehl": "gpke.kuendigung.bestaetigen",
+      "erlaubt": ["gpke.kuendigung.bestaetigen", "gpke.kuendigung.ablehnen"]
+    },
+    "due_at": null,
+    "due_source": null,
+    "overdue": false,
+    "operator_window_ends_at": null,
+    "assignee": null,
+    "decided_by": null,
+    "occurrences": 1,
+    "opened_at": "2026-11-24T08:00:00Z",
+    "closed_at": null
+  },
+  "verlauf": [
+    {
+      "at": "2026-11-24T08:00:00Z",
+      "akteur": "system",
+      "schritt": "eroeffnet",
+      "vorgeschlagen": "gpke.kuendigung.bestaetigen",
+      "befehl": null,
+      "begruendung": null,
+      "assignee": null
+    }
+  ]
+}

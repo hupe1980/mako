@@ -14,6 +14,7 @@ transport, and the `makotest` Python toolkit.
 
 | Page | Read it for |
 |---|---|
+| [Cold restore](@/docs/reference/recovery.md) | Recover a supplier close, reconcile an accepted delivery and decide when to resume |
 | [Parsing](@/docs/reference/parsing.md) | Turning EDIFACT bytes into typed messages — every entry point, the DoS limits, the error variants |
 | [Validation](@/docs/reference/validation.md) | What "valid" means: the three layers, the report API, rule ids |
 | [Builders](@/docs/reference/builders.md) | Constructing a message that validates, with the type-state builders |

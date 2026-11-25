@@ -38,6 +38,14 @@ export const ROLLEN: Record<Rolle, RolleInfo> = {
   energieservice: rolle("energieservice", "ESA", "4"),
 };
 
+/** The recorded Marktrolle, named in the active catalogue where the Desk knows it. */
+export function rollenName(marktrolle: string): string {
+  return (
+    Object.values(ROLLEN).find((r) => r.marktrolle === marktrolle.toUpperCase())?.label ??
+    marktrolle
+  );
+}
+
 const ORDER: Rolle[] = ["netz", "lieferant", "messstelle", "energieservice"];
 
 /**

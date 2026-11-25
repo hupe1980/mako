@@ -65,6 +65,7 @@ const stripCode = (src) =>
 
 const offenders = [];
 const rustdocLinks = [];
+const duplicateAnchors = [];
 for await (const file of markdownFiles(ROOT)) {
   const src = await readFile(file, "utf8");
   const lines = src.split("\n");
@@ -77,6 +78,12 @@ for await (const file of markdownFiles(ROOT)) {
   });
 
   const body = stripCode(src);
+  const anchors = new Set();
+  for (const heading of body.matchAll(/^ {0,3}#{1,6}[^\n]*\{#([^\s}]+)[^}]*\}\s*$/gm)) {
+    const id = heading[1];
+    if (anchors.has(id)) duplicateAnchors.push(`${relative(ROOT, file)}  #${id}`);
+    anchors.add(id);
+  }
   const defined = new Set(
     [...body.matchAll(/^\[([^\]]+)\]:/gm)].map((m) => m[1]),
   );
@@ -84,6 +91,11 @@ for await (const file of markdownFiles(ROOT)) {
     if (defined.has(m[1])) continue;
     rustdocLinks.push(`${relative(ROOT, file)}  [${m[1]}]`);
   }
+}
+
+if (duplicateAnchors.length > 0) {
+  console.error("check-links: repeated explicit heading IDs\n" + duplicateAnchors.join("\n"));
+  process.exit(1);
 }
 
 if (rustdocLinks.length > 0) {

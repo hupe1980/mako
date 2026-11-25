@@ -5,19 +5,11 @@ template = "home.html"
 
 [extra]
 translated_from = "templates/index.html"
-source_sha256 = "992f1ec5ed4e12fcb5b5c1c5317a60ae03792fa62436e07cd601473175cddf94"
+source_sha256 = "8a2e0b9ceaa6b3c1329746fd16b0f1ec38d5dfbc5eeb99d7c04ff7ed49be226a"
 
 eyebrow = "Rust · MIT oder Apache-2.0 · BDEW EDI@Energy"
-hero_title = "Marktkommunikation für Strom und Gas,<br>von rohem EDIFACT bis zur Produktion — KI-first, in Rust."
-hero_sub = """Jeder Marktpartner im deutschen Strom- und Gasmarkt muss mit seinen Gegenübern regulierte \
-Nachrichten austauschen — die *Marktkommunikation*, kurz MaKo. Das sind einige hundert \
-vorgeschriebene Prozesse über EDIFACT und AS4, jeder mit veröffentlichtem Entscheidungsbaum \
-und einer Frist. **mako setzt sie um**: Die BDEW-Formate werden als Daten gelesen, jeder Prozess \
-läuft als ereignisbasierter Workflow, und Abrechnung, Fakturierung und Hauptbuch stehen auf \
-denselben Ereignissen. **KI-first**: Die Dienste sprechen MCP, und der Desk für deine \
-Sachbearbeitung liest dieselben typisierten Werkzeuge, die auch die Agenten bekommen — ein \
-Modell liest, erklärt und schlägt vor; jede Frist, jeder Betrag und jede Entscheidung wird von \
-Code berechnet."""
+hero_title = "Marktkommunikation und Abrechnung<br>für Strom und Gas."
+hero_sub = """Prüfe eine EDIFACT-Nachricht gegen ihr BDEW-Profil. Verfolge einen Lieferantenwechsel von der Anmeldung bis zur Antwort. Im Desk siehst du, welche Regel einen Befund auslöst, und entscheidest, ob du die vorgeschlagene Antwort sendest."""
 
 scope_label = "Umfang"
 scope_note = """Wie viele Prüfidentifikatoren mako importiert und routet, wie viele Workflows, \
@@ -182,8 +174,8 @@ lang = "en"
 link = "makotest →"
 
 [[extra.why]]
-title = "KI-first, der Code entscheidet"
-text = "Agenten und Menschen arbeiten auf einer typisierten Werkzeugoberfläche; kein Modell sitzt in einem Rechenweg, und kein Agent versendet eine Marktnachricht."
+title = "Du entscheidest über den Versand"
+text = "Der Assistent kann eine Antwort vorschlagen. Du prüfst die Belege und entscheidest, ob du sie sendest."
 
 [[extra.why]]
 title = "Prüfbar von Grund auf"

@@ -141,13 +141,18 @@ async fn run_consumer(
 ) -> anyhow::Result<()> {
     // Per-message HMAC (optional): resolve the secret before anything joins the
     // group. `env:` refs are resolved here so the TOML never carries the raw key.
-    let message_secret: Option<String> = match cfg.message_hmac_secret.as_deref() {
-        Some(raw) => Some(
-            crate::config::resolve_env(raw)
-                .map_err(|e| anyhow::anyhow!("kafka message_hmac_secret: {e}"))?,
-        ),
-        None => None,
-    };
+    let message_secret = cfg
+        .message_hmac_secret
+        .as_deref()
+        .map(crate::config::resolve_env)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("kafka message_hmac_secret: {e}"))?
+        .as_deref()
+        .map(mako_service::webhook::signing_key);
+    anyhow::ensure!(
+        message_secret.as_ref().is_none_or(|key| !key.is_empty()),
+        "kafka message_hmac_secret is empty"
+    );
 
     let kafka = Kafka::builder(cfg.bootstrap_servers.clone())
         .client_id("edmd-kafka-ingest")
@@ -192,7 +197,7 @@ async fn consume(
     cfg: &KafkaIngestConfig,
     repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
-    message_secret: Option<&str>,
+    message_secret: Option<&[u8]>,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
     consumer
@@ -314,7 +319,7 @@ async fn consume(
 
 /// Whether `record` carries Standard Webhooks headers whose signature over
 /// `value` verifies under `secret`.
-fn record_signature_verifies(record: &ConsumerRecord, value: &[u8], secret: &str) -> bool {
+fn record_signature_verifies(record: &ConsumerRecord, value: &[u8], secret: &[u8]) -> bool {
     let header = |name: &str| {
         record
             .headers
@@ -329,7 +334,7 @@ fn record_signature_verifies(record: &ConsumerRecord, value: &[u8], secret: &str
         header(mako_service::webhook::SIGNATURE_HEADER),
     ) {
         (Some(id), Some(ts), Some(sig)) => {
-            mako_service::webhook::verify_signature(secret.as_bytes(), id, ts, value, sig)
+            mako_service::webhook::verify_signature(secret, id, ts, value, sig)
         }
         _ => false,
     }

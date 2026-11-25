@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "scope": "cohort-a",
+  "capture_layer": "wire",
+  "start": "2026-11-01T00:00:00Z",
+  "end": "2026-11-01T01:00:00Z",
+  "directions": [
+    "inbound",
+    "outbound"
+  ],
+  "batches": [
+    {
+      "id": "batch-a",
+      "revision": "r1",
+      "direction": "inbound",
+      "start": "2026-11-01T00:00:00Z",
+      "end": "2026-11-01T01:00:00Z",
+      "closed": true,
+      "count": 2,
+      "entries": [
+        {
+          "id": "occ-a",
+          "sha256": "40c56042a5047808293d7fc1e80c5442ee35b6592a9a2add46d4f65f566cef7c"
+        },
+        {
+          "id": "occ-b",
+          "sha256": "1ad49d1ef60ad985e08e4c005b8077086ac0319761f8e2f4dcc7f232aa0135ac"
+        }
+      ]
+    },
+    {
+      "id": "batch-b",
+      "revision": "r1",
+      "direction": "outbound",
+      "start": "2026-11-01T00:00:00Z",
+      "end": "2026-11-01T01:00:00Z",
+      "closed": true,
+      "count": 0,
+      "entries": []
+    }
+  ]
+}

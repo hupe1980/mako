@@ -57,6 +57,7 @@ export interface BillingdTools {
        * At least `limit` periods matched: more may be waiting than were listed.
        */
       saturated: boolean;
+      discovery: Discovery | null;
     };
   };
   list_webhook_deliveries: {
@@ -147,6 +148,10 @@ export interface BillingdTools {
        * Last day of the billed period.
        */
       period_to: BusinessDate;
+      /**
+       * Issuance time from the billing record. Channel evidence is owned by outputd.
+       */
+      dispatched_at: Instant | null;
       verdict: Verdict;
       /**
        * Every line, in the invoice's order.
@@ -174,6 +179,7 @@ export interface BillingdTools {
        * One row per Lieferant (MP-ID).
        */
       lieferanten: DeadlineSummaryRow[];
+      discovery: Discovery | null;
     };
   };
 }
@@ -277,10 +283,6 @@ export interface UnbilledPeriodRow {
    */
   reason_code: string;
   /**
-   * The refusal's developer message (for „Details").
-   */
-  message: string;
-  /**
    * § 40c Abs. 2 EnWG: the last day the invoice may reach the customer.
    */
   due_on: BusinessDate;
@@ -293,6 +295,21 @@ export interface UnbilledPeriodRow {
    * The invoice that discharged the period; `None` while it is open.
    */
   settled_by: string | null;
+}
+export interface Discovery {
+  run_id: string;
+  business_date: BusinessDate;
+  started_at: Instant;
+  finished_at: Instant | null;
+  next_attempt_at: Instant | null;
+  source: string;
+  origin: string;
+  status: string;
+  error_code: string | null;
+  candidate_count: number | null;
+  last_failure_at: Instant | null;
+  ended_from: BusinessDate;
+  ended_through: BusinessDate;
 }
 /**
  * One event to one endpoint.
@@ -562,4 +579,4 @@ export interface DeadlineSummaryRow {
 export const billingdUntyped = ["check_billing_anomaly","explain_invoice_position","get_billing_record","get_billing_summary","get_policy","get_xrechnung","list_billing_records","list_corrections","list_product_categories","list_vpp_settlements","preview_billing","validate_tariff_config"] as const;
 
 /** Each typed tool's fingerprint (src/data/oberflaeche.ts): what the drift banner compares. */
-export const billingdOberflaeche: Record<string, string> = {"list_review_queue":"e071e211","list_unbilled_periods":"52072d02","list_webhook_deliveries":"599f671b","list_webhook_endpoints":"532802a1","recompute_invoice":"01267f16","summarize_billing_deadlines":"5f711cce"};
+export const billingdOberflaeche: Record<string, string> = {"list_review_queue":"e071e211","list_unbilled_periods":"21d2786a","list_webhook_deliveries":"599f671b","list_webhook_endpoints":"532802a1","recompute_invoice":"5dcbcb79","summarize_billing_deadlines":"9b743edb"};

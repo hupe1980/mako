@@ -7,6 +7,9 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
+import billingWatch from "../fixtures/billing-watch.json" with { type: "json" };
+import lfAkte from "../fixtures/klaerfall-lf.json" with { type: "json" };
+import shadowReview from "../fixtures/shadow-review.json" with { type: "json" };
 import { lesen } from "../src/test-support/aufzeichnung.ts";
 
 const desk = resolve(import.meta.dirname, "..");
@@ -50,6 +53,17 @@ export const VORBELEGT = fixture("vorbelegen.json");
 
 // What each typed tool answers, by name; any other read is a process's Verlauf, empty.
 const ANTWORTEN: Record<string, unknown> = {
+  list_unbilled_periods: billingWatch,
+  summarize_billing_deadlines: {
+    discovery: billingWatch.discovery,
+    lieferanten: billingWatch.periods.map(({ lf_mp_id }) => ({
+      lf_mp_id,
+      owed: 1,
+      overdue: 0,
+      issued_on_time: 0,
+      issued_late: 0,
+    })),
+  },
   einrichtung_checkliste: fixture("einrichtung-checkliste.json"),
   einrichtung_vorschlag: fixture("einrichtung-vorschlag.json"),
   list_pending_approvals: { freigaben: [FREIGABE], count: 1, saturated: false },
@@ -167,7 +181,15 @@ export function beantworten(anfrage: Anfrage, run: string): Antwort {
     if (m.id === undefined) return { status: 202 };
     const name = m.method === "tools/call" ? (m.params?.name as string) : null;
     const dienst = pathname.split("/")[2] ?? "";
+    const faelle = run === "klaerfall-lf" && dienst === "processd";
+    const fall =
+      faelle && name === "list_klaerfaelle"
+        ? { klaerfaelle: [lfAkte.klaerfall], count: 1, saturated: false }
+        : faelle && name === "get_klaerfall" && m.params?.arguments?.id === lfAkte.klaerfall.id
+          ? lfAkte
+          : undefined;
     const antwort =
+      fall ??
       (PROZESS as Record<string, unknown>)[`${dienst}/${name}`] ??
       (name ? (ANTWORTEN[name] ?? ANSICHTEN[name]) : undefined) ??
       VERLAUF;
@@ -179,6 +201,35 @@ export function beantworten(anfrage: Anfrage, run: string): Antwort {
       body: JSON.stringify({ jsonrpc: "2.0", id: m.id, result }),
     };
   }
+  if (
+    run === "klaerfall-lf" &&
+    anfrage.method === "POST" &&
+    pathname === `/svc/processd/api/v1/klaerfaelle/${lfAkte.klaerfall.id}/dispatch`
+  ) {
+    return json({ code: "case_closed", detail: "the case has already been closed" }, 409);
+  }
+  if (pathname === "/svc/outputd/api/v1/documents/by-subject/INVOICE")
+    return json({
+      kind: "INVOICE",
+      subject_ref: "R-2026-0042",
+      deliveries: [
+        {
+          channel: "EMAIL",
+          status: "FAILED",
+          delivered_at: null,
+          read_at: null,
+          first_sent_at: null,
+        },
+        {
+          channel: "POST",
+          status: "SUPPRESSED",
+          delivered_at: null,
+          read_at: null,
+          first_sent_at: null,
+        },
+      ],
+    });
+  if (pathname === "/svc/processd/api/v1/shadow/review") return json(shadowReview);
   if (pathname in REST) return json(REST[pathname]);
   if (pathname.startsWith("/svc/makod/api/v1/probe/")) return json(PROBE);
   if (pathname === "/svc/agentd/api/v1/agents/catalog")
@@ -214,7 +265,7 @@ export function beantworten(anfrage: Anfrage, run: string): Antwort {
 }
 
 /** A Connect middleware answering every `/svc/` door but a run's stream from the recording. */
-export function fixturen(run = "beantwortet") {
+export function fixturen(run = process.env.MAKO_DESK_FIXTURE ?? "beantwortet") {
   return (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const pathname = (req.url ?? "").split("?")[0] ?? "";
     if (!pathname.startsWith("/svc/") || pathname.endsWith("/schritte")) return next();

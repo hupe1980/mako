@@ -143,8 +143,8 @@ pub async fn handle_webhook(
         Some(secret) => {
             // The shared verifier, which also refuses a stale
             // `webhook-timestamp`: a replayed reading would be stored twice.
-            if let Err(err) = mako_service::webhook::verify_request(
-                Some(secret.expose_secret().as_bytes()),
+            if let Err(err) = mako_service::webhook::verify_configured_request(
+                Some(secret.expose_secret()),
                 &headers,
                 &body,
             ) {

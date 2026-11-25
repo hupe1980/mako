@@ -115,6 +115,8 @@ pub mod obs;
 pub mod openapi;
 pub mod pg;
 pub mod server;
+/// Isolated comparison review for a single Strom NB cohort.
+pub mod shadow;
 /// One parser for every date shape a process payload carries.
 pub mod wire_date;
 

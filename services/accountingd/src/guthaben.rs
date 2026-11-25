@@ -60,12 +60,15 @@ pub struct NewCredit {
 }
 
 /// A decimal EUR string in cents, rounded kaufmännisch; never through `f64`.
-fn eur_to_ct(s: &str) -> Option<i64> {
+pub(crate) fn eur_to_ct(s: &str) -> Option<i64> {
     use rust_decimal::{Decimal, RoundingStrategy, prelude::ToPrimitive as _};
-    use std::str::FromStr as _;
-    (Decimal::from_str(s).ok()? * Decimal::ONE_HUNDRED)
+    Decimal::from_str_exact(s)
+        .ok()?
+        .checked_mul(Decimal::ONE_HUNDRED)?
         .round_dp_with_strategy(0, RoundingStrategy::MidpointAwayFromZero)
         .to_i64()
+        // A double-entry posting needs the equal and opposite amount too.
+        .filter(|v| *v != i64::MIN)
 }
 
 /// The payout a `de.mako.billing.rechnung.erstellt` owes, if any.
@@ -121,7 +124,7 @@ pub fn aus_rechnung(data: &serde_json::Value) -> Result<Option<NewCredit>, Strin
         .ok_or("a Schlussrechnung with a Guthaben carries no readable rechnungsdatum")?;
     Ok(Some(NewCredit {
         rechnungsnummer: rechnungsnummer.to_owned(),
-        amount_ct: zu_zahlen_ct.saturating_neg(),
+        amount_ct: -zu_zahlen_ct,
         rechnungsdatum,
         due_on: mako_fristen::vorlauf::guthaben_faellig(rechnungsdatum),
     }))

@@ -658,7 +658,7 @@ reason  = "socket2 0.5 (krafka) and ring use windows-sys 0.52; the rest of the g
 [[bans.skip]]
 name    = "windows-sys"
 version = "0.59"
-reason  = "rustix 0.38 (prometheus), fd-lock and fs4 use windows-sys 0.59; tokio and rustix 1 use 0.61."
+reason  = "rustix 0.38 (prometheus) and fs4 use windows-sys 0.59; tokio and rustix 1 use 0.61."
 
 [[bans.skip]]
 name    = "windows-link"

@@ -701,12 +701,14 @@ pub async fn post_invoice_versenden(
 /// where they can be reached. Not fatal if that fails — the portal channel
 /// needs no address, and a document reaching the portal beats one reaching
 /// nobody because an e-mail column was empty.
-async fn zustellung(deps: &BillingDeps, malo_id: &str) -> (serde_json::Value, Vec<String>) {
+async fn zustellung(
+    deps: &BillingDeps,
+    row: &crate::pg::BillingRecordRow,
+) -> BillingResult<(serde_json::Value, Vec<String>)> {
     let contact = deps
         .vertragd
-        .get_vertrag_by_malo(malo_id)
-        .await
-        .unwrap_or_default()
+        .get_supply_contract(&row.malo_id, &row.lf_mp_id, row.period_from, row.period_to)
+        .await?
         .and_then(|v| v.rechnungsempfaenger);
     let mut channels = vec!["PORTAL".to_owned()];
     if contact.as_ref().and_then(|c| c.email.as_ref()).is_some() {
@@ -730,7 +732,7 @@ async fn zustellung(deps: &BillingDeps, malo_id: &str) -> (serde_json::Value, Ve
         "email": contact.as_ref().and_then(|c| c.email.clone()),
         "address": address,
     });
-    (recipient, channels)
+    Ok((recipient, channels))
 }
 
 /// Issue a Gebührenbescheid record through outputd's `GEBUEHRENBESCHEID`
@@ -761,7 +763,7 @@ pub async fn issue_and_deliver_bescheid(
             time::Date::parse(d, &time::format_description::well_known::Iso8601::DATE).ok()
         })
         .unwrap_or(row.period_to);
-    let (recipient, channels) = zustellung(deps, &row.malo_id).await;
+    let (recipient, channels) = zustellung(deps, row).await?;
     let issued = deps
         .outputd
         .issue_view(&crate::clients::IssueViewRequest {
@@ -846,7 +848,7 @@ pub async fn issue_and_deliver(
     } = prepare_payload(row, model)?;
     let rechnungsnummer = model.number.clone().unwrap_or_else(|| id.to_string());
 
-    let (recipient, channels) = zustellung(deps, &row.malo_id).await;
+    let (recipient, channels) = zustellung(deps, row).await?;
 
     let issued = deps
         .outputd

@@ -8,30 +8,11 @@
 //! ```
 
 use mako_service::policy::{self, PolicyClass, PolicyEntry, PolicyReport};
-use sqlx::postgres::PgPoolOptions;
-use testcontainers::ImageExt as _;
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 
-async fn boot() -> sqlx::PgPool {
-    let container = Postgres::default()
-        .with_tag("17-alpine")
-        .start()
-        .await
-        .expect("start postgres");
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("postgres port");
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    Box::leak(Box::new(container));
-    let pool = PgPoolOptions::new()
-        .max_connections(3)
-        .connect(&url)
-        .await
-        .expect("connect");
+async fn boot() -> super::support::Database {
+    let (pool, container) = super::support::postgres(3).await;
     policy::ensure_schema(&pool).await.expect("schema");
-    pool
+    (pool, container)
 }
 
 fn report(regime: &str) -> PolicyReport {
@@ -65,7 +46,7 @@ async fn rows(pool: &sqlx::PgPool, key: &str) -> i64 {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers)"]
 async fn a_changed_value_appends_a_row_and_an_unchanged_one_does_not() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
 
     let first = policy::record(&pool, "billingd", &report("rvo_bezugspreis"))
         .await

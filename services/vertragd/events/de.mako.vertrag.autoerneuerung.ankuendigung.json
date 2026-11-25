@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AutoerneuerungAnkuendigung",
+  "type": "object",
+  "properties": {
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "vertrags_nr": {
+      "type": "string"
+    },
+    "kunden_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "vertragsende": {
+      "type": "string",
+      "format": "date"
+    },
+    "verlaengerung": {
+      "$ref": "#/$defs/Verlaengerungsart"
+    },
+    "kuendigungsfrist_monate": {
+      "type": "integer",
+      "format": "int32"
+    }
+  },
+  "required": [
+    "vertrag_id",
+    "vertrags_nr",
+    "kunden_id",
+    "vertragsende",
+    "verlaengerung",
+    "kuendigungsfrist_monate"
+  ],
+  "$defs": {
+    "Verlaengerungsart": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "art": {
+              "type": "string",
+              "const": "UNBEFRISTET"
+            },
+            "kuendigungsfrist": {
+              "type": "string"
+            },
+            "rechtsgrundlage": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "art",
+            "kuendigungsfrist",
+            "rechtsgrundlage"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "art": {
+              "type": "string",
+              "const": "BEFRISTET"
+            },
+            "neues_vertragsende": {
+              "type": "string",
+              "format": "date"
+            },
+            "monate": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "required": [
+            "art",
+            "neues_vertragsende",
+            "monate"
+          ]
+        }
+      ]
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.autoerneuerung.ankuendigung.json"
+}

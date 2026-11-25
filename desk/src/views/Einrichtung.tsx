@@ -222,15 +222,17 @@ export function DienstChip({ zeile }: { zeile: DienstZeile }) {
 export function PunktZeile({ punkt }: { punkt: Punkt }) {
   const t = useT();
   const c = t.einrichtung.checkliste;
-  const titel = eintrag(c.bereiche, punkt.bereich);
-  const frage = c.fragen[punkt.bereich] ?? punkt.frage;
+  const frage = eintrag(c.fragen, punkt.bereich, punkt.frage);
+  const titel = eintrag(c.bereiche, punkt.bereich, frage || undefined);
   const befunde = punkt.befunde ?? [];
   return (
     <li className="squircle flex flex-col gap-3 rounded-panel border border-separator p-4">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h4 className="m-0 text-body font-semibold text-text">{titel}</h4>
         <AmpelZeichen ampel={punkt.ampel} />
-        <p className="m-0 basis-full text-body text-text-2">{frage}</p>
+        {frage && frage !== titel && (
+          <p className="m-0 basis-full text-body text-text-2">{frage}</p>
+        )}
       </div>
       {befunde.length > 0 && (
         <ul aria-label={c.befunde(titel)} className="m-0 flex list-none flex-col gap-2 p-0">

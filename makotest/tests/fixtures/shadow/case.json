@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "scope": "cohort-a",
+  "capture_layer": "wire",
+  "batch": "batch-a",
+  "occurrence": "occ-a",
+  "role": "NB",
+  "nb": "9900357000003",
+  "malo": "51238696012",
+  "grid_member": true,
+  "supply_status": "Stillgelegt",
+  "received_at": "2026-11-01T00:10:00Z"
+}

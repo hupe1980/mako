@@ -24,6 +24,7 @@ pub async fn run(estate: &Estate) -> anyhow::Result<()> {
         ("Rechnung nachrechnen", nachrechnen(estate).await),
         ("online order", bestellung(estate).await),
         ("Gas", gas(estate).await),
+        ("Schlussrechnung", crate::move_out::verify(estate).await),
         ("invoice dispute", disput(estate).await),
         ("Gegenpartei-Akte", gegenpartei(estate).await),
         ("the Desk's sources", desk(estate).await),
@@ -53,7 +54,7 @@ fn pass(what: &str) {
 }
 
 /// Two decimal strings equal by value, whatever scale each service chose.
-fn same_amount(found: &Value, want: &str) -> bool {
+pub(super) fn same_amount(found: &Value, want: &str) -> bool {
     let norm = |s: &str| {
         let s = s.trim();
         let (int, frac) = s.split_once('.').unwrap_or((s, ""));

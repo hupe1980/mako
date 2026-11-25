@@ -5,7 +5,7 @@ weight = 1
 
 [extra]
 translated_from = "content/docs/guide/for-utilities.md"
-source_sha256 = "869270ce70ce9cbcad22a82f6e1e0631b1915736929e8ba28edc74b859f0ef86"
+source_sha256 = "3875cb271643825ff9478563256eb16358268186b4db5d88b128e0c57c78c29b"
 
 +++
 Ein Stadtwerk spielt mehrere Marktrollen zugleich — Netzbetreiber, Lieferant,
@@ -16,9 +16,7 @@ deinen eigenen Daten ausprobierst, ohne etwas zu versenden, und was eine
 Installation braucht.
 
 > [!WARNING]
-> mako ist experimentell und vor 1.0. Schnittstellen ändern sich zwischen
-> Versionen, und ein produktiver Betrieb braucht deine eigenen Tests gegen deine
-> eigenen Marktpartner.
+> mako ist in Entwicklung. Die erste offizielle Plattformversion steht noch aus. Schnittstellen können sich ändern. Teste den Austausch mit deinen Marktpartnern vor dem Produktiveinsatz.
 
 ## Was mako abdeckt
 
@@ -85,17 +83,17 @@ Drei Schritte, von denen keiner eine Nachricht an einen Marktpartner sendet:
 `just erstlauf` führt den zweiten und dritten Schritt von einem leeren `makod`
 aus durch und misst jeden.
 
-## Umstieg: ein Schattenbetrieb
+**Spiele den Verlust einer Empfangsbestätigung durch.** Mit `just recovery-drill` stellst du die Rechnung und das offene Guthaben des Lieferanten wieder her. Prüfe, welcher Nachweis den erneuten Versand freigibt, wenn der Empfänger die erste Nachricht bereits verarbeitet hat. Bei einer Sperre siehst du, welchen Nachweis du vor dem nächsten Versuch brauchst. [Anleitung zur Wiederherstellung (Englisch)](@/docs/reference/recovery.md)
 
-Der Weg, eine laufende Marktrolle auf mako umzustellen, ist ein
-Schattenbetrieb: mako empfängt dieselben eingehenden Nachrichten wie dein
-produktives System, entscheidet sie, und seine Antworten werden mit den
-tatsächlich gesendeten verglichen — bevor mako selbst etwas sendet. Einen
-Schattenmodus hat mako heute nicht: Es spiegelt nicht den Verkehr eines
-bestehenden Systems und vergleicht keine Antworten. Was es für diesen Weg gibt,
-ist das, was die Prüfung oben nutzt — die Konfigurationsprüfung, den Probelauf
-und [makotest](@/docs/reference/makotest.md) mit Marktpartnern, die innerhalb
-der veröffentlichten Fristen antworten.
+## Einen Schattenbetrieb vorbereiten
+
+Prüfe vor dem Vergleich der Antworten, welche Nachrichten im Mitschnitt angekommen sind. Exportiere für eine Marktrolle und ein Zeitfenster ein abgeschlossenes Journal aus dem Quellsystem. Erstelle unabhängig davon ein Verzeichnis der mitgeschnittenen Dateien. Mit `makotest shadow reconcile` gleichst du jede erfasste Nachricht und ihren Dateiinhalt lokal ab. Du siehst, welche Nachrichten fehlen oder doppelt vorkommen und ob ein Zeitraum nachweislich leer ist. Zum Ausprobieren liegt ein synthetischer Mitschnitt im Repository. [Dateiformat und Beispiel](@/docs/reference/makotest.md#reconcile-a-shadow-capture)
+
+Mit dem synthetischen Beispiel kannst du eine Anmeldung als Strom-NB beantworten und die Ablehnung mit einer unabhängigen Erwartung vergleichen. Von zwei erfassten Anmeldungen ist eine geprüft. [Beispiel ausführen](@/docs/reference/makotest.md#rehearse-a-strom-nb-refusal)
+
+Für eine Probe mit dem Daemon ergänze `--makod-workspace <Verzeichnis>`. Halte den Mitschnitt und den privaten Probelauf getrennt. Nach einem Neustart liest du dieselbe erfasste Antwort. Die sendende Installation behält die Verantwortung für offene Quittungen. Gleiche vor einer Übergabe auch alle seit dem Mitschnitt hinzugekommenen Nachrichten und Buchungen ab. [Probelauf mit makod](@/docs/services/makod.md#shadow-capture)
+
+Öffne in der isolierten Prüfinstallation als Netzbetreiber **System → Schattenbetrieb**. Jeder erfasste Eingang hat eine eigene Zeile. Im Beispieldatensatz ist eine von zwei Antworten geprüft. Wähle den zweiten Eingang, um den fehlenden Vergleich zu sehen. Mit Schreibberechtigung kannst du eine Abweichung mit Belegreferenz und Begründung bestätigen. Ändern sich die Belege, prüfst du den neuen Stand. [Prüfinstallation einrichten (englisch)](@/docs/services/processd.md#isolated-shadow-review)
 
 ## Was der Betrieb braucht
 
@@ -109,8 +107,6 @@ der veröffentlichten Fristen antworten.
 - **AS4-Schlüsselmaterial.** TLS-, Signatur- und Verschlüsselungszertifikate
   einer SM-PKI-CA mit deiner MP-ID im Subject, für jede Rolle, die du spielst
   ([makod — AS4](@/docs/services/makod.md#as4-as4-ebms3-inbound-and-outbound)).
-- **Veröffentlichte MP-IDs.** In produktiven Nachrichten darf nur eine im
-  Codeverzeichnis veröffentlichte BDEW- oder DVGW-Codenummer stehen (Allgemeine
-  Festlegungen V6.1d Kap. 2.14).
+- **Veröffentlichte MP-IDs.** Verwende im Strombereich eine BDEW-Codenummer oder GLN und im Gasbereich eine DVGW-Codenummer oder GLN, jeweils veröffentlicht im zugehörigen Verzeichnis. [BDEW, Allgemeine Festlegungen 6.1d, Kap. 2.13–2.14, S. 17–18](https://www.bdew-mako.de/api/downloadFile/12145)
 - **Deine eigenen Tests.** Gegen deine eigenen Marktpartner, vor der ersten
   echten Nachricht.

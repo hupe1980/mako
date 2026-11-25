@@ -12,13 +12,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::document::{truncate, validate};
-use crate::report::Runner;
+use crate::profile::Probe;
+use crate::report::{Reason, Report};
 use crate::suite::{Ctx, Suite};
 
 /// One delivery as it arrived.
@@ -27,13 +27,38 @@ struct Delivery {
     body: Bytes,
 }
 
-async fn receive(
-    State(tx): State<Arc<mpsc::UnboundedSender<Delivery>>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> StatusCode {
-    let _ = tx.send(Delivery { headers, body });
-    StatusCode::NO_CONTENT
+// Reserve the whole run's capture budget before retaining a delivery. Serial
+// admission also bounds memory while a body of unknown length is being read.
+const MAX_DELIVERIES: usize = 128;
+const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
+
+struct Capture {
+    tx: mpsc::Sender<Delivery>,
+    budget: tokio::sync::Mutex<(usize, usize)>,
+    overflow: std::sync::atomic::AtomicBool,
+}
+
+async fn receive(State(capture): State<Arc<Capture>>, request: Request) -> StatusCode {
+    let (parts, body) = request.into_parts();
+    let mut budget = capture.budget.lock().await;
+    if budget.0 < MAX_DELIVERIES {
+        let read = axum::body::to_bytes(body, MAX_CAPTURE_BYTES - budget.1);
+        if let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(30), read).await {
+            budget.0 += 1;
+            budget.1 += bytes.len();
+            return match capture.tx.try_send(Delivery {
+                headers: parts.headers,
+                body: bytes,
+            }) {
+                Ok(()) => StatusCode::NO_CONTENT,
+                Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+            };
+        }
+    }
+    capture
+        .overflow
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    StatusCode::PAYLOAD_TOO_LARGE
 }
 
 /// Run every events check.
@@ -47,8 +72,7 @@ async fn outbound(ctx: &Ctx, suite: &dyn Suite) {
         Ok(l) => l,
         Err(e) => {
             ctx.report.broken(
-                Runner::Events,
-                "listen for deliveries",
+                Probe::Listener,
                 format!(
                     "cannot listen on {}: {e} — --listen picks another",
                     ctx.target.listen
@@ -57,15 +81,24 @@ async fn outbound(ctx: &Ctx, suite: &dyn Suite) {
             return;
         }
     };
-    let callback = ctx
-        .target
-        .callback
-        .clone()
-        .unwrap_or_else(|| format!("http://{}/", ctx.target.listen));
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let callback = match (&ctx.target.callback, listener.local_addr()) {
+        (Some(callback), _) => callback.clone(),
+        (None, Ok(bound)) => format!("http://{bound}/"),
+        (None, Err(error)) => {
+            ctx.report.broken(Probe::Listener, error.to_string());
+            return;
+        }
+    };
+    ctx.report.held(Probe::Listener);
+    let (tx, mut rx) = mpsc::channel(MAX_DELIVERIES);
+    let capture = Arc::new(Capture {
+        tx,
+        budget: tokio::sync::Mutex::new((0, 0)),
+        overflow: std::sync::atomic::AtomicBool::new(false),
+    });
     let app = axum::Router::new()
         .fallback(axum::routing::post(receive))
-        .with_state(Arc::new(tx));
+        .with_state(capture.clone());
     let server = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -84,15 +117,19 @@ async fn outbound(ctx: &Ctx, suite: &dyn Suite) {
     let (id, secret) = match created {
         Ok(a) if a.status == 201 || a.status == 200 => {
             match (a.body["endpoint"]["id"].as_str(), a.body["secret"].as_str()) {
-                (Some(id), Some(secret)) => (id.to_owned(), secret.to_owned()),
+                (Some(id), Some(secret))
+                    if (1..=128).contains(&id.len())
+                        && id
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                        && !secret.is_empty() =>
+                {
+                    (id.to_owned(), secret.to_owned())
+                }
                 _ => {
                     ctx.report.broken(
-                        Runner::Events,
-                        "register an endpoint",
-                        format!(
-                            "the answer names no endpoint id or secret: {}",
-                            truncate(&a.body.to_string())
-                        ),
+                        Probe::Register,
+                        "missing or invalid endpoint identifier or signing secret",
                     );
                     server.abort();
                     return;
@@ -101,97 +138,111 @@ async fn outbound(ctx: &Ctx, suite: &dyn Suite) {
         }
         Ok(a) => {
             ctx.report.broken(
-                Runner::Events,
-                "register an endpoint",
-                format!(
-                    "answered {}: {} (a local run needs [subscriptions] allow_loopback)",
-                    a.status,
-                    truncate(&a.body.to_string())
-                ),
+                Probe::Register,
+                format!("endpoint registration returned {}", a.status),
             );
             server.abort();
             return;
         }
         Err(e) => {
-            ctx.report.broken(
-                Runner::Events,
-                "register an endpoint",
-                format!("unreachable: {e}"),
-            );
+            ctx.report.broken(Probe::Register, e.to_string());
             server.abort();
             return;
         }
     };
-    ctx.report.held(Runner::Events, "register an endpoint");
+    ctx.report.held(Probe::Register);
     let key = mako_service::webhook::signing_key(&secret);
     let endpoint = format!("/api/v1/webhooks/endpoints/{id}");
 
-    // The test delivery: signed under the issued secret, a CloudEvent.
-    let _ = ctx
+    let seed_window_start = time::OffsetDateTime::now_utc() - time::Duration::hours(1);
+    let test = ctx
         .operator("POST", &format!("{endpoint}/test"), Some(&json!({})))
         .await;
+    record_submission(ctx, Probe::TestRequest, test);
     match tokio::time::timeout(ctx.target.wait, rx.recv()).await {
-        Ok(Some(d)) => match judge_envelope(&key, &d) {
-            Ok(_) => ctx.report.held(
-                Runner::Events,
-                "the test delivery is signed and a CloudEvent",
-            ),
-            Err(why) => ctx.report.broken(
-                Runner::Events,
-                "the test delivery is signed and a CloudEvent",
-                why,
-            ),
+        Ok(Some(delivery)) => match judge_envelope(&key, &delivery) {
+            Ok(event) if event["type"] == mako_events::mako::WEBHOOK_TEST => {
+                ctx.report.held(Probe::TestDelivery)
+            }
+            Ok(_) => ctx
+                .report
+                .broken(Probe::TestDelivery, "expected the test event type"),
+            Err(why) => ctx.report.broken(Probe::TestDelivery, why),
         },
-        _ => ctx.report.broken(
-            Runner::Events,
-            "the test delivery arrives",
-            format!("nothing arrived within {}s", ctx.target.wait.as_secs()),
-        ),
+        _ => ctx
+            .report
+            .skipped(Probe::TestDelivery, Reason::DeliveryUnobserved),
     }
 
-    if let Err(e) = suite.seed(ctx).await {
-        ctx.report
-            .broken(Runner::Events, "seed the service", e.to_string());
+    match suite.seed(ctx).await {
+        Ok(()) => ctx.report.held(Probe::Seed),
+        Err(e) => ctx.report.broken(Probe::Seed, e.to_string()),
     }
     let now = time::OffsetDateTime::now_utc();
     let window = json!({
-        "from": (now - time::Duration::days(30)).format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-        "to": (now + time::Duration::hours(1)).format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+        "from": seed_window_start.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+        "to": now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
     });
-    let _ = ctx
+    let replay = ctx
         .operator("POST", &format!("{endpoint}/replay"), Some(&window))
         .await;
+    record_submission(ctx, Probe::ReplayRequest, replay);
 
-    // Collect until the stream is quiet.
-    let mut deliveries = Vec::new();
-    let deadline = tokio::time::Instant::now() + ctx.target.wait;
-    loop {
-        let quiet = if deliveries.is_empty() {
-            ctx.target.wait
-        } else {
-            Duration::from_secs(3)
-        };
-        match tokio::time::timeout_at(deadline.min(tokio::time::Instant::now() + quiet), rx.recv())
-            .await
-        {
-            Ok(Some(d)) => deliveries.push(d),
-            _ => break,
-        }
-    }
-    judge_replay(ctx, suite, &key, &deliveries);
+    // A later delivery of an already-observed type can still invalidate its
+    // schema verdict. Keep the callback open for the whole advertised window.
+    let deliveries = collect_replay(&mut rx, ctx.target.wait).await;
+    judge_replay(
+        &ctx.report,
+        &suite.emits(),
+        &ctx.event_schemas,
+        &key,
+        &deliveries,
+        capture.overflow.load(std::sync::atomic::Ordering::Relaxed),
+    );
 
-    if let Ok(a) = ctx.operator("GET", &endpoint, None).await
-        && let Some(etag) = a.etag
-    {
-        let _ = ctx
+    let cleanup = async {
+        let answer = ctx.operator("GET", &endpoint, None).await?;
+        anyhow::ensure!(
+            (200..300).contains(&answer.status),
+            "cannot read the created endpoint"
+        );
+        let etag = answer
+            .etag
+            .ok_or_else(|| anyhow::anyhow!("missing endpoint ETag"))?;
+        let request = ctx
             .http
             .delete(format!("{}{endpoint}", ctx.target.base))
             .bearer_auth(&ctx.target.token)
-            .header(reqwest::header::IF_MATCH, etag)
-            .send()
-            .await;
+            .header(reqwest::header::IF_MATCH, etag);
+        let answer = crate::transport::send(request).await?;
+        anyhow::ensure!(answer.status.is_success(), "endpoint cleanup failed");
+        anyhow::Ok(())
+    }
+    .await;
+    match cleanup {
+        Ok(()) => ctx.report.held(Probe::Cleanup),
+        Err(error) => ctx.report.broken(Probe::Cleanup, error.to_string()),
     }
     server.abort();
+}
+
+async fn collect_replay(rx: &mut mpsc::Receiver<Delivery>, wait: Duration) -> Vec<Delivery> {
+    let deadline = tokio::time::Instant::now() + wait;
+    let mut deliveries = Vec::new();
+    while let Ok(Some(delivery)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+        deliveries.push(delivery);
+    }
+    deliveries
+}
+
+fn record_submission(ctx: &Ctx, probe: Probe, result: anyhow::Result<crate::suite::Answer>) {
+    match result {
+        Ok(answer) if (200..300).contains(&answer.status) => ctx.report.held(probe),
+        Ok(answer) => ctx
+            .report
+            .broken(probe, format!("request returned {}", answer.status)),
+        Err(error) => ctx.report.broken(probe, error.to_string()),
+    }
 }
 
 /// The CloudEvent in `d`, signed under `key`.
@@ -210,64 +261,53 @@ fn judge_envelope(key: &[u8], d: &Delivery) -> Result<Value, String> {
     Ok(ce)
 }
 
-fn judge_replay(ctx: &Ctx, suite: &dyn Suite, key: &[u8], deliveries: &[Delivery]) {
-    let declared = suite.emits();
-    let schemas: BTreeMap<&str, &str> = crate::documents::EVENT_SCHEMAS.iter().copied().collect();
-    let mut seen: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for d in deliveries {
-        let ce = match judge_envelope(key, d) {
-            Ok(ce) => ce,
-            Err(why) => {
-                ctx.report.broken(
-                    Runner::Events,
-                    "a replayed delivery is signed and a CloudEvent",
-                    why,
-                );
-                continue;
-            }
+fn judge_replay(
+    report: &Report,
+    declared: &[&str],
+    schemas: &BTreeMap<&str, jsonschema::Validator>,
+    key: &[u8],
+    deliveries: &[Delivery],
+    overflow: bool,
+) {
+    let mut seen = BTreeMap::<String, bool>::new();
+    let mut invalid = overflow;
+    for delivery in deliveries {
+        let Ok(event) = judge_envelope(key, delivery) else {
+            invalid = true;
+            continue;
         };
-        let ty = ce["type"].as_str().unwrap_or_default().to_owned();
+        let ty = event["type"].as_str().unwrap_or_default();
         if ty == mako_events::mako::WEBHOOK_TEST {
             continue;
         }
-        if !declared.contains(&ty.as_str()) {
-            ctx.report.broken(
-                Runner::Events,
-                format!("emits only declared types: {ty}"),
-                "a type the suite does not declare — undocumented for a subscriber",
-            );
+        if !declared.contains(&ty) {
+            invalid = true;
             continue;
         }
-        let gaps = match schemas.get(ty.as_str()) {
-            Some(schema) => match serde_json::from_str::<Value>(schema) {
-                Ok(schema) => validate(&schema, &ce["data"]),
-                Err(e) => vec![format!("the published schema is not JSON: {e}")],
-            },
-            None => Vec::new(),
-        };
-        seen.entry(ty).or_default().extend(gaps);
+        let valid = schemas
+            .get(ty)
+            .is_none_or(|schema| schema.is_valid(&event["data"]));
+        *seen.entry(ty.into()).or_insert(true) &= valid;
     }
-    for ty in declared {
-        let name = format!("event {ty}");
+    if invalid {
+        report.broken(
+            Probe::ReplayEnvelope,
+            "invalid replay envelope, undeclared event type or capture limit exceeded",
+        );
+    } else if seen.is_empty() {
+        report.skipped(Probe::ReplayEnvelope, Reason::DeliveryUnobserved);
+    } else {
+        report.held(Probe::ReplayEnvelope);
+    }
+    for &ty in declared {
+        let probe = Probe::Event(ty.into());
         match (seen.get(ty), schemas.contains_key(ty)) {
-            (None, _) => {
-                ctx.report
-                    .skipped(Runner::Events, name, "not observed in the replay window")
+            (None, _) => report.skipped(probe, Reason::DeliveryUnobserved),
+            (Some(_), false) => report.skipped(probe, Reason::SchemaUnavailable),
+            (Some(true), true) => report.held(probe),
+            (Some(false), true) => {
+                report.broken(probe, "event data does not satisfy the published schema")
             }
-            (Some(_), false) => ctx.report.skipped(
-                Runner::Events,
-                name,
-                "no published schema — signature and envelope checked, `data` not",
-            ),
-            (Some(gaps), true) if gaps.is_empty() => ctx.report.held(Runner::Events, name),
-            (Some(gaps), true) => ctx.report.broken(
-                Runner::Events,
-                name,
-                format!(
-                    "`data` does not meet the published schema: {}",
-                    gaps.join("; ")
-                ),
-            ),
         }
     }
 }
@@ -276,10 +316,9 @@ fn judge_replay(ctx: &Ctx, suite: &dyn Suite, key: &[u8], deliveries: &[Delivery
 /// id, and refuse it unsigned.
 async fn inbound(ctx: &Ctx, suite: &dyn Suite) {
     for route in suite.inbound() {
-        let name = format!("inbound {}", route.path);
+        let name = Probe::Inbound(route.path.into());
         let Some(secret) = ctx.target.inbound_secret.as_deref() else {
-            ctx.report
-                .skipped(Runner::Events, name, "no --inbound-secret given");
+            ctx.report.skipped(name, Reason::MissingInboundSecret);
             continue;
         };
         let body = route.event.to_string();
@@ -300,17 +339,16 @@ async fn inbound(ctx: &Ctx, suite: &dyn Suite) {
                     req = req.header(h, v);
                 }
             }
-            req.send()
+            crate::transport::send(req)
         };
-        let first = post(true).await.map(|r| r.status().as_u16());
-        let again = post(true).await.map(|r| r.status().as_u16());
-        let unsigned = post(false).await.map(|r| r.status().as_u16());
+        let first = post(true).await.map(|r| r.status.as_u16());
+        let again = post(true).await.map(|r| r.status.as_u16());
+        let unsigned = post(false).await.map(|r| r.status.as_u16());
         match (first, again, unsigned) {
             (Ok(a), Ok(b), Ok(401)) if (200..300).contains(&a) && (200..300).contains(&b) => {
-                ctx.report.held(Runner::Events, name);
+                ctx.report.held(name);
             }
             (Ok(a), Ok(b), Ok(u)) => ctx.report.broken(
-                Runner::Events,
                 name,
                 format!(
                     "signed {a}, redelivered {b}, unsigned {u} — expected 2xx, 2xx and 401: \
@@ -318,7 +356,6 @@ async fn inbound(ctx: &Ctx, suite: &dyn Suite) {
                 ),
             ),
             (a, b, u) => ctx.report.broken(
-                Runner::Events,
                 name,
                 format!(
                     "unreachable: {:?}",
@@ -326,5 +363,67 @@ async fn inbound(ctx: &Ctx, suite: &dyn Suite) {
                 ),
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profile::Profile;
+    use crate::report::Verdict;
+
+    fn signed(id: &str, data: Value) -> Delivery {
+        let body = Bytes::from(
+            json!({
+                "specversion": "1.0", "type": "de.mako.test", "source": "urn:mako:test",
+                "id": id, "data": data
+            })
+            .to_string(),
+        );
+        let mut headers = HeaderMap::new();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        for (name, value) in mako_service::webhook::headers(b"secret", id, now, &body) {
+            headers.insert(name, value.parse().unwrap());
+        }
+        Delivery { headers, body }
+    }
+
+    #[tokio::test]
+    async fn a_late_invalid_occurrence_fails_its_previously_held_schema() {
+        let (tx, mut rx) = mpsc::channel(2);
+        let send = async move {
+            tx.send(signed("one", json!(12))).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(3200)).await;
+            tx.send(signed("two", json!("wrong type"))).await.unwrap();
+        };
+        let (_, deliveries) = tokio::join!(send, collect_replay(&mut rx, Duration::from_secs(30)));
+        let report = Report::new(Profile {
+            service: "fixture".into(),
+            only: None,
+            fingerprint: "fixture".into(),
+            expected: [
+                (Probe::Event("de.mako.test".into()), true),
+                (Probe::ReplayEnvelope, true),
+            ]
+            .into(),
+            materials: BTreeMap::new(),
+        });
+        let schemas = [(
+            "de.mako.test",
+            jsonschema::draft202012::new(&json!({"type":"integer"})).unwrap(),
+        )]
+        .into();
+        judge_replay(
+            &report,
+            &["de.mako.test"],
+            &schemas,
+            b"secret",
+            &deliveries,
+            false,
+        );
+        let evidence = report.acceptance("fixture").unwrap();
+        assert_eq!(evidence.verdict, Verdict::Failed);
+        assert_eq!(evidence.counts.broken, 1);
+        assert_eq!(evidence.counts.held, 1);
     }
 }

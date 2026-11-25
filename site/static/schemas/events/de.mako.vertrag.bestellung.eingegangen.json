@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BestellungEingegangen",
+  "type": "object",
+  "properties": {
+    "bestellung_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "bestellreferenz": {
+      "type": "string"
+    },
+    "bestellnachweis": {
+      "$ref": "#/$defs/Bestellnachweis"
+    },
+    "eingegangen_am": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "bestellung_id",
+    "bestellreferenz",
+    "bestellnachweis",
+    "eingegangen_am"
+  ],
+  "$defs": {
+    "Bestellnachweis": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "sha256"
+      ]
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.bestellung.eingegangen.json"
+}

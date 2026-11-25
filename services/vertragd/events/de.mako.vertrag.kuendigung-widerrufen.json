@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KuendigungWiderrufen",
+  "type": "object",
+  "properties": {
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "vertrag_id"
+  ],
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.kuendigung-widerrufen.json"
+}

@@ -123,7 +123,9 @@ describe("the billing-deadline tile", () => {
     const tile = await screen.findByRole("link", {
       name: /^Abrechnungen überfällig · 9900357000004/,
     });
-    expect(tile.textContent).toContain("13 geschuldet, 10 pünktlich, 1 verspätet abgerechnet");
+    expect(tile.textContent).toContain(
+      "13 geschuldet, 10 pünktlich ausgestellt, 1 verspätet ausgestellt",
+    );
     expect(tile.textContent).toContain("2");
     localStorage.removeItem("mako-desk.rolle");
   });

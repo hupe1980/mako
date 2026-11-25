@@ -63,7 +63,7 @@ impl PartyView {
 }
 
 /// One price line as it changes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 pub struct PreisPosition {
     pub bezeichnung: String,
     pub einheit: String,

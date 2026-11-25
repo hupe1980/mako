@@ -13,6 +13,7 @@ import { Kbd } from "../design/Kbd";
 import { useT } from "../i18n";
 import { type Hold, HoldQueue } from "./holdQueue";
 import { UNDO } from "./keys";
+import type { Rolle } from "./rollen";
 
 const Queue = createContext<HoldQueue | null>(null);
 
@@ -51,8 +52,13 @@ export function useHold() {
   const q = useContext(Queue);
   if (!q) throw new Error("useHold outside HoldProvider");
   return useCallback(
-    (key: string, label: string, send: (v: Versand) => Promise<unknown>, undo: () => void) =>
-      q.hold(key, label, send, undo),
+    (
+      key: string,
+      label: string,
+      send: (v: Versand) => Promise<unknown>,
+      undo: () => void,
+      reconcileAs?: Rolle,
+    ) => q.hold(key, label, send, undo, reconcileAs),
     [q],
   );
 }

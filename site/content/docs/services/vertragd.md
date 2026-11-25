@@ -703,9 +703,8 @@ still owed (it would drop the notice and the Sonderkündigungsrecht).
 
 ### The § 14a EnWG module state lives here too
 
-Steering the devices in the household is the home energy manager's job — see
-the sister project [hems](https://hupe1980.github.io/hems/); vertragd records
-which module the contract carries.
+The household energy manager steers the devices. Its [household guide](https://hupe1980.github.io/ems/docs/household/) documents that side of the interface.
+vertragd records which module the contract carries.
 
 Which BK8-22/010-A Netzentgelt modules the Anschlussnutzer holds — `MODUL_1`
 (pauschal) or `MODUL_2` (prozentual) as the base, `MODUL_3` (zeitvariabel)
@@ -924,6 +923,10 @@ The feed accepts `BESTAETIGT` and `AKTIV` components, and — flagged
 under a contract already `ABGELAUFEN`: the period that ends with the supply is
 owed an Abschlussrechnung (§ 40c Abs. 2 Satz 1 EnWG), and billingd decides
 whether it already exists.
+
+For a historical sweep, supply both `ended_from` and `ended_through` as inclusive Berlin dates, at most 84 days apart and ending no later than today. The response echoes these bounds and includes `count` and `candidates`. The bounds select the ended components. Active components remain in the roster. The read is scoped to the installation’s tenant and requires `read-vertrag`.
+
+For invoicing, `by-malo/{malo_id}`, `malo/{malo_id}/produkte` and `malo/{malo_id}/sect14a` accept the LF MP-ID (`lf_mp_id`) and inclusive billing interval (`from`, `to`). The recipient and contract facts come from the selected supply component, including an ended supply. No qualifying component returns 404 and overlapping eligible components return 409. On a § 14a write, specify `lf_mp_id` when the MaLo has competing issuers on the effective day.
 
 ## § 41e EnWG Aggregatorverträge
 

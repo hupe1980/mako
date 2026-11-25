@@ -514,8 +514,10 @@ pub async fn get_abschlaege(
     if from > to {
         return ApiError::bad_request("from must not be after to").into_response();
     }
-    if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        return account_not_found(&malo_id);
+    match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return account_not_found(&malo_id),
+        Err(error) => return ApiError::internal(error).into_response(),
     }
     let all = match crate::pg::list_abschlag_forderungen(
         &ledger,
@@ -688,14 +690,11 @@ pub async fn ingest_webhook(
 ) -> impl IntoResponse {
     // ── Inbound Standard Webhooks verification ────────────────────────
     use secrecy::ExposeSecret;
-    let secret = cfg
-        .erp_hmac_secret
-        .as_ref()
-        .map(|s| s.expose_secret().as_bytes().to_vec());
+    let secret = cfg.erp_hmac_secret.as_ref().map(|s| s.expose_secret());
     if secret.is_some() {
         // The shared verifier: constant-time signature compare *and* the
         // timestamp check, so a captured ERP POST cannot be replayed.
-        if let Err(err) = mako_service::webhook::verify_request(secret.as_deref(), &headers, &body)
+        if let Err(err) = mako_service::webhook::verify_configured_request(secret, &headers, &body)
         {
             tracing::warn!(%err, "accountingd: inbound webhook refused");
             return StatusCode::from(err).into_response();
@@ -718,7 +717,12 @@ pub async fn ingest_webhook(
     let ce_type = ce.get("type").and_then(|v| v.as_str()).unwrap_or("");
     // A CloudEvent id is mandatory (CE spec) and is the ledger idempotency key —
     // without it a redelivery could not be deduplicated, so reject it outright.
-    let Some(ce_id) = ce.get("id").and_then(|v| v.as_str()).map(str::to_owned) else {
+    let Some(ce_id) = ce
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_owned)
+    else {
         tracing::warn!("accountingd: CloudEvent without an id — cannot deduplicate, rejected");
         return ApiError::bad_request(
             "CloudEvent carries no id — a redelivery could not be deduplicated",
@@ -734,37 +738,40 @@ pub async fn ingest_webhook(
         //   is_correction=false → RECHNUNG debit  (customer owes money)
         //   is_correction=true  → STORNO debit/credit (negated amount; billing reversal)
         mako_events::billing::RECHNUNG_ERSTELLT => {
-            let malo_id = data
+            let expected = mako_service::source("billingd", &cfg.tenant);
+            if ce.get("source").and_then(serde_json::Value::as_str) != Some(expected.as_str()) {
+                return ApiError::forbidden("invoice source does not match this deployment")
+                    .with_code("invoice_source_mismatch")
+                    .into_response();
+            }
+            // A Sammelrechnung identifies its collective account by the Rahmenvertrag.
+            let Some(malo_id) = data
                 .and_then(|d| d.get("malo_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let lf_mp_id = data
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+            else {
+                return ApiError::unprocessable("invoice event requires its account identifier")
+                    .with_code("invalid_invoice_account")
+                    .into_response();
+            };
+            let Some(lf_mp_id) = data
                 .and_then(|d| d.get("lf_mp_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(&cfg.lf_mp_id);
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| rubo4e::identifiers::MarktpartnerId::new(id).is_ok())
+            else {
+                return ApiError::unprocessable("invoice event requires the issuer's MP-ID")
+                    .with_code("invalid_invoice_issuer")
+                    .into_response();
+            };
             let is_correction: bool = data
                 .and_then(|d| d.get("is_correction"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            // Parse as Decimal to avoid f64 rounding errors on money amounts.
-            let betrag_ct = |field: &str| -> Option<i64> {
-                use rust_decimal::Decimal;
-                use std::str::FromStr;
-                data.and_then(|d| d.get("rechnung"))
-                    .and_then(|r| r.get(field))
-                    .and_then(|g| g.get("wert"))
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| Decimal::from_str(s).ok())
-                    .map(|d| {
-                        (d * Decimal::from(100))
-                            .round_dp_with_strategy(
-                                0,
-                                rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                            )
-                            .to_string()
-                            .parse::<i64>()
-                            .unwrap_or(0)
-                    })
+            let invoice = &ce["data"]["rechnung"];
+            let cents = |field: &str| {
+                invoice[field]["wert"]
+                    .as_str()
+                    .and_then(crate::guthaben::eur_to_ct)
             };
             // The receivable is the invoice's **gross**: that is what it charges
             // for the supply. Advances already demanded were debited when they
@@ -777,7 +784,7 @@ pub async fn ingest_webhook(
             // one acknowledges the event and books no receivable, so the supply
             // is billed and never collected, with nothing in the log to find.
             // The payload cannot improve on redelivery, so this is a 422.
-            let Some(amount_ct) = betrag_ct("gesamtbrutto") else {
+            let Some(amount_ct) = cents("gesamtbrutto") else {
                 tracing::error!(
                     ce_id = %ce_id,
                     malo_id,
@@ -785,11 +792,27 @@ pub async fn ingest_webhook(
                      rather than booking nothing"
                 );
                 return ApiError::unprocessable("invoice event carries no readable gesamtbrutto")
+                    .with_code("invalid_invoice_amount")
                     .into_response();
             };
-            let verrechnete_abschlaege_ct: i64 = betrag_ct("zuZahlen")
-                .map_or(0, |zu_zahlen| amount_ct - zu_zahlen)
-                .max(0);
+            let verrechnete_abschlaege_ct = if invoice["zuZahlen"].is_null() {
+                0
+            } else {
+                let Some(zu_zahlen) = cents("zuZahlen") else {
+                    return ApiError::unprocessable("invoice event carries an invalid zuZahlen")
+                        .with_code("invalid_invoice_amount")
+                        .into_response();
+                };
+                let difference = (i128::from(amount_ct) - i128::from(zu_zahlen)).max(0);
+                let Ok(deduction) = i64::try_from(difference) else {
+                    return ApiError::unprocessable(
+                        "invoice advance deduction exceeds the cent range",
+                    )
+                    .with_code("invalid_invoice_amount")
+                    .into_response();
+                };
+                deduction
+            };
             let rechnungsnummer = data
                 .and_then(|d| d.get("rechnung"))
                 .and_then(|r| r.get("rechnungsnummer"))
@@ -878,32 +901,31 @@ pub async fn ingest_webhook(
                     )))
                     .into_response();
                 }
-
-                // The advances this invoice settled stop being advances. A
-                // Storno reverses its original's gross, and the original's
-                // Verrechnung is reversed by re-billing the released period —
-                // so only an ordinary invoice books one.
-                if !is_correction
-                    && verrechnete_abschlaege_ct > 0
-                    && let Err(e) = crate::pg::verrechne_abschlaege(
-                        &ledger,
-                        &pool,
-                        &cfg.tenant,
-                        malo_id,
-                        lf_mp_id,
-                        verrechnete_abschlaege_ct,
-                        &rechnungsnummer,
-                        &format!("{ce_id}:abschlag-verrechnung"),
-                        today,
-                    )
-                    .await
-                {
-                    return ledger_failure(e.context(format!(
-                        "Abschlag-Verrechnung for MaLo {malo_id} — returning 500 so the sender \
+            }
+            // The advances this invoice settled stop being advances. A
+            // Storno reverses its original's gross, and the original's
+            // Verrechnung is reversed by re-billing the released period —
+            // so only an ordinary invoice books one.
+            if !is_correction
+                && verrechnete_abschlaege_ct > 0
+                && let Err(e) = crate::pg::verrechne_abschlaege(
+                    &ledger,
+                    &pool,
+                    &cfg.tenant,
+                    malo_id,
+                    lf_mp_id,
+                    verrechnete_abschlaege_ct,
+                    &rechnungsnummer,
+                    &format!("{ce_id}:abschlag-verrechnung"),
+                    today,
+                )
+                .await
+            {
+                return ledger_failure(e.context(format!(
+                    "Abschlag-Verrechnung for MaLo {malo_id} — returning 500 so the sender \
                          redelivers; without it the customer owes the period twice"
-                    )))
-                    .into_response();
-                }
+                )))
+                .into_response();
             }
             // SR-058: one item per Schlussrechnung (keyed on its number), and
             // its Storno cancels it. A failure is a 500: the booking above
@@ -5267,8 +5289,10 @@ pub async fn post_reconcile(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
-    if let Ok(None) = fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
-        return account_not_found(&malo_id);
+    match fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return account_not_found(&malo_id),
+        Err(error) => return ApiError::internal(error).into_response(),
     }
     let repair = q.repair.unwrap_or(false);
     match crate::pg::reconcile_balance(&ledger, &pool, &malo_id, mp_id, &cfg.tenant, repair).await {
@@ -5634,8 +5658,10 @@ pub async fn post_clear(
         return ApiError::forbidden(e.to_string()).into_response();
     }
     let mp_id = q.mp_id.as_deref().unwrap_or(&cfg.lf_mp_id);
-    if let Ok(None) = fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
-        return account_not_found(&malo_id);
+    match fetch_account(&pool, &malo_id, mp_id, &cfg.tenant).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return account_not_found(&malo_id),
+        Err(error) => return ApiError::internal(error).into_response(),
     }
     let today = mako_fristen::heute();
     match ledger.apply_fifo_clearing(mp_id, &malo_id, today).await {

@@ -370,11 +370,8 @@ async fn dispatch_invoice(
     let tariff = match tariff {
         Product::Waermepumpe(p) | Product::Wallbox(p) => {
             let slices = vertragd
-                .get_sect14a(malo_id, period_from, period_to)
-                .await
-                .map_err(|e| {
-                    BillingError::upstream("vertragd", format!("§ 14a module state: {e}"))
-                })?;
+                .get_sect14a(malo_id, &req.lf_mp_id, period_from, period_to)
+                .await?;
             let chosen = select_sect14a(p, &slices, malo_id, period_from, period_to)?;
             selected = match tariff {
                 Product::Waermepumpe(_) => Product::Waermepumpe(chosen),
@@ -394,13 +391,9 @@ async fn dispatch_invoice(
     // this same answer. Fetching it separately would be two round trips per
     // invoice, and two answers that a concurrent master-data change could make
     // disagree about which customer the document is for.
-    let vertrag = match vertragd.get_vertrag_by_malo(malo_id).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(%malo_id, error = %e, "billingd: vertragd lookup failed — invoice will lack §40 contract facts and its BG-7 buyer");
-            None
-        }
-    };
+    let vertrag = vertragd
+        .get_supply_contract(malo_id, &req.lf_mp_id, period_from, period_to)
+        .await?;
 
     // §40 Abs. 2 Nr. 6 EnWG — meter identity. The device registry (marktd)
     // is the authority: MaLo → Lokationszuordnung → MeLo → Zähler. Soft
@@ -648,9 +641,8 @@ pub(crate) async fn resolve_legs(
     }
     let slices = deps
         .vertragd
-        .get_product_slices(malo_id, from, to)
-        .await
-        .map_err(|e| BillingError::upstream("vertragd", e))?;
+        .get_product_slices(malo_id, &req.lf_mp_id, from, to)
+        .await?;
     if slices.is_empty() {
         return Err(BillingError::unprocessable(
             "NO_ACTIVE_PRODUCT",
@@ -1962,6 +1954,7 @@ mod sharing_allocation_tests {
         );
 
         let ce = crate::handlers::rechnung_erstellt_ce(
+            "stadtwerke-musterstadt",
             uuid::Uuid::nil(),
             "51238696012",
             "9900357000004",

@@ -111,7 +111,7 @@ function useFreigaben(aktiv: boolean): Stand {
 
 /**
  * processd's Klärfälle — every message refused, dead-lettered or left past
- * its Frist, one case per cause — the earliest due first. A case reads as its
+ * its Frist, grouped by partner and message — the earliest due first. A case reads as its
  * cause in the words of the list that defines it (processd's `bedeutung`, else
  * the catalogue's) and what to do about it; the due date is processd's.
  */
@@ -436,12 +436,13 @@ function useAbrechnungen(aktiv: boolean): Stand {
     refetchInterval: TAKT,
   });
   const eintraege: Eintrag[] = (q.data?.periods ?? []).map((p) => ({
-    id: `abrechnung:${p.malo_id}:${p.period_from}`,
+    id: `abrechnung:${p.lf_mp_id}:${p.malo_id}:${p.period_from}:${p.period_to}`,
     quelle: "abrechnungen",
     titel: p.malo_id,
     kennung: true,
     detail: [
       `${formatBusinessDate(p.period_from)} – ${formatBusinessDate(p.period_to)}`,
+      katalog().billingWatch.issuer(p.lf_mp_id),
       p.final_invoice ? wort().schlussrechnung : null,
       wort().faelligAm(formatBusinessDate(p.due_on)),
       wort().tageOffen(p.days_left, formatCount(Math.abs(p.days_left))),
@@ -454,7 +455,10 @@ function useAbrechnungen(aktiv: boolean): Stand {
     anker: { malo: p.malo_id },
     ziel: { to: "/prozess", search: { key: p.malo_id } },
   }));
-  return stand("abrechnungen", wort().abrechnungen, q, eintraege, q.data?.saturated ?? false);
+  return {
+    ...stand("abrechnungen", wort().abrechnungen, q, eintraege, q.data?.saturated ?? false),
+    discovery: q.data?.discovery ?? null,
+  };
 }
 
 /**

@@ -34,6 +34,7 @@ const ROUTEN: { name: string; pfad: string; titel: RegExp }[] = [
   { name: "prozess", pfad: "prozess?key=51238696012", titel: /^Lieferantenwechsel/ },
   { name: "kunden", pfad: "kunden", titel: /^Kunden$/ },
   { name: "assistent", pfad: "assistent", titel: /^Assistent$/ },
+  { name: "schattenbetrieb", pfad: "schattenbetrieb", titel: /^Schattenbetrieb$/ },
   { name: "einrichtung", pfad: "einrichtung", titel: /^Einrichtung$/ },
   { name: "lokation", pfad: "lokation/51238696012", titel: /^Marktlokation 51238696012/ },
   { name: "nachrechnen", pfad: "rechnung/b-1", titel: /^Nachrechnen$/ },

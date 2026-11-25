@@ -45,6 +45,12 @@ just test-vertragd-db
 A Kündigung or Tarifwechsel that misses its Frist is refused `422` with
 `fruehestens` and the `rechtsgrundlage`.
 
+Every `de.mako.vertrag.*` delivery links its published JSON Schema through
+`dataschema`. Contract events use the Vertrag UUID as both `subject` and
+`correlationid`. Order and Widerruf events use the caller’s `bestellreferenz`
+as `subject` and the Bestellung UUID as `correlationid`. The subscription
+worker signs the entire CloudEvent for each endpoint. [Event catalog](https://hupe1980.github.io/mako/docs/reference/events/)
+
 ## Configuration
 
 `tenant`, `lf_mp_id`, `processd_url`, `accountingd_url`, `edmd_url` (each with
@@ -69,3 +75,5 @@ All are listed in the
 The [operator guide](https://hupe1980.github.io/mako/docs/services/vertragd/)
 covers the statutory rules, data model, authorization, online Vertragsschluss
 and Widerruf, Kündigung, Tarifwechsel, DSGVO, events and the full configuration.
+
+The billing candidate feed accepts an inclusive, bounded pair of end dates for recovery. Its response identifies the enumerated range and supply-component count. [Billing candidate contract](https://hupe1980.github.io/mako/docs/services/vertragd/)

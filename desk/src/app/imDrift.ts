@@ -10,7 +10,7 @@ import type { Service } from "../data/mcp";
 export const driftKey = (service: Service) => ["drift", service] as const;
 
 /** The query the banner fills for a REST document: the served version when it differs. */
-export const driftRestKey = (service: Service) => ["drift-rest", service] as const;
+export const driftRestKey = (service: string) => ["drift-rest", service] as const;
 
 /** True while the banner's last check found `service` in drift, on either door. */
 export function useImDrift(service: Service): boolean {

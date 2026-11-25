@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.46.0"
+    "version": "0.47.0"
   },
   "paths": {
     "/api/v1/billing": {
@@ -107,12 +107,14 @@
             "description": "Per Lieferant: owed, on time, late and overdue under § 40c Abs. 2 EnWG",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeadlineSummary"
+                }
               }
             }
           },
           "403": {
-            "description": "Cedar `read-billing` refused",
+            "description": "Cedar `read-billing-watch` refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -304,6 +306,99 @@
         }
       }
     },
+    "/api/v1/billing/runs/sweep": {
+      "post": {
+        "tags": [
+          "deadlines"
+        ],
+        "summary": "Request the scheduled billing workflow on today's Berlin business date.",
+        "operationId": "post_billing_sweep",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "UUID identifying this attempt; reuse it after an uncertain response",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SweepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Billing run completed or receipt replayed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SweepReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A single UUID Idempotency-Key is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-billing-sweep` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another run is active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown sweep option",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The attempt failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/billing/sammelrechnung/{rahmenvertrag_id}": {
       "post": {
         "tags": [
@@ -399,8 +494,7 @@
         "tags": [
           "deadlines"
         ],
-        "summary": "`GET /api/v1/billing/unbilled?open=&limit=`",
-        "description": "The § 40c Abs. 2 EnWG watch: every period the scheduled run attempted and\ncould not bill, with its refusal code and the day the invoice is owed by,\nthe earliest due first. `open=false` includes the ones an invoice has\nsince discharged.",
+        "summary": "The LF's refused periods, ordered by due date, with the latest discovery evidence.",
         "operationId": "get_unbilled_periods",
         "parameters": [
           {
@@ -424,15 +518,17 @@
         ],
         "responses": {
           "200": {
-            "description": "Periods the scheduled run could not bill, the earliest due first",
+            "description": "Refused periods ordered by due date, with the latest discovery evidence",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UnbilledPeriods"
+                }
               }
             }
           },
           "403": {
-            "description": "Cedar `read-billing` refused",
+            "description": "Cedar `read-billing-watch` refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -2232,6 +2328,68 @@
         },
         "additionalProperties": false
       },
+      "DeadlineSummary": {
+        "type": "object",
+        "description": "`summarize_billing_deadlines`' answer.",
+        "required": [
+          "lieferanten"
+        ],
+        "properties": {
+          "discovery": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Discovery"
+              }
+            ]
+          },
+          "lieferanten": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeadlineSummaryRow"
+            },
+            "description": "One row per Lieferant (MP-ID)."
+          }
+        }
+      },
+      "DeadlineSummaryRow": {
+        "type": "object",
+        "description": "One Lieferant's § 40c Abs. 2 EnWG standing — the Überblick tile.",
+        "required": [
+          "lf_mp_id",
+          "owed",
+          "issued_on_time",
+          "issued_late",
+          "overdue"
+        ],
+        "properties": {
+          "issued_late": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Invoices issued after their `due_on`."
+          },
+          "issued_on_time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Invoices issued on or before their `due_on` (Berlin date of issue)."
+          },
+          "lf_mp_id": {
+            "type": "string"
+          },
+          "overdue": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Open unbilled periods past their deadline."
+          },
+          "owed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Open unbilled periods still inside their deadline."
+          }
+        }
+      },
       "Delivery": {
         "type": "object",
         "description": "One event to one endpoint.",
@@ -2335,6 +2493,84 @@
           "delivered",
           "dead_lettered"
         ]
+      },
+      "Discovery": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "business_date",
+          "started_at",
+          "source",
+          "origin",
+          "status",
+          "ended_from",
+          "ended_through"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "candidate_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "ended_through": {
+            "type": "string",
+            "format": "date"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_failure_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
       },
       "Endpoint": {
         "type": "object",
@@ -2911,6 +3147,24 @@
           }
         }
       },
+      "SweepReceipt": {
+        "type": "object",
+        "description": "Receipt of a committed manual run. Its evidence is available in the billing watch.",
+        "required": [
+          "run_id"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SweepRequest": {
+        "type": "object",
+        "description": "The run uses the installation's clock and policy. Unknown options are refused.",
+        "additionalProperties": false
+      },
       "TestDelivery": {
         "type": "object",
         "description": "What a test delivery came to.",
@@ -2964,6 +3218,104 @@
             "type": "integer",
             "format": "int64",
             "description": "The rows counted, at most 10 000."
+          }
+        }
+      },
+      "UnbilledPeriodRow": {
+        "type": "object",
+        "description": "One recorded unbilled period, as the Desk's Heute and the MCP tool read it.",
+        "required": [
+          "malo_id",
+          "lf_mp_id",
+          "period_from",
+          "period_to",
+          "final_invoice",
+          "reason_code",
+          "due_on",
+          "days_left",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "days_left": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Days from today (Europe/Berlin) to `due_on`; negative once overdue."
+          },
+          "due_on": {
+            "type": "string",
+            "format": "date",
+            "description": "§ 40c Abs. 2 EnWG: the last day the invoice may reach the customer."
+          },
+          "final_invoice": {
+            "type": "boolean",
+            "description": "The period ends with the supply and is owed an Abschlussrechnung."
+          },
+          "lf_mp_id": {
+            "type": "string"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "period_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_to": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason_code": {
+            "type": "string",
+            "description": "Stable refusal code — word it from the catalogue, never show it raw."
+          },
+          "settled_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The invoice that discharged the period; `None` while it is open."
+          }
+        }
+      },
+      "UnbilledPeriods": {
+        "type": "object",
+        "description": "`list_unbilled_periods`' answer.",
+        "required": [
+          "periods",
+          "count",
+          "saturated"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "How many periods `periods` holds.",
+            "minimum": 0
+          },
+          "discovery": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Discovery"
+              }
+            ]
+          },
+          "periods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnbilledPeriodRow"
+            },
+            "description": "The earliest `due_on` first."
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "At least `limit` periods matched: more may be waiting than were listed."
           }
         }
       },

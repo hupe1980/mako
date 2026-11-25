@@ -39,6 +39,13 @@ async fn setup() -> Option<(PgPool, PgContainer)> {
     Some((pool, container))
 }
 
+async fn pending_iftsta_escalations(pool: &PgPool) -> anyhow::Result<Vec<pg::StuckIftsta>> {
+    let mut tx = pool.begin().await?;
+    let orders = pg::claim_stuck_iftsta(&mut tx, TENANT).await?;
+    tx.rollback().await?;
+    Ok(orders)
+}
+
 fn uniq(prefix: &str) -> String {
     format!("{prefix}-{}", &Uuid::new_v4().simple().to_string()[..12])
 }
@@ -599,12 +606,7 @@ async fn a_dead_lettered_iftsta_is_escalated_once() {
         .await
         .unwrap();
     // Still being delivered: not stuck.
-    assert!(
-        pg::list_stuck_iftsta(&pool, TENANT)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(pending_iftsta_escalations(&pool).await.unwrap().is_empty());
     sqlx::query(
         "UPDATE event_outbox SET dead_lettered_at = now(), attempts = 8, \
          last_error = 'connection refused' WHERE event_id = $1",
@@ -614,16 +616,13 @@ async fn a_dead_lettered_iftsta_is_escalated_once() {
     .await
     .unwrap();
 
-    let stuck = pg::list_stuck_iftsta(&pool, TENANT).await.unwrap();
+    let stuck = pending_iftsta_escalations(&pool).await.unwrap();
     assert_eq!(stuck.len(), 1);
     assert_eq!(stuck[0].attempts, 8, "the attempts actually made");
     assert_eq!(stuck[0].last_error, "connection refused");
     assert!(processd::sperr::worker::sweep(&pool, TENANT).await.unwrap());
     assert!(
-        pg::list_stuck_iftsta(&pool, TENANT)
-            .await
-            .unwrap()
-            .is_empty(),
+        pending_iftsta_escalations(&pool).await.unwrap().is_empty(),
         "an escalated order is announced once, not on every sweep"
     );
     assert_eq!(ausstehend(&pool).await, 1);
@@ -894,9 +893,7 @@ async fn the_execution_window_is_stored_and_swept() {
         return;
     };
     let mut req = order(Some(uniq("frist")));
-    // A Sperrtermin well in the past: the 6-WT window has long expired.
-    req.fruehestens_am =
-        Some(time::Date::from_calendar_date(2026, time::Month::January, 5).unwrap());
+    req.fruehestens_am = Some(mako_fristen::heute() - time::Duration::days(30));
     req.ausfuehrung_am = None;
     let id = pg::create_order_pg(&pool, TENANT, &req)
         .await
@@ -913,22 +910,56 @@ async fn the_execution_window_is_stored_and_swept() {
         "the window is stored, not recomputed by every reader"
     );
 
-    let overdue = pg::list_ausfuehrung_ueberfaellig(&pool, TENANT)
-        .await
-        .unwrap();
-    assert!(
-        overdue.iter().any(|(oid, ..)| *oid == id),
-        "an order past its window shows up in the sweep"
+    let mut first = pool.begin().await.unwrap();
+    let mut second = pool.begin().await.unwrap();
+    assert_eq!(
+        pg::claim_overdue_executions(&mut first, TENANT)
+            .await
+            .unwrap()[0]
+            .0,
+        id
     );
-    pg::mark_ausfuehrung_escalated(&pool, id, TENANT)
-        .await
-        .unwrap();
-    let overdue = pg::list_ausfuehrung_ueberfaellig(&pool, TENANT)
-        .await
-        .unwrap();
     assert!(
-        !overdue.iter().any(|(oid, ..)| *oid == id),
-        "a missed Frist is announced once, not on every sweep"
+        pg::claim_overdue_executions(&mut second, TENANT)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    first.rollback().await.unwrap();
+    assert_eq!(
+        pg::claim_overdue_executions(&mut second, TENANT)
+            .await
+            .unwrap()[0]
+            .0,
+        id
+    );
+    second.commit().await.unwrap();
+
+    req.process_id = Some(uniq("cancelled-frist"));
+    let other = pg::create_order_pg(&pool, TENANT, &req)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut cancel = pool.begin().await.unwrap();
+    assert!(matches!(
+        pg::cancel_order_pg(&mut cancel, other, TENANT)
+            .await
+            .unwrap(),
+        pg::Cancelled::Done(_)
+    ));
+    let mut sweep = pool.begin().await.unwrap();
+    assert!(
+        pg::claim_overdue_executions(&mut sweep, TENANT)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    cancel.commit().await.unwrap();
+    assert!(
+        pg::claim_overdue_executions(&mut sweep, TENANT)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -953,19 +984,14 @@ async fn an_overdue_iftsta_is_escalated_while_still_retrying() {
         .execute(&pool)
         .await
         .unwrap();
-    let stuck = pg::list_stuck_iftsta(&pool, TENANT).await.unwrap();
+    let stuck = pending_iftsta_escalations(&pool).await.unwrap();
     assert_eq!(stuck.len(), 1);
     assert_eq!(
         stuck[0].attempts, 0,
         "the attempts actually made, not a cap"
     );
     assert!(processd::sperr::worker::sweep(&pool, TENANT).await.unwrap());
-    assert!(
-        pg::list_stuck_iftsta(&pool, TENANT)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(pending_iftsta_escalations(&pool).await.unwrap().is_empty());
 }
 
 /// An operator-created order owes no IFTSTA: no Lieferant is waiting, so it is

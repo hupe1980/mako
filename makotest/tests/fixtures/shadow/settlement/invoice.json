@@ -1,0 +1,113 @@
+{
+  "faelligkeitsdatum": "2026-05-15T00:00:00Z",
+  "gesamtbrutto": {
+    "_typ": "BETRAG",
+    "_version": "202607.1.0",
+    "waehrung": "EUR",
+    "wert": "16.6005"
+  },
+  "gesamtnetto": {
+    "_typ": "BETRAG",
+    "_version": "202607.1.0",
+    "waehrung": "EUR",
+    "wert": "13.95"
+  },
+  "gesamtsteuer": {
+    "_typ": "BETRAG",
+    "_version": "202607.1.0",
+    "waehrung": "EUR",
+    "wert": "2.6505"
+  },
+  "rechnungsdatum": "2026-04-01T00:00:00Z",
+  "rechnungsempfaenger": {
+    "adresse": {
+      "ort": "Köln",
+      "postleitzahl": "50667",
+      "strasse": "Hauptstraße 1",
+      "_typ": "ADRESSE",
+      "_version": "202607.1.0"
+    },
+    "organisationsname": "Energieservice AG",
+    "_typ": "GESCHAEFTSPARTNER",
+    "_version": "202607.1.0"
+  },
+  "rechnungsersteller": {
+    "adresse": {
+      "ort": "Köln",
+      "postleitzahl": "50667",
+      "strasse": "Hauptstraße 1",
+      "_typ": "ADRESSE",
+      "_version": "202607.1.0"
+    },
+    "organisationsname": "Messstellenbetrieb GmbH",
+    "_typ": "GESCHAEFTSPARTNER",
+    "umsatzsteuerId": "DE999999999",
+    "_version": "202607.1.0"
+  },
+  "rechnungsnummer": "RE-2026-0001",
+  "rechnungsperiode": {
+    "enddatum": "2026-03-31",
+    "startdatum": "2026-03-01",
+    "_typ": "ZEITRAUM",
+    "_version": "202607.1.0"
+  },
+  "rechnungspositionen": [
+    {
+      "artikelId": "9990001100002",
+      "einzelpreis": {
+        "_typ": "PREIS",
+        "_version": "202607.1.0",
+        "wert": "0.45"
+      },
+      "gesamtpreis": {
+        "_typ": "BETRAG",
+        "_version": "202607.1.0",
+        "waehrung": "EUR",
+        "wert": "13.95"
+      },
+      "lieferungszeitraum": {
+        "enddatum": "2026-03-31",
+        "startdatum": "2026-03-01",
+        "_typ": "ZEITRAUM",
+        "_version": "202607.1.0"
+      },
+      "positionsMenge": {
+        "einheit": "TAG",
+        "_typ": "MENGE",
+        "_version": "202607.1.0",
+        "wert": "31"
+      },
+      "positionsnummer": 1,
+      "steuerbetrag": {
+        "steuersatz": "19",
+        "_typ": "STEUERBETRAG",
+        "_version": "202607.1.0",
+        "zusatzAttribute": [
+          {
+            "name": "mako:steuerkategorie",
+            "wert": "S"
+          }
+        ]
+      },
+      "_typ": "RECHNUNGSPOSITION",
+      "_version": "202607.1.0"
+    }
+  ],
+  "steuerbetraege": [
+    {
+      "basiswert": "13.95",
+      "steuersatz": "19",
+      "steuerwert": "2.6505",
+      "_typ": "STEUERBETRAG",
+      "_version": "202607.1.0",
+      "zusatzAttribute": [
+        {
+          "name": "mako:steuerkategorie",
+          "wert": "S"
+        }
+      ]
+    }
+  ],
+  "_typ": "RECHNUNG",
+  "_version": "202607.1.0"
+}

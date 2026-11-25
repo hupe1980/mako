@@ -17,16 +17,22 @@ path = "src/main.rs"
 # The Standard Webhooks check every service runs, never a copy of it.
 mako-service = { workspace = true }
 mako-events  = { workspace = true }
+mako-fristen = { workspace = true }
 anyhow       = { workspace = true }
 axum         = { version = "0.8" }
 jsonschema   = { workspace = true }
 reqwest      = { workspace = true }
+serde        = { workspace = true }
+sha2         = { version = "0.10" }
 serde_json   = { workspace = true }
 time         = { workspace = true }
 tokio        = { version = "1", features = ["full"] }
 uuid         = { workspace = true }
 
+tempfile     = "3"
+
 [dev-dependencies]
+tokio-stream = "0.1"
 vertragd               = { path = "../../services/vertragd" }
 sqlx                   = { workspace = true }
 testcontainers         = { workspace = true }

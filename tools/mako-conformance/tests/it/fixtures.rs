@@ -24,6 +24,14 @@ async fn defective(
 ) -> axum::response::Response {
     let path = uri.path().to_owned();
     match (method.as_str(), path.as_str()) {
+        ("GET", "/api/v1/events") => (
+            StatusCode::IM_A_TEAPOT,
+            axum::Json(json!({"code": "fixture", "message": "fixture"})),
+        )
+            .into_response(),
+        ("GET", "/api/v1/webhooks/endpoints") => {
+            axum::Json(json!({"items": "a page requires an array"})).into_response()
+        }
         ("POST", "/api/v1/webhooks/endpoints") => {
             let b: Value = serde_json::from_slice(&body).unwrap_or_default();
             *callback.lock().await = b["url"].as_str().map(str::to_owned);
@@ -106,13 +114,28 @@ fn broken(r: &mako_conformance::report::Report, starts: &str) -> bool {
 }
 
 #[tokio::test]
-async fn rest_names_an_unprotected_operation_and_an_admitted_principal() {
+async fn rest_names_the_refusals_undocumented_status_and_invalid_page_field() {
     let r = report(Runner::Rest).await;
     assert!(
         broken(&r, "401 without a token: GET /api/v1/vertraege"),
         "{r}"
     );
     assert!(broken(&r, "403 for the refused principal"), "{r}");
+    for (name, detail) in [
+        ("documented status: GET /api/v1/events", "418"),
+        (
+            "documented answer: GET /api/v1/webhooks/endpoints",
+            "/items",
+        ),
+    ] {
+        assert!(
+            r.checks().iter().any(|check| {
+                check.name == name
+                    && matches!(&check.outcome, Outcome::Broken(reason) if reason.contains(detail))
+            }),
+            "{r}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -126,4 +149,47 @@ async fn events_name_a_wrong_signature_and_an_accepted_unsigned_event() {
 async fn mcp_names_a_missing_tool() {
     let r = report(Runner::Mcp).await;
     assert!(broken(&r, "tools/list names the declared tools"), "{r}");
+}
+
+/// A registration response can name only a single endpoint segment. A malformed
+/// identifier ends outbound work before any subsequent credentialed operation.
+#[tokio::test]
+async fn malformed_registration_id_cannot_select_another_resource() {
+    let paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let calls = paths.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app = axum::Router::new().fallback(move |uri: Uri| {
+        calls.lock().unwrap().push(uri.path().to_owned());
+        async {
+            (
+                StatusCode::CREATED,
+                axum::Json(json!({
+                    "endpoint": { "id": "../other/resource" }, "secret": "fixture-secret"
+                })),
+            )
+        }
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let r = mako_conformance::run(
+        mako_conformance::suites::suite("vertragd").unwrap(),
+        Target {
+            base,
+            token: "test-operator".into(),
+            refused_token: None,
+            inbound_secret: None,
+            listen: "127.0.0.1:0".into(),
+            callback: None,
+            wait: Duration::from_secs(1),
+        },
+        Some(Runner::Events),
+    )
+    .await
+    .unwrap();
+    server.abort();
+    assert!(broken(&r, "events.register"));
+    assert_eq!(
+        paths.lock().unwrap().as_slice(),
+        ["/api/v1/webhooks/endpoints"]
+    );
 }

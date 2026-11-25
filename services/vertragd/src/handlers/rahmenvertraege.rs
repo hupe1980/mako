@@ -14,8 +14,7 @@ use uuid::Uuid;
 use super::{CedarEnforcer, Ctx, authorize, ok, require_kunde};
 use crate::{
     domain::{self, Vertragsart},
-    events::build_cloud_event,
-    pg,
+    events, pg,
 };
 
 /// `POST /api/v1/kunden/{id}/rahmenvertraege` — create a framework contract.
@@ -305,26 +304,21 @@ pub async fn kuendigen(
             .await
             .map_err(ApiError::Internal)?;
         dispatched += result.dispatched.len();
-        let ce = build_cloud_event(
-            mako_events::vertrag::GEKUENDIGT,
+        let ce = events::typed_event(
             v.id,
             ctx.tenant(),
-            serde_json::json!({
-                "vertrag_id": v.id,
-                "vertrags_nr": v.vertrags_nr,
-                "rahmenvertrag_id": rahmenvertrag_id,
-                "rahmenvertrag_nr": rahmenvertrag.rahmenvertrag_nr,
-                "lieferende": input.lieferende.to_string(),
-                "grund": input.grund,
-                "rechtsgrundlage": frist.rechtsgrundlage,
-                "kuendigungsbestaetigung": {
-                    "erforderlich": true,
-                    "form": "Textform",
-                    "rechtsgrundlage": "§ 41 Abs. 8 Nr. 2 EnWG",
-                    "vertragsende": input.lieferende.to_string(),
-                },
-            }),
-        );
+            &events::Gekuendigt {
+                vertrag_id: v.id,
+                vertrags_nr: v.vertrags_nr.clone(),
+                rahmenvertrag_id,
+                rahmenvertrag_nr: rahmenvertrag.rahmenvertrag_nr.clone(),
+                lieferende: input.lieferende.to_string(),
+                grund: input.grund,
+                rechtsgrundlage: frist.rechtsgrundlage,
+                kuendigungsbestaetigung: events::Bestaetigung::zum(input.lieferende),
+            },
+        )
+        .map_err(|e| ApiError::Internal(e.into()))?;
         mako_service::outbox::enqueue(&mut tx, &ce)
             .await
             .map_err(|e| ApiError::Internal(e.into()))?;

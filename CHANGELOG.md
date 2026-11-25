@@ -1,13 +1,33 @@
 # Changelog
 
-What changed for people who run, integrate or build on mako. Docs and READMEs
-describe the current state; this file is the one place that records change.
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-The workspace version in `Cargo.toml` is the release being worked on, and the
-top section collects its changes until the release replaces „unreleased" with
-its date; `just bump <version>` opens the next section. mako is pre-1.0: any
-release may break, and every break is listed under **Changed** or **Removed**.
-History before this file is in `git log`.
+Versioned changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [0.47.0] — 2026-11-25
+
+### Added
+
+- The Lieferant Desk shows the cause, owner, Frist and corrective action for a Klärfall. Its billing watch shows discovery coverage, the next run and whether an issued invoice reached its delivery channel. Operators can resume a missed range.
+- A Strom Netzbetreiber can compare captured replies in an isolated Desk, REST or MCP view. Named resolvers record a decision against a specific review generation. The ESA reference compares invoice positions and the REMADV verdict.
+- `makotest shadow reconcile` checks a closed journal against the mirror inventory. `shadow rehearse` checks an expected reply and can retain a private makod workspace across restarts. Both expose unassessed input.
+- `just recovery-drill` restores a supplier invoice, its credit and a pending delivery into fresh stores. It checks the recipient’s independent receipt before resuming.
+- `mako-conformance --acceptance` reports whether a vertragd replacement trial passed, failed or was incomplete, with a fingerprint and the first blocker.
+
+### Changed
+
+- **Breaking.** Invoice events carry the deployment tenant in `source` and the issuer in `data.lf_mp_id`. accountingd requires both, a nonblank event ID and an account reference before booking. Invalid amounts and deductions return 422. A zero-gross invoice can settle advances.
+- **Breaking.** Billing watch reads require the tenant’s LF role. The feed reports its inclusive discovery range, refusals and issuer-scoped periods. Scheduled settlement deducts the issuing supplier’s paid advances. The billing schema changes in place.
+- Standard Webhooks senders and receivers derive the same signing key from an issued secret. The signed relay retains its configured bearer credential. Replay wakes the delivery worker when the pending row commits.
+- The candidate-format preview counts truncated interchanges as unread. Its API distinguishes unread files from messages without a binding profile.
+- vertragd publishes schemas for all 22 contract events. The HTTP catalogue links each documented operation to its response schemas.
+
+### Fixed
+
+- Local makod checks, migrations and daemon startup lock the writer directory before opening SlateDB.
+- Historical billing resolves the price, § 14a module and recipient for the issuing supplier and period. Incomplete or overlapping assignments refuse calculation. A price-change notice uses its own contract’s customer.
+- Concurrent Sperrauftrag sweeps claim an overdue order once. A committed cancellation prevents a stale overdue notice.
+- Unfamiliar Desk statuses are localized. Concurrent browser checks serve separate builds, and long landing-page commands fit narrow screens.
+- The validator parity check honors the Cargo target directory. macOS wheels retain a loadable Python extension. Webhook and policy integration tests release their PostgreSQL containers.
+- The utility guide identifies registered GS1 GLNs for both Sparten. The landing page and PRICAT reference describe the implemented profiles and builder. Profile tests identify the binding date under test.
 
 ## [0.46.0] — 2026-11-22
 

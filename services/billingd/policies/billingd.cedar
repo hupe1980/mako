@@ -8,6 +8,8 @@
 // Actions:
 //   "read-billing"       — GET  /api/v1/billing[/{id}], /review-queue, and the
 //                          rendered documents (/xrechnung, /ubl, /pdf)
+//   "read-billing-watch" — GET /api/v1/billing/{unbilled,deadline-summary} and their MCP tools
+//   "run-billing-sweep" — POST /api/v1/billing/runs/sweep — check and bill the LF’s due periods
 //   "read-billing-by-token" — POST /api/v1/billing/nachrechnen — portald alone
 //   "preview-billing"    — POST /api/v1/billing/{malo_id}/preview (no side effects)
 //   "run-billing"        — POST /api/v1/billing/{malo_id}/calculate, /tarifwechsel,
@@ -27,9 +29,8 @@
 //                          replay; the `list_webhook_*` MCP tools
 //   "read-events"        — GET  /api/v1/events — the emitted events as a feed
 //
-// The MCP surface is authenticated separately by `[mcp]` (McpAuth) and is
-// read-only by construction, so it carries no Cedar action. The VPP dispatch
-// webhook is HMAC-authenticated, not OIDC, and likewise carries none.
+// MCP checks `use-mcp` for the transport and each protected tool’s action
+// for its read. The VPP dispatch webhook authenticates with HMAC.
 //
 // Roles are the platform's **market** roles (`mako_roles`): NB, LF, MSB, ESA,
 // UENB. There is deliberately no job-function axis here — see the note at the
@@ -49,6 +50,27 @@ permit(
     resource
 ) when {
     context.principal_tenant == context.resource_tenant
+};
+
+// The tenant's unbilled periods and deadline counts disclose the LF's portfolio.
+permit(
+    principal,
+    action == Action::"read-billing-watch",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("LF")
+};
+
+// Running can issue invoices. A named LF must request it, including in the demo.
+permit(
+    principal,
+    action == Action::"run-billing-sweep",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("LF") &&
+    principal != User::"dev-admin"
 };
 
 // ── An invoice by its verify token: portald alone ─────────────────────────────

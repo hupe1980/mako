@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.46.0"
+    "version": "0.47.0"
   },
   "paths": {
     "/api/v1/audit/gleichbehandlung": {
@@ -1330,6 +1330,63 @@
         }
       }
     },
+    "/api/v1/shadow/review": {
+      "get": {
+        "tags": [
+          "shadow"
+        ],
+        "operationId": "get_review",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/shadow/review/{id}/resolve": {
+      "post": {
+        "tags": [
+          "shadow"
+        ],
+        "summary": "Record that the incumbent answer differs from the reviewed evidence (alt_falsch).",
+        "operationId": "resolve",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Resolve"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "412": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/api/v1/sperr-orders": {
       "get": {
         "tags": [
@@ -2541,6 +2598,28 @@
   },
   "components": {
     "schemas": {
+      "Answer": {
+        "type": "object",
+        "required": [
+          "pid",
+          "tree",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "tree": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "ApiError": {
         "type": "object",
         "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
@@ -2573,6 +2652,73 @@
         },
         "additionalProperties": true
       },
+      "Assessment": {
+        "type": "object",
+        "required": [
+          "expected",
+          "actual",
+          "expected_fingerprint",
+          "facts_fingerprint",
+          "answer_sha256",
+          "release",
+          "ebd_revision",
+          "pruefschritt",
+          "timing",
+          "deadline",
+          "producer"
+        ],
+        "properties": {
+          "actual": {
+            "$ref": "#/components/schemas/Answer"
+          },
+          "answer_sha256": {
+            "type": "string"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/Deadline"
+          },
+          "ebd_revision": {
+            "type": "string"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/Answer"
+          },
+          "expected_fingerprint": {
+            "type": "string"
+          },
+          "facts_fingerprint": {
+            "type": "string"
+          },
+          "incumbent_received_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "observation_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "producer": {
+            "type": "string"
+          },
+          "pruefschritt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "release": {
+            "type": "string"
+          },
+          "timing": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "AssignKlaerfallRequest": {
         "type": "object",
         "description": "The body of `POST /api/v1/klaerfaelle/{id}/assign`.",
@@ -2583,6 +2729,103 @@
               "null"
             ],
             "description": "Who takes the case; absent or null releases it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Cohort": {
+        "type": "object",
+        "required": [
+          "version",
+          "nb",
+          "role",
+          "scope",
+          "coverage",
+          "directions",
+          "start",
+          "end",
+          "complete_werktage",
+          "rows"
+        ],
+        "properties": {
+          "complete_werktage": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "directions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "nb": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Occurrence"
+            }
+          },
+          "scope": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "Coverage": {
+        "type": "object",
+        "required": [
+          "journal",
+          "inventory",
+          "observed"
+        ],
+        "properties": {
+          "inventory": {
+            "type": "string"
+          },
+          "journal": {
+            "type": "string"
+          },
+          "observed": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Deadline": {
+        "type": "object",
+        "required": [
+          "due_at",
+          "source"
+        ],
+        "properties": {
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -3056,6 +3299,36 @@
           }
         }
       },
+      "Occurrence": {
+        "type": "object",
+        "required": [
+          "id",
+          "batch_revision",
+          "request_sha256"
+        ],
+        "properties": {
+          "assessment": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Assessment"
+              }
+            ]
+          },
+          "batch_revision": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "request_sha256": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "Owner": {
         "type": "string",
         "description": "Who owns an endpoint.",
@@ -3373,6 +3646,68 @@
           }
         }
       },
+      "Resolution": {
+        "type": "object",
+        "required": [
+          "occurrence",
+          "generation",
+          "disposition",
+          "actor",
+          "evidence",
+          "reason",
+          "recorded_at"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "occurrence": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Resolve": {
+        "type": "object",
+        "required": [
+          "generation",
+          "revision",
+          "evidence",
+          "reason"
+        ],
+        "properties": {
+          "evidence": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "ResolveKlaerfallRequest": {
         "type": "object",
         "description": "The body of `POST /api/v1/klaerfaelle/{id}/resolve`.",
@@ -3396,6 +3731,85 @@
           "operator",
           "nobody"
         ]
+      },
+      "ReviewResult": {
+        "type": "object",
+        "required": [
+          "cohort",
+          "generation",
+          "revision",
+          "resolutions",
+          "eligible",
+          "assessed",
+          "unassessed",
+          "different",
+          "open_differences",
+          "timing_unassessed",
+          "required_werktage",
+          "ready",
+          "can_resolve",
+          "corrections"
+        ],
+        "properties": {
+          "assessed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "can_resolve": {
+            "type": "boolean"
+          },
+          "cohort": {
+            "$ref": "#/components/schemas/Cohort"
+          },
+          "corrections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "different": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "eligible": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "open_differences": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "required_werktage": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "resolutions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Resolution"
+            }
+          },
+          "revision": {
+            "type": "string"
+          },
+          "timing_unassessed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unassessed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "RotateSecret": {
         "type": "object",

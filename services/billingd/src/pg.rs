@@ -128,6 +128,7 @@ pub enum InsertError {
     )]
     PeriodAlreadyIssued {
         malo_id: String,
+        lf_mp_id: String,
         product_code: String,
         period_from: Date,
         period_to: Date,
@@ -317,6 +318,7 @@ pub async fn insert_billing_record(
             .map_err(|e| InsertError::Other(anyhow::Error::new(e)))?),
         // The guard refused the overwrite: the period already left the house.
         None => Err(InsertError::PeriodAlreadyIssued {
+            lf_mp_id: rec.lf_mp_id.to_owned(),
             malo_id: rec.malo_id.to_owned(),
             product_code: rec.product_code.to_owned(),
             period_from: rec.period_from,
@@ -396,28 +398,30 @@ pub async fn steuerzeilen_of(
 /// `409` with the document that holds the slot — a retrying caller reconciles
 /// against a record id instead of guessing what blocked it.
 pub async fn find_live_original(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     malo_id: &str,
+    lf_mp_id: &str,
     product_code: &str,
     period_from: Date,
     period_to: Date,
 ) -> Option<(Uuid, String, String)> {
     sqlx::query_as::<_, (Uuid, String, String)>(
         r"SELECT id, rechnungsnummer, outcome FROM billing_records
-          WHERE tenant = $1 AND malo_id = $2 AND product_code = $3
-            AND period_from = $4 AND period_to = $5
+          WHERE tenant = $1 AND malo_id = $2 AND lf_mp_id = $3 AND product_code = $4
+            AND period_from = $5 AND period_to = $6
             AND is_correction = false
-            AND sammelrechnung_id IS NULL
+            AND category <> 'VPP' AND sammelrechnung_id IS NULL
             AND outcome <> 'cancelled'
           LIMIT 1",
     )
     .bind(tenant)
     .bind(malo_id)
+    .bind(lf_mp_id)
     .bind(product_code)
     .bind(period_from)
     .bind(period_to)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .ok()
     .flatten()
@@ -1139,7 +1143,7 @@ pub async fn record_vpp_dispatch(
 /// marked every month `failed` for any operator with annual contracts and the
 /// default `jahresrechnung = false` — the audit signal drowned in its own noise.
 pub async fn record_billing_run(
-    pool: &PgPool,
+    pool: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     lf_mp_id: &str,
     year: i16,
@@ -1178,7 +1182,7 @@ pub async fn record_billing_run(
     Ok(())
 }
 
-/// A live invoice for this MaLo and period already exists.
+/// Whether this issuer already holds or has issued a supply invoice for the period.
 ///
 /// The billing-run worker's per-invoice idempotency. A **cancelled** original
 /// does not count: a Storno releases the period precisely so it can be billed
@@ -1188,19 +1192,20 @@ pub async fn billing_record_exists_for_period(
     pool: &PgPool,
     tenant: &str,
     malo_id: &str,
+    lf_mp_id: &str,
     period_from: Date,
     period_to: Date,
 ) -> anyhow::Result<bool> {
     let row = sqlx::query(
-        "SELECT 1 FROM billing_records
-         WHERE tenant = $1 AND malo_id = $2
-           AND period_from = $3 AND period_to = $4
-           AND is_correction = false
+        "SELECT 1 FROM billing_supply_originals
+         WHERE tenant = $1 AND malo_id = $2 AND lf_mp_id = $3
+           AND period_from = $4 AND period_to = $5
            AND outcome <> 'cancelled'
          LIMIT 1",
     )
     .bind(tenant)
     .bind(malo_id)
+    .bind(lf_mp_id)
     .bind(period_from)
     .bind(period_to)
     .fetch_optional(pool)
@@ -1275,12 +1280,9 @@ pub async fn latest_billed_to(
     lf_mp_id: &str,
 ) -> anyhow::Result<Option<Date>> {
     sqlx::query_scalar(
-        "SELECT max(period_to) FROM billing_records
+        "SELECT max(period_to) FROM billing_supply_originals
          WHERE tenant = $1 AND malo_id = $2 AND lf_mp_id = $3
-           AND is_correction = false
-           AND outcome <> 'cancelled'
-           AND dokumentart = 'RECHNUNG'
-           AND sammelrechnung_id IS NULL",
+           AND outcome <> 'cancelled'",
     )
     .bind(tenant)
     .bind(malo_id)
@@ -1302,17 +1304,13 @@ pub struct NewUnbilledPeriod<'a> {
     pub final_invoice: bool,
     /// The refusal's stable code.
     pub reason_code: &'a str,
-    pub message: &'a str,
     pub due_on: Date,
 }
 
 /// Record (or refresh) a period the run could not bill.
 ///
-/// One statement, so it needs no transaction of its own. A later attempt that
-/// fails again refreshes the reason and counts the attempt; a row a Storno
-/// re-opened is open again until an invoice for the period is written, which
-/// the `billing_records_settle_unbilled` trigger observes.
-///
+/// A retry refreshes the refusal and its attempt count. The live supply invoice
+/// determines whether the period appears open in the watch.
 /// # Errors
 ///
 /// A failed query.
@@ -1323,18 +1321,14 @@ pub async fn record_unbilled_period(
     sqlx::query(
         r"INSERT INTO unbilled_periods
               (tenant, malo_id, lf_mp_id, period_from, period_to, final_invoice,
-               reason_code, message, due_on)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (tenant, malo_id, period_from, period_to) DO UPDATE
-          SET lf_mp_id      = EXCLUDED.lf_mp_id,
-              final_invoice = EXCLUDED.final_invoice,
+               reason_code, due_on)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (tenant, lf_mp_id, malo_id, period_from, period_to) DO UPDATE
+          SET final_invoice = EXCLUDED.final_invoice,
               reason_code   = EXCLUDED.reason_code,
-              message       = EXCLUDED.message,
               due_on        = EXCLUDED.due_on,
               attempts      = unbilled_periods.attempts + 1,
-              last_seen_at  = now(),
-              settled_by    = NULL,
-              settled_at    = NULL",
+              last_seen_at  = now()",
     )
     .bind(p.tenant)
     .bind(p.malo_id)
@@ -1343,7 +1337,6 @@ pub async fn record_unbilled_period(
     .bind(p.period_to)
     .bind(p.final_invoice)
     .bind(p.reason_code)
-    .bind(p.message)
     .bind(p.due_on)
     .execute(executor)
     .await
@@ -1351,8 +1344,36 @@ pub async fn record_unbilled_period(
     Ok(())
 }
 
+/// Drop up to 500 settled watch rows aged at least twelve weeks after issuance.
+#[must_use = "the sweep must observe a cleanup failure"]
+pub async fn purge_settled_unbilled(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+) -> anyhow::Result<u64> {
+    // Lock the actual invoice and attempt. A concurrent Storno either keeps
+    // this run off its row or recreates the refusal after this delete commits.
+    let removed = sqlx::query(
+        r"WITH expired AS (
+              SELECT p.ctid
+                FROM unbilled_period_status s
+                JOIN unbilled_periods p USING (tenant, lf_mp_id, malo_id, period_from, period_to)
+                JOIN billing_records i ON i.tenant = s.tenant AND i.id = s.settled_by
+               WHERE s.tenant = $1 AND i.outcome <> 'cancelled'
+                 AND i.dispatched_at <= now() - 84 * interval '24 hours'
+               ORDER BY i.dispatched_at, i.id
+               LIMIT 500 FOR UPDATE OF i, p SKIP LOCKED)
+          DELETE FROM unbilled_periods p USING expired e
+           WHERE p.tenant = $1 AND p.ctid = e.ctid",
+    )
+    .bind(tenant)
+    .execute(executor)
+    .await
+    .context("purge settled billing watch")?;
+    Ok(removed.rows_affected())
+}
+
 /// One recorded unbilled period, as the Desk's Heute and the MCP tool read it.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, schemars::JsonSchema, utoipa::ToSchema)]
 pub struct UnbilledPeriodRow {
     pub malo_id: String,
     pub lf_mp_id: String,
@@ -1364,8 +1385,6 @@ pub struct UnbilledPeriodRow {
     pub final_invoice: bool,
     /// Stable refusal code — word it from the catalogue, never show it raw.
     pub reason_code: String,
-    /// The refusal's developer message (for „Details").
-    pub message: String,
     /// § 40c Abs. 2 EnWG: the last day the invoice may reach the customer.
     #[schemars(with = "String", extend("format" = "date"))]
     pub due_on: Date,
@@ -1385,17 +1404,17 @@ pub struct UnbilledPeriodRow {
 ///
 /// A failed query.
 pub async fn list_unbilled_periods(
-    pool: &PgPool,
+    pool: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     open_only: bool,
     limit: i64,
 ) -> anyhow::Result<Vec<UnbilledPeriodRow>> {
     sqlx::query_as(
         r"SELECT malo_id, lf_mp_id, period_from, period_to, final_invoice, reason_code,
-                 message, due_on, (due_on - heute())::int AS days_left, attempts, settled_by
-            FROM unbilled_periods
+                 due_on, (due_on - heute())::int AS days_left, attempts, settled_by
+            FROM unbilled_period_status
            WHERE tenant = $1 AND (NOT $2 OR settled_by IS NULL)
-           ORDER BY due_on, malo_id, period_from
+           ORDER BY due_on, malo_id, period_from, lf_mp_id, period_to
            LIMIT $3",
     )
     .bind(tenant)
@@ -1407,7 +1426,7 @@ pub async fn list_unbilled_periods(
 }
 
 /// One Lieferant's § 40c Abs. 2 EnWG standing — the Überblick tile.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, schemars::JsonSchema, utoipa::ToSchema)]
 pub struct DeadlineSummaryRow {
     pub lf_mp_id: String,
     /// Open unbilled periods still inside their deadline.
@@ -1429,7 +1448,7 @@ pub struct DeadlineSummaryRow {
 ///
 /// A failed query.
 pub async fn deadline_summary(
-    pool: &PgPool,
+    pool: impl sqlx::PgExecutor<'_>,
     tenant: &str,
 ) -> anyhow::Result<Vec<DeadlineSummaryRow>> {
     sqlx::query_as(
@@ -1441,16 +1460,15 @@ pub async fn deadline_summary(
                      count(*) FILTER (
                          WHERE (dispatched_at AT TIME ZONE 'Europe/Berlin')::date > due_on)
                          AS late
-                FROM billing_records
-               WHERE tenant = $1 AND due_on IS NOT NULL AND is_correction = false
-                 AND dispatched_at IS NOT NULL
+                FROM billing_supply_originals
+               WHERE tenant = $1 AND dispatched_at IS NOT NULL
                  AND outcome <> 'cancelled'
                GROUP BY lf_mp_id),
           open AS (
               SELECT lf_mp_id,
                      count(*) FILTER (WHERE due_on >= heute()) AS owed,
                      count(*) FILTER (WHERE due_on < heute()) AS overdue
-                FROM unbilled_periods
+                FROM unbilled_period_status
                WHERE tenant = $1 AND settled_by IS NULL
                GROUP BY lf_mp_id)
           SELECT COALESCE(i.lf_mp_id, o.lf_mp_id) AS lf_mp_id,
@@ -1467,63 +1485,56 @@ pub async fn deadline_summary(
     .context("deadline_summary")
 }
 
-/// Claim the monthly § 40b Abs. 3 Abrechnungsinformation for a MaLo.
-///
-/// Returns `true` when this call inserted the claim (caller must now send the
-/// info), `false` when the month was already delivered — the UNIQUE guard
-/// makes the daily worker idempotent.
-pub async fn claim_abrechnungsinfo(
+/// Whether this issuer has queued the month's information for this MaLo.
+#[must_use = "a lookup failure must be observed"]
+pub async fn abrechnungsinfo_queued(
     pool: &PgPool,
     tenant: &str,
+    lf_mp_id: &str,
     malo_id: &str,
     year: i16,
     month: i16,
 ) -> anyhow::Result<bool> {
-    let row = sqlx::query(
-        r"INSERT INTO abrechnungsinfo_log (tenant, malo_id, info_year, info_month)
-          VALUES ($1, $2, $3, $4)
-          ON CONFLICT (tenant, malo_id, info_year, info_month) DO NOTHING
-          RETURNING id",
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM abrechnungsinfo_log
+          WHERE tenant = $1 AND lf_mp_id = $2 AND malo_id = $3 AND info_year = $4 AND info_month = $5)",
     )
-    .bind(tenant)
-    .bind(malo_id)
-    .bind(year)
-    .bind(month)
-    .fetch_optional(pool)
-    .await
-    .context("claim_abrechnungsinfo")?;
-    Ok(row.is_some())
+    .bind(tenant).bind(lf_mp_id).bind(malo_id).bind(year).bind(month)
+    .fetch_one(pool).await.context("read issued monthly information")
 }
 
-/// Release a § 40b Abs. 3 claim whose delivery did not happen.
-///
-/// The claim is taken *before* the work so two concurrent sweeps cannot both
-/// deliver. When the work then fails, holding the claim would suppress that
-/// month's Abrechnungsinformation permanently — the customer's statutory
-/// entitlement lost to a transient edmd outage. Releasing lets tomorrow's
-/// sweep retry inside the same month.
-pub async fn release_abrechnungsinfo_claim(
+/// Queue the event once per issuer, MaLo and month; a failed enqueue releases the claim.
+#[must_use = "the worker must observe a failed enqueue"]
+pub async fn enqueue_abrechnungsinfo(
     pool: &PgPool,
     tenant: &str,
+    lf_mp_id: &str,
     malo_id: &str,
     year: i16,
     month: i16,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        r"DELETE FROM abrechnungsinfo_log
-          WHERE tenant = $1 AND malo_id = $2 AND info_year = $3 AND info_month = $4",
+    event: &mako_service::CloudEvent,
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let claimed = sqlx::query(
+        "INSERT INTO abrechnungsinfo_log (tenant, lf_mp_id, malo_id, info_year, info_month)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (tenant, lf_mp_id, malo_id, info_year, info_month) DO NOTHING",
     )
     .bind(tenant)
+    .bind(lf_mp_id)
     .bind(malo_id)
     .bind(year)
     .bind(month)
-    .execute(pool)
-    .await
-    .context("release_abrechnungsinfo_claim")?;
-    Ok(())
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if claimed {
+        mako_service::outbox::enqueue(&mut tx, event).await?;
+    }
+    tx.commit().await?;
+    Ok(claimed)
 }
-
-// ── Risk scoring persistence ──────────────────────────────────────────────────
 
 /// History context for the deterministic risk scorer.
 pub async fn risk_context(

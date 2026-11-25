@@ -19,9 +19,9 @@ path = "src/main.rs"
 rubo4e       = { workspace = true }
 # A Berlin business date for the dates the seed writes relative to today.
 mako-fristen = { workspace = true }
-# `listen` verifies each delivery with the platform's own Standard Webhooks
-# check, never a copy of it.
-mako-service = { workspace = true }
+# Use the same signed events and LF demo persona as the services and Desk.
+mako-service = { workspace = true, features = ["oidc"] }
+mako-events  = { workspace = true }
 anyhow       = { workspace = true }
 axum         = { version = "0.8" }
 reqwest      = { workspace = true }

@@ -361,6 +361,7 @@ async fn a_refused_overwrite_names_the_occupying_document() {
         &pool,
         TENANT,
         MALO,
+        TENANT,
         "STROM-BASIS",
         date!(2026 - 01 - 01),
         date!(2026 - 01 - 31),
@@ -539,26 +540,45 @@ async fn the_monthly_run_log_accumulates_daily_sweeps() {
 }
 
 /// § 40b Abs. 3: the monthly Abrechnungsinformation is claimed exactly once
-/// per MaLo and month — the second daily sweep must not re-send it.
+/// for each issuer, MaLo and month. The outbox and the claim commit together.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn the_monthly_abrechnungsinfo_is_claimed_exactly_once() {
+async fn monthly_information_is_queued_once_per_issuer() {
     let Some((pool, _pg)) = test_pool("abrechnungsinfo").await else {
         return;
     };
-    let first = pg::claim_abrechnungsinfo(&pool, "9910000000002", "51238696781", 2026, 6)
+    let send = async |issuer, month| {
+        let event = mako_service::CloudEvent::new(
+            mako_service::source("billingd", TENANT),
+            mako_events::billing::ABRECHNUNGSINFORMATION_MONATLICH,
+            MALO,
+            serde_json::json!({"lf_mp_id":issuer}),
+        );
+        pg::enqueue_abrechnungsinfo(&pool, TENANT, issuer, MALO, 2026, month, &event).await
+    };
+    sqlx::query("ALTER TABLE event_outbox ADD CONSTRAINT reject_delivery CHECK (false)")
+        .execute(&pool)
         .await
-        .expect("first claim");
-    assert!(first, "first sweep claims the month");
-    let second = pg::claim_abrechnungsinfo(&pool, "9910000000002", "51238696781", 2026, 6)
+        .unwrap();
+    assert!(send(TENANT, 6).await.is_err());
+    assert!(
+        !pg::abrechnungsinfo_queued(&pool, TENANT, TENANT, MALO, 2026, 6)
+            .await
+            .unwrap()
+    );
+    sqlx::query("ALTER TABLE event_outbox DROP CONSTRAINT reject_delivery")
+        .execute(&pool)
         .await
-        .expect("second claim");
-    assert!(!second, "second sweep must not re-send");
-    // A different month claims independently.
-    let july = pg::claim_abrechnungsinfo(&pool, "9910000000002", "51238696781", 2026, 7)
+        .unwrap();
+    let (first, second) = tokio::join!(send(TENANT, 6), send(TENANT, 6));
+    assert_ne!(first.unwrap(), second.unwrap());
+    assert!(send("9900357000028", 6).await.unwrap());
+    assert!(send(TENANT, 7).await.unwrap());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM event_outbox")
+        .fetch_one(&pool)
         .await
-        .expect("july claim");
-    assert!(july);
+        .unwrap();
+    assert_eq!(count, 3);
 }
 
 // ── Deterministic risk gate ───────────────────────────────────────────────────
@@ -1810,7 +1830,6 @@ fn unbilled<'a>(reason: &'a str) -> pg::NewUnbilledPeriod<'a> {
         period_to: date!(2026 - 01 - 31),
         final_invoice: false,
         reason_code: reason,
-        message: "rate refused",
         due_on: date!(2026 - 03 - 14),
     }
 }
@@ -1881,6 +1900,332 @@ async fn an_unbilled_period_closes_on_its_invoice_and_reopens_on_storno() {
     assert_eq!(reopened.len(), 1, "a Storno re-opens the period's watch");
     assert_eq!(reopened[0].reason_code, "STORNIERT");
     assert_eq!(reopened[0].due_on, date!(2026 - 03 - 14));
+}
+
+async fn covers_period(pool: &PgPool, p: &pg::NewUnbilledPeriod<'_>) -> bool {
+    pg::billing_record_exists_for_period(
+        pool,
+        p.tenant,
+        p.malo_id,
+        p.lf_mp_id,
+        p.period_from,
+        p.period_to,
+    )
+    .await
+    .expect("sweep idempotency probe")
+}
+
+/// Each issuer owns its refusal, issued original and replacement even when another
+/// issuer bills the same MaLo and dates. nothing-unbilled/SR-111.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn supply_periods_are_isolated_by_issuer() {
+    let Some((pool, _pg)) = test_pool("supply_period_issuers").await else {
+        return;
+    };
+    let a = unbilled("NO_METER_DATA");
+    let b = pg::NewUnbilledPeriod {
+        lf_mp_id: "9900357000028",
+        reason_code: "RATE_REFUSED",
+        ..a
+    };
+    pg::record_unbilled_period(&pool, &a).await.unwrap();
+    pg::record_unbilled_period(&pool, &b).await.unwrap();
+    let open = pg::list_unbilled_periods(&pool, TENANT, true, 50)
+        .await
+        .unwrap();
+    assert_eq!(open.len(), 2);
+    assert!(open.iter().all(|p| p.attempts == 1));
+
+    let json = body();
+    let a_record = pg::NewBillingRecord {
+        due_on: Some(a.due_on),
+        ..draft(dec!(100), "ISSUER-A", &json)
+    };
+    let id_a = pg::insert_billing_record(&pool, &a_record).await.unwrap();
+    assert!(
+        covers_period(&pool, &a).await,
+        "the held original reserves A's period"
+    );
+    assert!(
+        !covers_period(&pool, &b).await,
+        "B still needs its own original"
+    );
+    assert_eq!(
+        pg::latest_billed_to(&pool, TENANT, MALO, b.lf_mp_id)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        pg::list_unbilled_periods(&pool, TENANT, true, 50)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    dispatch(&pool, id_a).await;
+    pg::record_unbilled_period(&pool, &a).await.unwrap();
+    let open = pg::list_unbilled_periods(&pool, TENANT, true, 50)
+        .await
+        .unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].lf_mp_id, b.lf_mp_id);
+    assert_eq!(open[0].reason_code, "RATE_REFUSED");
+
+    let id_b = pg::insert_billing_record(
+        &pool,
+        &pg::NewBillingRecord {
+            lf_mp_id: b.lf_mp_id,
+            rechnungsnummer: "ISSUER-B",
+            ..a_record
+        },
+    )
+    .await
+    .unwrap();
+    dispatch(&pool, id_b).await;
+    for (issuer, expected) in [(a.lf_mp_id, id_a), (b.lf_mp_id, id_b)] {
+        let found = pg::find_live_original(
+            &pool,
+            TENANT,
+            MALO,
+            issuer,
+            "STROM-BASIS",
+            a.period_from,
+            a.period_to,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            found.0, expected,
+            "a retry receives its issuer's occupying record"
+        );
+    }
+    storno(&pool, id_a, "ST-A", None).await;
+    assert!(!covers_period(&pool, &a).await);
+    assert!(covers_period(&pool, &b).await);
+    let open = pg::list_unbilled_periods(&pool, TENANT, true, 50)
+        .await
+        .unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(
+        (&*open[0].lf_mp_id, &*open[0].reason_code),
+        (a.lf_mp_id, "STORNIERT")
+    );
+
+    let replacement = pg::insert_billing_record(
+        &pool,
+        &pg::NewBillingRecord {
+            rechnungsnummer: "ISSUER-A2",
+            ..a_record
+        },
+    )
+    .await
+    .unwrap();
+    dispatch(&pool, replacement).await;
+    let all = pg::list_unbilled_periods(&pool, TENANT, false, 50)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 2);
+    assert!(
+        all.iter()
+            .any(|p| p.lf_mp_id == a.lf_mp_id && p.settled_by == Some(replacement))
+    );
+    assert!(
+        all.iter()
+            .any(|p| p.lf_mp_id == b.lf_mp_id && p.settled_by == Some(id_b))
+    );
+}
+
+/// A refusal can arrive while the issuing transaction still holds its invoice.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_concurrent_first_refusal_observes_the_committed_invoice() {
+    let Some((pool, _pg)) = test_pool("supply_period_concurrent").await else {
+        return;
+    };
+    let p = unbilled("RATE_REFUSED");
+    let json = serde_json::json!({"rechnungstyp": "ABSCHLUSSRECHNUNG"});
+    let id = pg::insert_billing_record(
+        &pool,
+        &pg::NewBillingRecord {
+            due_on: Some(p.due_on),
+            ..draft(dec!(100), "CONCURRENT-1", &json)
+        },
+    )
+    .await
+    .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    pg::mark_dispatched_tx(&mut *tx, id).await.unwrap();
+    pg::record_unbilled_period(&pool, &p).await.unwrap();
+    assert_eq!(
+        pg::list_unbilled_periods(&pool, TENANT, true, 50)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    tx.commit().await.unwrap();
+    assert!(
+        pg::list_unbilled_periods(&pool, TENANT, true, 50)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    storno(&pool, id, "ST-CONCURRENT", None).await;
+    let open = pg::list_unbilled_periods(&pool, TENANT, true, 50)
+        .await
+        .unwrap();
+    assert_eq!(open.len(), 1);
+    assert!(
+        open[0].final_invoice,
+        "the reversed invoice determines the kind"
+    );
+}
+
+/// Operational refusal history expires only after the newest live issuance.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn settled_watch_cleanup_preserves_open_obligations_and_originals() {
+    let Some((pool, _pg)) = test_pool("watch_retention").await else {
+        return;
+    };
+    let p = unbilled("RATE_REFUSED");
+    pg::record_unbilled_period(&pool, &p).await.unwrap();
+    let invalid = pg::NewUnbilledPeriod {
+        reason_code: "customer details",
+        ..p
+    };
+    assert!(pg::record_unbilled_period(&pool, &invalid).await.is_err());
+    let other = pg::NewUnbilledPeriod {
+        lf_mp_id: "9900357000028",
+        ..p
+    };
+    pg::record_unbilled_period(&pool, &other).await.unwrap();
+    let json = body();
+    let record = pg::NewBillingRecord {
+        due_on: Some(p.due_on),
+        ..draft(dec!(100), "RET-1", &json)
+    };
+    let older = pg::insert_billing_record(&pool, &record).await.unwrap();
+    dispatch(&pool, older).await;
+    sqlx::query(
+        "UPDATE billing_records SET dispatched_at = now() - interval '90 days' WHERE id = $1",
+    )
+    .bind(older)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let newer = pg::insert_billing_record(
+        &pool,
+        &pg::NewBillingRecord {
+            product_code: "SECOND",
+            rechnungsnummer: "RET-2",
+            ..record
+        },
+    )
+    .await
+    .unwrap();
+    dispatch(&pool, newer).await;
+    assert_eq!(pg::purge_settled_unbilled(&pool, TENANT).await.unwrap(), 0);
+    storno(&pool, newer, "ST-RET-2", None).await;
+    assert_eq!(
+        pg::purge_settled_unbilled(&pool, "another-tenant")
+            .await
+            .unwrap(),
+        0
+    );
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM billing_records WHERE id = $1 FOR UPDATE")
+        .bind(older)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        pg::purge_settled_unbilled(&pool, TENANT).await.unwrap(),
+        0,
+        "skip a busy invoice"
+    );
+    tx.commit().await.unwrap();
+    assert_eq!(pg::purge_settled_unbilled(&pool, TENANT).await.unwrap(), 1);
+    assert!(
+        pg::fetch_billing_record(&pool, TENANT, older)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let retained = pg::list_unbilled_periods(&pool, TENANT, false, 50)
+        .await
+        .unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].lf_mp_id, other.lf_mp_id);
+    storno(&pool, older, "ST-RET-1", None).await;
+    let open = pg::list_unbilled_periods(&pool, TENANT, true, 50)
+        .await
+        .unwrap();
+    assert_eq!(open.len(), 2);
+    assert!(
+        open.iter()
+            .any(|r| r.lf_mp_id == p.lf_mp_id && r.reason_code == "STORNIERT")
+    );
+}
+
+/// A settlement, bundle, child or Bescheid cannot discharge a supply invoice.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn only_a_supply_original_can_cover_the_period() {
+    let Some((pool, _pg)) = test_pool("supply_period_documents").await else {
+        return;
+    };
+    let p = unbilled("NO_METER_DATA");
+    pg::record_unbilled_period(&pool, &p).await.unwrap();
+    let json = body();
+    for (kind, category) in [
+        ("virtual", "VPP"),
+        ("bundle", "SAMMEL"),
+        ("child", "STROM"),
+        ("notice", "WASSER"),
+        ("no-due-date", "STROM"),
+    ] {
+        let id = pg::insert_billing_record(
+            &pool,
+            &pg::NewBillingRecord {
+                category,
+                product_code: kind,
+                due_on: (kind != "no-due-date").then_some(p.due_on),
+                ..draft(dec!(100), kind, &json)
+            },
+        )
+        .await
+        .unwrap();
+        if kind == "child" {
+            sqlx::query("UPDATE billing_records SET sammelrechnung_id = (SELECT id FROM billing_records WHERE tenant = $2 AND rechnungsnummer = 'bundle') WHERE id = $1")
+                .bind(id).bind(TENANT).execute(&pool).await.unwrap();
+        } else if kind == "notice" {
+            sqlx::query("UPDATE billing_records SET dokumentart = 'GEBUEHRENBESCHEID', bescheid_json = '{}'::jsonb WHERE id = $1")
+                .bind(id).execute(&pool).await.unwrap();
+        }
+        dispatch(&pool, id).await;
+        assert!(
+            !covers_period(&pool, &p).await,
+            "{kind} is not a supply original"
+        );
+        assert_eq!(
+            pg::latest_billed_to(&pool, TENANT, MALO, p.lf_mp_id)
+                .await
+                .unwrap(),
+            None
+        );
+        let open = pg::list_unbilled_periods(&pool, TENANT, true, 50)
+            .await
+            .unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].reason_code, "NO_METER_DATA");
+    }
+    let summary = pg::deadline_summary(&pool, TENANT).await.unwrap();
+    assert_eq!(summary.len(), 1);
+    assert_eq!((summary[0].issued_late, summary[0].issued_on_time), (0, 0));
 }
 
 /// Per Lieferant, invoices owed, issued on time, issued late, overdue.
@@ -2123,7 +2468,7 @@ async fn the_erp_webhook_receives_an_issued_event_signed_with_its_secret() {
 
     let cfg: billingd::config::BillingdConfig = serde_json::from_value(serde_json::json!({
         "database": {"url": url},
-        "tenant": TENANT,
+        "tenant": "stadtwerke-musterstadt",
         "productd_url": "http://127.0.0.1:1",
         "edmd_url": "http://127.0.0.1:1",
         "marktd_url": "http://127.0.0.1:1",
@@ -2143,10 +2488,10 @@ async fn the_erp_webhook_receives_an_issued_event_signed_with_its_secret() {
         .expect("the module starts");
 
     let ce = mako_service::CloudEvent::new(
-        mako_service::source("billingd", TENANT),
+        mako_service::source("billingd", "stadtwerke-musterstadt"),
         mako_events::billing::RECHNUNG_ERSTELLT,
         MALO.to_owned(),
-        serde_json::json!({ "malo_id": MALO }),
+        serde_json::json!({ "malo_id": MALO, "lf_mp_id": "9900357000028" }),
     );
     let mut tx = pool.begin().await.expect("begin");
     mako_service::outbox::enqueue(&mut tx, &ce)
@@ -2162,5 +2507,18 @@ async fn the_erp_webhook_receives_an_issued_event_signed_with_its_secret() {
         .expect("signed with erp_hmac_secret")
         .expect("a webhook-id");
     assert_eq!(id.0, ce.id, "webhook-id is the CloudEvent id");
+    let received: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(received["source"], ce.source);
+    assert_eq!(received["data"]["lf_mp_id"], "9900357000028");
     shutdown.cancel();
 }
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_lf_watch_checks_the_same_role_in_rest_and_mcp() {
+    let (url, _db) = pg_container().await.expect("test PostgreSQL starts");
+    let pool = PgPool::connect(&url).await.unwrap();
+    super::mcp_round_trips::check_lf_watch(pool).await;
+}
+
+mod discovery;

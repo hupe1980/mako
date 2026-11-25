@@ -9,10 +9,12 @@ import { verweigern } from "./verweigert";
 /** processd refused it; its stable code says why (`begruendung_required`, `case_closed`, …). */
 export class KlaerfallAbgelehnt extends Error {
   override name = "KlaerfallAbgelehnt";
+  readonly status: number;
   readonly code: string | undefined;
-  constructor(message: string, code: string | undefined) {
+  constructor(message: string, status: number, code: string | undefined) {
     super(message);
     this.code = code;
+    this.status = status;
   }
 }
 
@@ -33,7 +35,7 @@ export async function klaerfallSenden(
   });
   if (res.ok) return;
   const p = await problem(res);
-  if (res.status === 403)
-    throw verweigern({ dienst: "processd", aktion: "entscheiden" }, sentence(p));
-  throw new KlaerfallAbgelehnt(sentence(p), p.code);
+  const raw = p.code ? `${p.code}: ${sentence(p)}` : sentence(p);
+  if (res.status === 403) throw verweigern({ dienst: "processd", aktion: "entscheiden" }, raw);
+  throw new KlaerfallAbgelehnt(raw, res.status, p.code);
 }

@@ -1,7 +1,4 @@
-// A service answers with codes (`running`, `gpke`, `STROM`); the operator
-// reads the catalogue's word for each. Every code a view shows passes through
-// one of these — `cargo xtask check-desk` refuses one shown as it arrived.
-// A code the catalogue does not list yet shows as itself.
+// Operator labels for service codes come from the active catalogue.
 
 import { eintrag, katalog } from "../i18n";
 
@@ -26,8 +23,10 @@ export const abrechnungsGrund = (code: string): string =>
   eintrag(katalog().values.abrechnungsGrund, code);
 
 /** What a Klärfall asks for, by processd's `aktion`. */
-export const klaerfallAktion = (code: string): string =>
-  eintrag(katalog().values.klaerfallAktion, code);
+export function klaerfallAktion(code: string): string {
+  const t = katalog();
+  return eintrag(t.values.klaerfallAktion, code, t.klaerfall.aktionUnbekannt);
+}
 
 /** Where a Klärfall came from, by processd's `origins`. */
 export const klaerfallHerkunft = (code: string): string =>
@@ -43,5 +42,8 @@ export const runStatus = (code: string): string => eintrag(katalog().values.run,
 export function refusalCode(text: string): { code: string | null; sentence: string | null } {
   const m = /^([a-z][a-z0-9_]*): /.exec(text);
   const code = m?.[1] ?? null;
-  return { code, sentence: code ? (katalog().codes[code] ?? null) : null };
+  return {
+    code,
+    sentence: code && Object.hasOwn(katalog().codes, code) ? (katalog().codes[code] ?? null) : null,
+  };
 }

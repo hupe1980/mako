@@ -86,7 +86,7 @@ export function zustand(state: string): string {
   return eintrag(katalog().prozess.zustand, state);
 }
 
-/** What a pending deadline is for, by the kind makod states; the kind itself where it is unknown. */
+/** Purpose of a pending deadline. */
 export function fristArt(art: string): string {
   return eintrag(katalog().prozess.fristArt, art);
 }

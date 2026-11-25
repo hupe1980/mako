@@ -16,34 +16,18 @@ use mako_service::CloudEvent;
 use mako_service::outbox::{self, OutboxConfig};
 use mako_service::subscriptions::{self, Partner, Subscriptions, SubscriptionsConfig};
 use serde_json::{Value, json};
-use sqlx::postgres::PgPoolOptions;
-use testcontainers::ImageExt as _;
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 use tower::ServiceExt as _;
 use utoipa_axum::router::OpenApiRouter;
 
 const TENANT: &str = "t1";
 
-async fn pg_pool() -> sqlx::PgPool {
-    let container = Postgres::default()
-        .with_tag("17-alpine")
-        .start()
-        .await
-        .expect("start postgres");
-    let port = container.get_host_port_ipv4(5432).await.expect("port");
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    Box::leak(Box::new(container));
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("connect");
+async fn pg_pool() -> super::support::Database {
+    let (pool, container) = super::support::postgres(8).await;
     outbox::ensure_schema(&pool).await.expect("outbox schema");
     subscriptions::ensure_schema(&pool)
         .await
         .expect("subscription schema");
-    pool
+    (pool, container)
 }
 
 // ── Receiver ────────────────────────────────────────────────────────────────
@@ -234,7 +218,7 @@ async fn delivery_state(pool: &sqlx::PgPool, event_id: &str) -> (Option<i16>, bo
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn the_secret_is_shown_once() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let created = create(&app, "erp", "https://erp.example.com/hook", None).await;
@@ -271,7 +255,7 @@ async fn the_secret_is_shown_once() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn the_config_endpoint_cannot_be_written() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs =
         module(&pool).with_default_endpoint(Some("http://erp-adapter:8080/events".into()), None);
     subs.sync_config().await.unwrap();
@@ -313,7 +297,7 @@ async fn the_config_endpoint_cannot_be_written() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_config_endpoint_receives_its_filter_and_leaves_with_the_config() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let (rx, url) = receiver().await;
     let cfg: SubscriptionsConfig = toml::from_str(&format!(
         r#"
@@ -392,7 +376,7 @@ async fn a_config_endpoint_receives_its_filter_and_leaves_with_the_config() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_literal_loopback_is_refused_at_registration() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = Subscriptions::new(
         pool.clone(),
         "testd",
@@ -421,7 +405,7 @@ async fn a_literal_loopback_is_refused_at_registration() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_write_without_the_action_is_forbidden() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let only_feed = r#"permit(principal, action == Action::"read-events", resource);"#;
     let (app, _) = app(&subs, only_feed);
@@ -436,7 +420,7 @@ async fn a_write_without_the_action_is_forbidden() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_rotation_keeps_at_most_two_secrets() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let (rx, url) = receiver().await;
@@ -488,7 +472,7 @@ async fn a_rotation_keeps_at_most_two_secrets() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn an_earlier_event_for_the_same_subject_holds_the_next() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let (rx, url) = receiver().await;
@@ -526,7 +510,7 @@ async fn an_earlier_event_for_the_same_subject_holds_the_next() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn other_subjects_do_not_wait() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let (rx, url) = receiver().await;
@@ -550,7 +534,7 @@ async fn other_subjects_do_not_wait() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_410_deactivates_the_endpoint() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let (rx, url) = receiver().await;
@@ -582,7 +566,7 @@ async fn a_410_deactivates_the_endpoint() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_crash_before_commit_refans_the_event() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let (_rx, url) = receiver().await;
@@ -614,7 +598,7 @@ async fn a_crash_before_commit_refans_the_event() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_partner_endpoint_receives_only_its_partners_events() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let (rx1, url1) = receiver().await;
@@ -680,8 +664,11 @@ async fn a_partner_endpoint_receives_only_its_partners_events() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_window_replay_backfills_events_without_a_row() {
-    let pool = pg_pool().await;
-    let subs = module(&pool);
+    let (pool, _postgres) = pg_pool().await;
+    let subs = module(&pool).with_policy(OutboxConfig {
+        poll_interval: Duration::from_secs(3600),
+        ..OutboxConfig::default()
+    });
     let (app, _) = app(&subs, POLICY);
     let (rx_a, url_a) = receiver().await;
     create(&app, "a", &url_a, None).await;
@@ -694,6 +681,14 @@ async fn a_window_replay_backfills_events_without_a_row() {
     let (rx_b, url_b) = receiver().await;
     let b = create(&app, "b", &url_b, None).await;
     let id = b["endpoint"]["id"].as_str().unwrap();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    subs.start(shutdown.clone()).await.unwrap();
+    // Observing the database notification independently prevents a worker's
+    // initial drain from making a replay without a wake-up look successful.
+    let mut listener = sqlx::postgres::PgListener::connect_with(&pool)
+        .await
+        .unwrap();
+    listener.listen(outbox::NOTIFY_CHANNEL).await.unwrap();
     let now = time::OffsetDateTime::now_utc();
     let fmt = |t: time::OffsetDateTime| {
         t.format(&time::format_description::well_known::Rfc3339)
@@ -709,7 +704,7 @@ async fn a_window_replay_backfills_events_without_a_row() {
     .await;
     assert_eq!(status, StatusCode::OK, "{replayed}");
     assert_eq!(replayed["queued"], 2);
-    subs.drain().await;
+    expect_replay_delivery(&mut listener, &pool, id, 2).await;
     assert_eq!(rx_b.ids(), [e1.clone(), e2], "backfilled in commit order");
 
     // One delivery again, from the log.
@@ -733,14 +728,38 @@ async fn a_window_replay_backfills_events_without_a_row() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    subs.drain().await;
+    expect_replay_delivery(&mut listener, &pool, id, 2).await;
     assert_eq!(rx_b.ids().len(), 3);
+    shutdown.cancel();
+}
+
+/// A replay wakes on commit and the worker records the delivery before its
+/// fallback poll. Waiting for delivered_at also covers the HTTP response.
+async fn expect_replay_delivery(
+    listener: &mut sqlx::postgres::PgListener,
+    pool: &sqlx::PgPool,
+    endpoint: &str,
+    expected: i64,
+) {
+    let endpoint = uuid::Uuid::parse_str(endpoint).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        listener.recv().await.unwrap();
+        loop {
+            let delivered: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM webhook_deliveries WHERE tenant = $1 AND endpoint_id = $2 AND delivered_at IS NOT NULL",
+            ).bind(TENANT).bind(endpoint).fetch_one(pool).await.unwrap();
+            if delivered == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.expect("committed replay wakes the worker before the hourly poll");
 }
 
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_replay_outside_retention_names_the_oldest_instant() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let created = create(&app, "erp", "https://erp.example.com/hook", None).await;
@@ -769,7 +788,7 @@ async fn a_replay_outside_retention_names_the_oldest_instant() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn the_feed_pages_by_seq() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let mut emitted = Vec::new();
@@ -818,7 +837,7 @@ async fn the_feed_pages_by_seq() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn a_test_delivery_is_signed_like_a_real_one() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let (rx, url) = receiver().await;
@@ -849,7 +868,7 @@ async fn a_test_delivery_is_signed_like_a_real_one() {
 #[tokio::test]
 #[ignore = "needs Docker"]
 async fn an_endpoint_is_replaced_and_deleted_under_if_match() {
-    let pool = pg_pool().await;
+    let (pool, _postgres) = pg_pool().await;
     let subs = module(&pool);
     let (app, _) = app(&subs, POLICY);
     let created = create(&app, "erp", "https://erp.example.com/hook", None).await;

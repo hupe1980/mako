@@ -56,8 +56,8 @@ const SITES: &[(&str, usize, &str)] = &[
     ("services/vertragd/src/pg/kunden.rs", 3, SPLICE),
     ("services/vertragd/src/pg/messstellenvertrag.rs", 1, SPLICE),
     ("services/vertragd/src/pg/produkte.rs", 4, SPLICE),
-    ("services/vertragd/src/pg/sect14a.rs", 2, SPLICE),
-    ("services/vertragd/src/pg/vertraege.rs", 5, SPLICE),
+    ("services/vertragd/src/pg/sect14a.rs", 1, SPLICE),
+    ("services/vertragd/src/pg/vertraege.rs", 6, SPLICE),
 ];
 
 /// Scan the workspace. Returns `true` when both rules hold.

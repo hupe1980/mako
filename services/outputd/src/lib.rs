@@ -39,6 +39,7 @@ pub mod delivery;
 pub mod document;
 pub mod error;
 pub mod handlers;
+pub mod openapi;
 pub mod template_store;
 
 pub use daemon::Outputd;

@@ -108,7 +108,10 @@ CREATE INDEX IF NOT EXISTS event_outbox_feed ON event_outbox (txid, seq)
 CREATE OR REPLACE FUNCTION event_outbox_notify() RETURNS trigger
     LANGUAGE plpgsql AS $fn$
 BEGIN
-    IF EXISTS (SELECT 1 FROM inserted) THEN
+    -- Subscription replays also call this function. A worker claim or a
+    -- recorded delivery must not wake the worker that just processed it.
+    IF EXISTS (SELECT 1 FROM inserted WHERE TG_OP = 'INSERT'
+               OR (attempts = 0 AND delivered_at IS NULL AND dead_lettered_at IS NULL)) THEN
         PERFORM pg_notify('event_outbox', '');
     END IF;
     RETURN NULL;
@@ -680,7 +683,7 @@ impl OutboxWorker {
         let secret = match &self.target {
             Target::CloudEvents { secret, .. } => secret
                 .as_ref()
-                .map(|s| s.expose_secret().as_bytes().to_vec()),
+                .map(|s| crate::webhook::signing_key(s.expose_secret())),
             Target::Commands { .. } => None,
         };
         for row in rows {
@@ -789,7 +792,7 @@ impl OutboxWorker {
             req = req.bearer_auth(b.expose_secret());
             if signed {
                 for (name, value) in crate::webhook::headers(
-                    b.expose_secret().as_bytes(),
+                    &crate::webhook::signing_key(b.expose_secret()),
                     &cmd.key,
                     time::OffsetDateTime::now_utc().unix_timestamp(),
                     &payload,

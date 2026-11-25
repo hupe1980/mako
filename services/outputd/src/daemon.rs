@@ -111,7 +111,9 @@ impl Daemon for Outputd {
         // `issue` committed with each document.
         crate::delivery::worker::spawn(ctx.pool().clone(), Arc::clone(&cfg), ctx.shutdown.clone());
 
-        Ok(Router::new()
+        let (evidence, document) = crate::openapi::router();
+        Ok(evidence
+            .merge(mako_service::openapi::serve(document))
             .route("/api/v1/render/{kind}", post(handlers::post_render))
             // ── Issued documents and their delivery ───────────────────────────
             //

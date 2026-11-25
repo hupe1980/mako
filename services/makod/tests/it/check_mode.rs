@@ -386,17 +386,9 @@ allow_no_signng = true   # not a field — the real name is allow_no_signing
 
 /// `--check` must not run the boot's write step.
 ///
-/// # Why this is a test
-///
-/// Pipelines run `--check` against the live configuration, which names the live
-/// `--data-dir`. The process-registry reconciliation is the one startup step
-/// that writes domain state, so it has to be sequenced *after* the check exit —
-/// otherwise validating a configuration mutates the store it is validating.
-///
-/// The reconciliation logs unconditionally, including when it finds nothing, so
-/// the absence of that line is what proves it did not run. Diffing the data
-/// directory would not: SlateDB writes its own manifest and WAL bookkeeping
-/// whenever a store is opened, whether or not anything is stored in it.
+/// A deployment check may open an idle SlateDB and update its manifest. It exits
+/// before policy writes or process reconciliation. The reconciliation logs even
+/// when its scan finds zero entries.
 #[test]
 fn check_does_not_run_the_process_registry_reconciliation() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -434,8 +426,7 @@ primary = true
     assert!(
         !logs.contains("ProcessRegistry reconciliation"),
         "--check reached the process-registry reconciliation, which writes. \
-         It must be sequenced after the check-mode exit so a pipeline can \
-         validate a live configuration without mutating the store.\nlogs: {logs}",
+         A configuration check must exit before domain writes.\nlogs: {logs}",
     );
     // The check did get far enough to be meaningful — otherwise the assertion
     // above would pass for a binary that exited before doing anything.

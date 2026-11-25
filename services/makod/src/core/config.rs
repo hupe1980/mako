@@ -307,7 +307,7 @@ mako_service::policy_choice! {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartyConfig {
-    /// 13-digit BDEW-Codenummer, DVGW-Codenummer, or 16-char EIC (Marktpartner-ID).
+    /// 13-digit BDEW-Codenummer, DVGW-Codenummer or GS1 GLN.
     /// Must be globally unique per entry.
     /// BDEW-Codenummern start with `99`, DVGW-Codenummern with `98`.
     /// Only GS1-issued 13-digit codes are true GLNs (Allgemeine Festlegungen Kap. 2.13).

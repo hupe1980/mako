@@ -61,7 +61,7 @@ fn main() {
                 let ty = f.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
                 writeln!(
                     schemas,
-                    "    ({ty:?}, include_str!({:?})),",
+                    "    ({name:?}, {ty:?}, include_str!({:?})),",
                     f.display().to_string()
                 )
                 .unwrap();
@@ -73,8 +73,8 @@ fn main() {
          pub static OPENAPI: &[(&str, &str)] = &[\n{openapi}];\n\
          /// Every service's committed MCP tool snapshot.\n\
          pub static MCP_SNAPSHOTS: &[(&str, &str)] = &[\n{mcp}];\n\
-         /// Every published event schema, by type.\n\
-         pub static EVENT_SCHEMAS: &[(&str, &str)] = &[\n{schemas}];\n"
+         /// Every published event schema, by service and type.\n\
+         pub static EVENT_SCHEMAS: &[(&str, &str, &str)] = &[\n{schemas}];\n"
     );
     let dest = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("documents.rs");
     std::fs::write(dest, out).expect("OUT_DIR is writable");

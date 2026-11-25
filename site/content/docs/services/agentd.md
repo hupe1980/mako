@@ -952,9 +952,9 @@ curl -X POST http://agentd:9580/webhook \
   -d '{
     "specversion": "1.0",
     "type": "de.mako.billing.rechnung.erstellt",
-    "source": "urn:mako:billingd:tenant:9900357000004",
+    "source": "urn:mako:billingd:tenant:stadtwerke-musterstadt",
     "id": "123e4567-e89b-12d3-a456-426614174000",
-    "data": { "malo_id": "51238696012", "record_id": "..." }
+    "data": { "malo_id": "51238696012", "lf_mp_id": "9900357000028", "record_id": "..." }
   }'
 ```
 

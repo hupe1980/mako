@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.46.0"
+    "version": "0.47.0"
   },
   "paths": {
     "/admin/malo/stats": {
@@ -469,7 +469,7 @@
           "format-candidates"
         ],
         "summary": "Which of the operator's archived messages candidate `fv` would newly\nrefuse.",
-        "description": "# Errors\n\n`invalid_format_version`, `candidate_not_found`, `candidate_invalid`,\n`archive_unavailable`, `invalid_format`.",
+        "description": "# Errors\n\n`invalid_format_version`, `candidate_not_found`, `candidate_invalid`,\n`candidate_catalog_unavailable`, `archive_unavailable`, `invalid_format`.",
         "operationId": "impact_route",
         "parameters": [
           {
@@ -515,7 +515,7 @@
             "description": "candidate_invalid"
           },
           "503": {
-            "description": "archive_unavailable"
+            "description": "archive_unavailable or candidate_catalog_unavailable"
           }
         },
         "security": [
@@ -1055,7 +1055,7 @@
           },
           "not_read": {
             "type": "object",
-            "description": "Files not read, per reason (`compressed`, `unnamed`, `unparseable`,\n`no_binding_profile`).",
+            "description": "Unassessed input by reason. `compressed`, `unnamed` and `unparseable`\ncount files. `no_binding_profile` counts messages.",
             "additionalProperties": {
               "type": "integer",
               "minimum": 0

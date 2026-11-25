@@ -32,7 +32,7 @@ pub struct WorkerRuntime {
     pub pool: PgPool,
     pub client: Arc<reqwest::Client>,
     pub outbound_url: Arc<String>,
-    pub outbound_secret: Option<Arc<String>>,
+    pub outbound_secret: Option<Arc<[u8]>>,
     pub tenant: String,
     pub deadline_sweep_secs: u64,
     pub deadline_warn_hours: i64,
@@ -76,7 +76,7 @@ async fn emit_obs_event(
         &rt.client,
         rt.outbound_url.as_str(),
         &ce,
-        rt.outbound_secret.as_deref().map(|s| s.as_bytes()),
+        rt.outbound_secret.as_deref(),
     )
     .await
     {

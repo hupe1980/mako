@@ -560,6 +560,8 @@ transaction, a record with every monetary field negated (`is_correction = true`,
 credit, and cancels the payout item of a Schlussrechnung's Guthaben), and sets
 the original's `outcome = cancelled`.
 
+The invoice event identifies the deployment in `source` (`urn:mako:billingd:tenant:<tenant>`) and the invoice issuer in `data.lf_mp_id`. accountingd checks both before booking and requires a nonblank event ID and account reference. The reference identifies the Marktlokation or the collective account of a Sammelrechnung.
+
 Every `de.mako.billing.rechnung.erstellt` carries `schlussrechnung`, `true` for a
 Schlussrechnung's own event — read off the issued document's `rechnungstyp`
 (`ABSCHLUSSRECHNUNG`), never on a Storno. accountingd raises the § 40c Abs. 3
@@ -824,22 +826,23 @@ cadence period the supply ends in is never billed as an ordinary invoice, and a
 supply already billed through its end gets none. A `lieferende` already past
 ends the supply even before vertragd's Ablauf worker flags it.
 
-**The § 40c watch.** Every period the sweep attempts and cannot bill is a row
-in `unbilled_periods`: MaLo, Lieferant, period, whether it is the
-Abschlussrechnung, the refusal code (`NO_METER_DATA` when the Schlussablesung
-has not arrived, `RATE_REFUSED`, `ABSCHLAEGE_UNBEKANNT`, …) and `due_on` from
-`mako_fristen::vorlauf::abrechnung_faellig` — six weeks after the period's end,
-three under § 40b Abs. 1 monthly billing, six after `lieferende` for the
-Abschlussrechnung (§ 40c Abs. 2 EnWG). A later failure refreshes the row; an
-invoice for the period, by any path, closes it (`settled_by`); a Storno of that
-invoice re-opens it as `STORNIERT`. Every issued invoice of a supply period
-carries the same date as `billing_records.due_on`, which is what
-`GET /api/v1/billing/deadline-summary` counts on time or late. The watch is fed
-by the run: with `[billing_runs] enabled = false` it records nothing.
+### Billing watch and recovery
+
+Open **Heute** in the Lieferant workspace for open periods and **Überblick** for the per-Lieferant totals. Expand the discovery result to inspect when billingd asked vertragd for the roster, the range of ended supplies it covered and its next scheduled attempt. A completed run with two candidates assessed two supply components. Each component can yield several billing periods. A current or failed run has an unknown candidate count. A missing attempt means the installation has recorded none.
+
+Both `GET /api/v1/billing/unbilled` and `GET /api/v1/billing/deadline-summary` return the latest attempt and last recorded failure. Their MCP twins return the same evidence. A held invoice leaves its period open. Only issuance of an eligible live retail original for the same tenant, Lieferant, MaLo and exact dates discharges it. A Storno makes that issuer’s period open again when there is no other eligible issued original. The Desk shows the refusal and the due date. Issuance and the authorized output channel's delivery evidence appear separately on the invoice. The statutory duty to make the invoice available to the customer is described in § 40c Abs. 2 EnWG. [EnWG, § 40c Abs. 2](https://www.gesetze-im-internet.de/enwg_2005/__40c.html)
+
+To recover, an LF operator can call `POST /api/v1/billing/runs/sweep` with JSON body `{}` and a UUID `Idempotency-Key`. This runs the installation's ordinary billing and delivery policy. Reuse the key to reconcile a lost response. Use a fresh key for a new attempt after correcting the reported failure. A concurrent sweep returns a conflict. Automatic billing can be disabled independently of manual recovery.
+
+Each attempt stores the source window before contacting vertragd. A missing roster, a mismatched range or count, an unknown billing cadence, or an inconsistent supply interval leaves coverage open. After restart, the next worker records an abandoned attempt as interrupted. After a long outage each successful run covers one outstanding inclusive interval of at most 85 dates, oldest first, alongside current active supplies. Inspect `ended_through` and repeat until it reaches the current Berlin date. A successfully examined empty list advances that interval. Only dates since the installation's first discovery window can be reconstructed automatically.
+
+For a retail invoice, the product assignments, § 14a module choice and customer contract are selected for the invoice’s issuer and supply interval. Delivery resolves the recipient with the stored period and issuer. Overlapping supply components and product assignments that leave a gap or bill a day twice are refused.
+
+The operational watch stores a stable refusal code. Each run can remove up to 500 settled entries whose latest eligible issuance is at least 84 days old. Open obligations and the canonical invoices survive cleanup. The limit is an engineering choice for these working records.
 
 **Advances.** A Jahresrechnung deducts the paid Abschläge, each at its own rate
 (§ 40 Abs. 1 EnWG, § 14 Abs. 5 Satz 2 UStG), read from accountingd
-(`GET /api/v1/accounts/{malo}/abschlaege`). An unreachable accountingd is an
+(`GET /api/v1/accounts/{malo}/abschlaege` with the invoice’s `lf_mp_id`, `from` and `to`). An unreachable accountingd is an
 error. Without `accountingd_url` a settling cadence is recorded as
 `ABSCHLAEGE_UNBEKANNT` in `unbilled_periods` unless `jahresrechnung = true`
 declares that no advances are collected.
@@ -852,8 +855,7 @@ retried with `POST …/versenden`. A held period is never sent.
 
 **§ 40b Abs. 3 EnWG.** With `abrechnungsinformation` (default true) iMSys MaLos
 get the free monthly `de.mako.billing.abrechnungsinformation.monatlich`, claimed once
-per MaLo and month in `abrechnungsinfo_log` and released again on every path
-that does not deliver.
+per tenant, Lieferant, MaLo and month in `abrechnungsinfo_log`. The claim and its outbound event commit together.
 
 ---
 
@@ -984,6 +986,7 @@ public_url = "https://kundenportal.example.de/nachrechnen/"
 | `POST` | `/api/v1/billing/vpp/{vpp_id}` | Manual § 41e settlement |
 | `POST` | `/api/v1/webhooks/vpp-dispatch` | Signed `de.mako.vpp.dispatch.confirmed` |
 | `GET` | `/api/v1/billing/review-queue` | REVIEW and HELD, highest risk first |
+| `POST` | `/api/v1/billing/runs/sweep` | Run or reconcile one manual sweep using a UUID Idempotency-Key |
 | `GET` | `/api/v1/billing/unbilled` | The § 40c watch, earliest `due_on` first (`?open=false` includes settled) |
 | `GET` | `/api/v1/billing/deadline-summary` | Per Lieferant: owed, issued on time, issued late, overdue |
 | `GET` | `/api/v1/billing/{id}/nachrechnung` | The record recomputed, with the seal verdict |
@@ -1046,7 +1049,9 @@ equality is part of every rule, and Cedar is default-deny.
 
 | Action | Routes | Roles |
 |---|---|---|
-| `read-billing` | `GET /api/v1/billing…`, review queue, renderings, the § 40c watch, Nachrechnung | any caller of the tenant |
+| `read-billing` | Billing records, review queue, renderings and Nachrechnung | any caller of the tenant |
+| `read-billing-watch` | Unbilled periods and deadline summary, including their MCP reads | `LF` |
+| `run-billing-sweep` | Manual billing sweep | `LF` |
 | `preview-billing` | `…/preview` | any caller of the tenant |
 | `run-billing` | `/calculate`, `/tarifwechsel`, `/sammelrechnung/…`, `/ggv/…` | `LF`, `MSB`, `ESA` |
 | `issue-billing` | `…/versenden` | `LF`, `MSB`, `ESA` |
@@ -1105,7 +1110,8 @@ Prompts: `order-to-cash`, `preview-invoice`, `check-dynamic-tariff`,
 |---|---|
 | `billing_records` | `id`, `malo_id`, `lf_mp_id`, `product_code`, `category`, `rechnungsnummer`, `period_from/to`, `rechnung_json` (BO4E), `en16931_json` (model), `en16931_blocked`, `dokumentart` (`RECHNUNG`/`GEBUEHRENBESCHEID`), `bescheid_json`, `empfaenger_unternehmer`, `bo4e_version`, totals, `outcome` (`generated` → `dispatched` → `paid`/`partial`/`disputed`; `cancelled`), `risk_score/band/findings`, `released_by/at`, `reviewed_by/at`, `template_hash`, `billing_run_id`, `due_on` (§ 40c Abs. 2), `seal_sha256`, `verify_token_sha256`, `verify_revoked_at` |
 | `steuerzeilen` | One typed Strom-/Energiesteuer line per document: `steuer`, `art` (`REGELSATZ`/`ERMAESSIGUNG`/`BEFREIUNG`), `rechtsgrundlage`, `menge`, `einheit`, `satz_ct`, `betrag_eur`, the supply period — written by the statement that writes the `billing_records` row (a re-run draft's lines are replaced); a consolidated document carries none, its children do |
-| `unbilled_periods` | The § 40c watch: `(tenant, malo_id, period_from, period_to)`, `lf_mp_id`, `final_invoice`, `reason_code`, `message`, `due_on`, `attempts`, `settled_by/at`; closed and re-opened by triggers on `billing_records` |
+| `unbilled_periods` | Refused periods keyed by tenant, issuer, MaLo and dates. `unbilled_period_status` derives settlement from live issued supply invoices. |
+| `billing_discovery` · `billing_discovery_issuers` | Attempt, coverage window, source outcome and each enumerated issuer’s results |
 | `invoice_number_series` | `(tenant, series, year)` → `last_value`, allocated by upsert under a row lock |
 | `vpp_dispatch_ledger` | `tx_id` (PK), `tenant`, `record_id` |
 | `billing_run_log` | Monthly sweep audit |

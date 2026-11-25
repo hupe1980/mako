@@ -3,6 +3,7 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { vergessen } from "../data/verweigert";
+import { katalog, ladeSprache, setSprache } from "../i18n";
 import { RolleProvider } from "./rollen";
 import { createDeskRouter } from "./router";
 
@@ -22,6 +23,8 @@ async function open(path: string) {
       </RolleProvider>
     </QueryClientProvider>,
   );
+  // The recovery notice mounts from a lazy header after the first paint.
+  await act(() => vi.dynamicImportSettled());
 }
 
 afterEach(() => {
@@ -30,6 +33,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vergessen();
   localStorage.clear();
+  setSprache("de");
 });
 
 const freigabe = (status: string, decided_by: string | null) => ({
@@ -89,6 +93,49 @@ function stub(opts: { posts: { url: string; headers: Headers }[]; queueEntry?: u
 }
 
 describe("a held decision's delivery", () => {
+  it.each(["de", "en"] as const)(
+    "states an unknown outcome in %s for the other decision lists without replay",
+    async (language) => {
+      await ladeSprache(language);
+      setSprache(language);
+      const kinds = ["disput", "pruefposten", "buchung", "gehalten"] as const;
+      localStorage.setItem(
+        "mako-desk.unbestaetigt",
+        JSON.stringify(
+          kinds.map((art) => ({
+            key: `${art}/fixture`,
+            label: "optimistic-success-label",
+            schluessel: crypto.randomUUID(),
+          })),
+        ),
+      );
+      const writes: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (init?.method === "POST" && !url.endsWith("/mcp")) writes.push(url);
+          if (url.endsWith("/mcp")) {
+            const m = JSON.parse(String(init?.body));
+            return Response.json(
+              { jsonrpc: "2.0", id: m.id, result: {} },
+              { headers: { "mcp-session-id": "test" } },
+            );
+          }
+          return Response.json([]);
+        }),
+      );
+      await open("/heute");
+      const t = katalog();
+      const notice = await screen.findByRole("region", { name: t.unbestaetigt.titel });
+      const rows = within(notice).getAllByRole("listitem");
+      expect(rows.map((row) => row.textContent)).toEqual(
+        kinds.map((art) => `${t.aktionen.art[art]} — ${t.unbestaetigt.inDerListe}`),
+      );
+      expect(notice.textContent).not.toContain("optimistic-success-label");
+      fireEvent.click(within(notice).getByRole("button", { name: t.unbestaetigt.verstanden }));
+      expect(writes).toEqual([]);
+    },
+  );
   it("a_decision_flushed_on_pagehide_shows_its_outcome_next_load", async () => {
     const posts: { url: string; headers: Headers }[] = [];
     stub({ posts });

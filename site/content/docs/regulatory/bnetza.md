@@ -257,8 +257,8 @@ a plant onto the Jahresmarktwert (Anlage 1 Nr. 2 Satz 3 EEG).
 
 **Current ruling:**
 - **GeLi Gas 3.0** — **BK7-24-01-009** (Beschluss 12.09.2025, abgeschlossen 24.09.2025)
-  - [Beschluss PDF](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK7-GZ/2024/BK7-24-0009/Anlagen/BK7-24-01-0009_Beschluss_Download_BF.pdf)
-  - [Anlage PDF](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK7-GZ/2024/BK7-24-0009/Anlagen/BK7-24-01-0009_Anlage_Download_BF.pdf)
+  - [Beschluss PDF](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK7-GZ/2024/BK7-24-0009/Anlagen/BK7-24-01-0009_Beschluss_DL_BF.pdf?__blob=publicationFile&v=4)
+  - [Anlage PDF](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK7-GZ/2024/BK7-24-0009/Anlagen/BK7-24-01-0009_Anlage_Download_BF.pdf?__blob=publicationFile&v=7)
   - **Anwendung:** Tenor gilt ab **01.01.2026** (Ziff. 18) — mit Ausnahme von Ziff. 13–16:
     der Widerruf von BK7-17-026 und der neue **Messstellenbetreiberrahmenvertrag Gas**
     (§9 Abs. 1 Ziff. 3 MsbG) werden zum **01.10.2026** wirksam bzw. fällig

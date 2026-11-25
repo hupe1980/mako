@@ -721,3 +721,30 @@ CREATE TABLE decision_idempotency (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant, key)
 );
+
+-- A locally installed review generation is immutable. The head serializes imports
+-- with decisions so a reader cannot acknowledge a superseded assessment.
+CREATE TABLE shadow_review_head (
+    tenant TEXT NOT NULL, nb TEXT NOT NULL, scope TEXT NOT NULL,
+    generation BIGINT NOT NULL CHECK (generation > 0),
+    digest TEXT NOT NULL,
+    PRIMARY KEY (tenant, nb, scope)
+);
+CREATE TABLE shadow_review_resolution (
+    tenant TEXT NOT NULL, nb TEXT NOT NULL, scope TEXT NOT NULL,
+    generation BIGINT NOT NULL, occurrence TEXT NOT NULL,
+    disposition TEXT NOT NULL CHECK (disposition IN ('alt_falsch', 'mako_korrigiert')),
+    actor TEXT NOT NULL, reason TEXT NOT NULL, evidence TEXT NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, nb, scope, occurrence, generation),
+    FOREIGN KEY (tenant, nb, scope) REFERENCES shadow_review_head (tenant, nb, scope)
+);
+
+CREATE TABLE shadow_review_generation (
+    tenant TEXT NOT NULL, nb TEXT NOT NULL, scope TEXT NOT NULL,
+    generation BIGINT NOT NULL, content_digest TEXT NOT NULL, packet JSONB NOT NULL,
+    corrections TEXT[] NOT NULL,
+    PRIMARY KEY (tenant, nb, scope, generation),
+    UNIQUE (tenant, nb, scope, content_digest),
+    FOREIGN KEY (tenant, nb, scope) REFERENCES shadow_review_head (tenant, nb, scope)
+);

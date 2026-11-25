@@ -94,7 +94,9 @@ pub fn document() -> utoipa::openapi::OpenApi {
         "unused",
         mako_service::subscriptions::SubscriptionsConfig::default(),
     );
-    api(&subs).split_for_parts().1
+    let mut document = api(&subs).split_for_parts().1;
+    document.merge(crate::shadow::api().split_for_parts().1);
+    document
 }
 
 #[cfg(test)]

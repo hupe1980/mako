@@ -12,8 +12,9 @@ use crate::world::{self, STADTWERK};
 /// Fill the estate.
 pub async fn run(estate: &Estate) -> anyhow::Result<()> {
     let started = std::time::Instant::now();
+    let moved_out = crate::move_out::Household::previous_month(mako_fristen::heute())?;
     say("Marktlokationen, Messlokationen and the Preisblatt (marktd)");
-    stammdaten(estate).await?;
+    stammdaten(estate, &moved_out).await?;
     say("Marktpartner (marktd, makod) and the BKV's Zuordnungsermächtigung");
     partner(estate).await?;
     say("Anmeldungen: one answered, one held for a Freigabe, one a Klärfall (makod → processd)");
@@ -36,6 +37,8 @@ pub async fn run(estate: &Estate) -> anyhow::Result<()> {
     gegenpartei(estate).await?;
     say("last month's meter readings for every household (edmd)");
     ablesungen(estate).await?;
+    say("a moved-out household and its Schlussrechnung from the LF billing run");
+    crate::move_out::seed(estate, &moved_out).await?;
     say("a message no workflow takes, in makod's dead letters");
     dead_letter(estate).await?;
     println!(
@@ -63,7 +66,7 @@ pub fn lieferbeginn() -> Date {
     Date::from_calendar_date(year, month, 1).unwrap_or(today)
 }
 
-async fn stammdaten(estate: &Estate) -> anyhow::Result<()> {
+async fn stammdaten(estate: &Estate, moved_out: &crate::move_out::Household) -> anyhow::Result<()> {
     estate
         .put(
             "marktd",
@@ -123,6 +126,7 @@ async fn stammdaten(estate: &Estate) -> anyhow::Result<()> {
 
     let mut malos: Vec<String> = (0..world::GRID_MALOS).map(world::grid_malo).collect();
     malos.push(world::ERIKA_MALO.to_owned());
+    malos.push(moved_out.malo.clone());
     for (n, malo) in malos.iter().enumerate() {
         let mut body = world::body("malo.json");
         body["data"]["marktlokationsId"] = json!(malo);
@@ -150,6 +154,9 @@ async fn stammdaten(estate: &Estate) -> anyhow::Result<()> {
             .put("marktd", &format!("/api/v1/melos/{melo}"), &melo_body)
             .await?
             .ok("PUT melo")?;
+        if *malo == moved_out.malo {
+            moved_out.register_meter(estate, &melo).await?;
+        }
         let mut edge = world::body("marktd-lokationszuordnung.json");
         edge["von_id"] = json!(malo);
         edge["nach_id"] = json!(melo);
@@ -157,20 +164,23 @@ async fn stammdaten(estate: &Estate) -> anyhow::Result<()> {
             .put("marktd", "/api/v1/lokationszuordnungen", &edge)
             .await?
             .ok("PUT lokationszuordnung")?;
+        let mut msb = world::body("marktd-melo-msb.json");
+        if *malo == moved_out.malo {
+            msb["msb_mp_id"] = json!(world::MSB_MESSWERTE);
+        }
         estate
-            .put(
-                "marktd",
-                &format!("/api/v1/melos/{melo}/msb"),
-                &world::body("marktd-melo-msb.json"),
-            )
+            .put("marktd", &format!("/api/v1/melos/{melo}/msb"), &msb)
             .await?
             .ok("PUT melo msb")?;
-        // Supplied until the end of June and free since — an Anmeldung on it
-        // needs no Beendigung of a running Zuordnung first — except the
-        // Klärfall's MaLo, of which marktd holds no supply record at all.
+        // Free MaLos can take an Anmeldung immediately. Erika still has supply,
+        // the departed household has a confirmed end, and the Klärfall has no
+        // supply record for marktd to answer from.
         if *malo != world::klaerfall_malo() {
             let mut versorgung = world::body("marktd-versorgung.json");
-            if malo == world::ERIKA_MALO {
+            if *malo == moved_out.malo {
+                versorgung["lieferende"] = json!(moved_out.through);
+                versorgung["msb_mp_id"] = json!(world::MSB_MESSWERTE);
+            } else if malo == world::ERIKA_MALO {
                 versorgung = json!({
                     "lieferstatus": "Beliefert",
                     "lf_mp_id": world::STADTWERK_LF,

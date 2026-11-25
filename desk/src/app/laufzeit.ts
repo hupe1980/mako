@@ -25,9 +25,15 @@ export interface Laufzeit {
   /** The operator manual a finding's `referenz` opens, without a trailing slash. */
   handbuch: string;
   demo: Demo | null;
+  /** The Desk gateway serves an isolated processd review installation. */
+  shadowReview: boolean;
 }
 
-export const STANDARD: Laufzeit = { handbuch: "https://hupe1980.github.io/mako", demo: null };
+export const STANDARD: Laufzeit = {
+  handbuch: "https://hupe1980.github.io/mako",
+  demo: null,
+  shadowReview: false,
+};
 
 const PERSONA_ID = /^[a-z0-9-]{1,32}$/;
 
@@ -49,12 +55,13 @@ function demoAus(json: unknown): Demo | null {
 
 /** The configuration as read: an `https:` (or same-origin) manual URL, else the default. */
 export function laufzeitAus(json: unknown): Laufzeit {
-  const j = json as { handbuch?: unknown; demo?: unknown } | null;
+  const j = json as { handbuch?: unknown; demo?: unknown; shadowReview?: unknown } | null;
   const h = j?.handbuch;
   const gueltig = typeof h === "string" && (h.startsWith("https://") || h.startsWith("/"));
   return {
     handbuch: gueltig ? h.replace(/\/+$/, "") : STANDARD.handbuch,
     demo: demoAus(j?.demo),
+    shadowReview: j?.shadowReview === true,
   };
 }
 

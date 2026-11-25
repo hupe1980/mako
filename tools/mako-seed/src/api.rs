@@ -30,7 +30,7 @@ const MAKOD_KEY: &str = "dev-makod-key";
 
 /// The running estate.
 pub struct Estate {
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     compose: bool,
 }
 

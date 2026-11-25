@@ -659,7 +659,7 @@ The Regelungen zum Übertragungsweg für AS4 2.6 checks:
 | Resource | Description |
 |---|---|
 | [BDEW AS4-Profil 1.2](https://www.edi-energy.de) | AS4 specification (01.04.2026) |
-| [Regelungen zum Übertragungsweg für AS4 2.6](https://www.bundesnetzagentur.de) | Certificates, rollover, revocation (01.10.2026) |
+| [Regelungen zum Übertragungsweg für AS4 2.6](https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Mitteilung_56/Anlagen/Regelungen_zum_Uebertragungsweg_AS4_2_6_20260401.pdf?__blob=publicationFile&v=1) | Certificates, rollover, revocation (01.10.2026) |
 | [BSI TR-03116-3](https://www.bsi.bund.de) | Cryptographic requirements |
 | [RFC 5639](https://www.rfc-editor.org/rfc/rfc5639) | BrainpoolP256r1 |
 | [makod operator guide](@/docs/services/makod.md) | Full makod configuration reference |

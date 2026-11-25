@@ -1070,43 +1070,32 @@ pub async fn record_iftsta_delivered(
     Ok(())
 }
 
-/// Orders whose IFTSTA 21039 is not going to arrive by itself, and that have
-/// not been escalated yet.
-///
-/// Two triggers, deliberately:
-///
-/// * the order's outbox command was dead-lettered — its retry budget is spent,
-///   or makod refused it outright, and
-/// * the order is past `iftsta_faellig_am` — the 1. Werktag nach Abschluss the
-///   Lieferant is entitled to the Auftragsstatus by (GPKE Teil 2 Kap. 3.5.1.2
-///   Nr. 5).
-///
-/// The deadline arm is not redundant: a command still retrying is not
-/// dead-lettered, yet the Lieferant is owed the Auftragsstatus by a date, and
-/// the Frist is the thing the regulation cares about. It is stamped once when
-/// the order goes terminal, so it holds whatever the delivery does.
-///
-/// # Errors
-///
-/// Propagates database errors.
-pub async fn list_stuck_iftsta(pool: &PgPool, tenant: &str) -> anyhow::Result<Vec<StuckIftsta>> {
+/// Claim undelivered IFTSTA notices whose command is dead-lettered or past its deadline.
+#[must_use = "the caller must enqueue notices before committing"]
+pub async fn claim_stuck_iftsta(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant: &str,
+) -> anyhow::Result<Vec<StuckIftsta>> {
     let rows = sqlx::query(mako_service::sql::dynamic(format!(
-        r"SELECT s.id, s.malo_id, s.lf_mp_id, s.external_ref,
-                 COALESCE(o.last_error, '') AS err,
-                 COALESCE(o.attempts, 0)::INTEGER AS attempts
-          FROM sperr_orders s
-          {IFTSTA_OUTBOX_JOIN}
-          WHERE s.tenant = $1
-            AND s.status IN ('executed', 'failed')
-            AND s.iftsta_dispatched_at IS NULL
-            AND (o.dead_lettered_at IS NOT NULL
-                 OR (s.iftsta_faellig_am IS NOT NULL AND s.iftsta_faellig_am < heute()))
-            AND s.iftsta_escalated_at IS NULL"
+        r"WITH stuck AS (
+              SELECT s.id, COALESCE(o.last_error, '') AS err,
+                     COALESCE(o.attempts, 0)::INTEGER AS attempts
+              FROM sperr_orders s
+              {IFTSTA_OUTBOX_JOIN}
+              WHERE s.tenant = $1 AND s.status IN ('executed', 'failed')
+                AND s.iftsta_dispatched_at IS NULL AND s.iftsta_escalated_at IS NULL
+                AND (o.dead_lettered_at IS NOT NULL OR s.iftsta_faellig_am < heute())
+              ORDER BY s.iftsta_faellig_am, s.id
+              LIMIT 100 FOR UPDATE OF s SKIP LOCKED
+          )
+          UPDATE sperr_orders s SET iftsta_escalated_at = now()
+          FROM stuck WHERE s.id = stuck.id
+          RETURNING s.id, s.malo_id, s.lf_mp_id, s.external_ref, stuck.err, stuck.attempts"
     )))
     .bind(tenant)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await
-    .context("list_stuck_iftsta")?;
+    .context("claim stuck IFTSTA notices")?;
     rows.into_iter()
         .map(|r| {
             Ok(StuckIftsta {
@@ -1121,12 +1110,7 @@ pub async fn list_stuck_iftsta(pool: &PgPool, tenant: &str) -> anyhow::Result<Ve
         .collect()
 }
 
-/// An order [`list_stuck_iftsta`] wants announced.
-///
-/// `attempts` is carried rather than assumed to be the cap: an order escalated
-/// on its `iftsta_faellig_am` deadline can still be well inside its retry
-/// budget, and an announcement that states the cap regardless sends an operator
-/// looking for eight failures that never happened.
+/// Delivery evidence at the time an IFTSTA escalation is claimed.
 #[derive(Debug)]
 pub struct StuckIftsta {
     pub id: Uuid,
@@ -1135,33 +1119,6 @@ pub struct StuckIftsta {
     pub external_ref: Option<String>,
     pub last_error: String,
     pub attempts: i32,
-}
-
-/// Claim the escalation of a stuck order, so it is announced once and by one
-/// replica.
-///
-/// Returns `true` when this caller took it. `false` means somebody else already
-/// escalated it and this caller must **not** emit the announcement — which is
-/// why the caller runs this *before* writing the event, in the same transaction.
-///
-/// # Errors
-///
-/// Propagates database errors.
-pub async fn mark_iftsta_escalated(
-    exec: impl sqlx::PgExecutor<'_>,
-    id: Uuid,
-    tenant: &str,
-) -> anyhow::Result<bool> {
-    let res = sqlx::query(
-        "UPDATE sperr_orders SET iftsta_escalated_at = now() \
-         WHERE id = $1 AND tenant = $2 AND iftsta_escalated_at IS NULL",
-    )
-    .bind(id)
-    .bind(tenant)
-    .execute(exec)
-    .await
-    .context("mark_iftsta_escalated")?;
-    Ok(res.rows_affected() == 1)
 }
 
 // ── Cancel ────────────────────────────────────────────────────────────────────
@@ -1364,7 +1321,7 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
                   WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
               )                                                AS iftsta_outstanding,
-              -- Same test as `list_stuck_iftsta`'s dead-letter arm: nobody is
+              -- Same test as `claim_stuck_iftsta`'s dead-letter arm: nobody is
               -- trying any more.
               COUNT(*) FILTER (
                   WHERE status IN ('executed', 'failed')
@@ -1399,35 +1356,27 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
 
 // ── Execution-window sweep (GPKE Teil 2 Kap. 3.5.1.2 Nr. 1) ─────────────────────
 
-/// Pending orders past their 6-Werktage execution window that have not been
-/// announced yet.
-///
-/// Returns each order's id, parties and `faellig_am`. The announcement is marked on
-/// the row by [`mark_ausfuehrung_escalated`], so a missed Frist is reported once
-/// rather than on every sweep.
-///
-/// # Errors
-///
-/// Propagates database errors.
-pub async fn list_ausfuehrung_ueberfaellig(
-    pool: &PgPool,
+/// Claim pending overdue executions in the transaction that emits their notices.
+#[must_use = "the caller must enqueue notices before committing"]
+pub async fn claim_overdue_executions(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant: &str,
 ) -> anyhow::Result<Vec<(Uuid, Betroffen, Date)>> {
     let rows = sqlx::query(
-        r"SELECT id, malo_id, lf_mp_id, external_ref, ausfuehrung_faellig_am
-          FROM sperr_orders
-          WHERE tenant = $1
-            AND status = 'pending'
-            AND ausfuehrung_faellig_am IS NOT NULL
-            AND ausfuehrung_faellig_am < heute()
-            AND ausfuehrung_eskaliert_at IS NULL
-          ORDER BY ausfuehrung_faellig_am
-          LIMIT 100",
+        r"UPDATE sperr_orders SET ausfuehrung_eskaliert_at = now()
+          WHERE id IN (
+              SELECT id FROM sperr_orders
+              WHERE tenant = $1 AND status = 'pending'
+                AND ausfuehrung_faellig_am < heute()
+                AND ausfuehrung_eskaliert_at IS NULL
+              ORDER BY ausfuehrung_faellig_am, id
+              LIMIT 100 FOR UPDATE SKIP LOCKED)
+          RETURNING id, malo_id, lf_mp_id, external_ref, ausfuehrung_faellig_am",
     )
     .bind(tenant)
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await
-    .context("list overdue executions")?;
+    .context("claim overdue executions")?;
     rows.into_iter()
         .map(|r| {
             Ok((
@@ -1441,28 +1390,6 @@ pub async fn list_ausfuehrung_ueberfaellig(
             ))
         })
         .collect()
-}
-
-/// Mark an overdue execution as announced.
-///
-/// # Errors
-///
-/// Propagates database errors.
-pub async fn mark_ausfuehrung_escalated(
-    conn: impl sqlx::PgExecutor<'_>,
-    id: Uuid,
-    tenant: &str,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        r"UPDATE sperr_orders SET ausfuehrung_eskaliert_at = now()
-          WHERE id = $1 AND tenant = $2",
-    )
-    .bind(id)
-    .bind(tenant)
-    .execute(conn)
-    .await
-    .context("mark execution escalated")?;
-    Ok(())
 }
 
 #[cfg(test)]

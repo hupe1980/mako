@@ -109,7 +109,13 @@ async fn an_mcp_database_failure_answers_with_an_error_id_and_no_driver_text() {
         .await
         .expect("the router builds");
     let endpoint = mako_service::mcp::conformance::Endpoint::serve(app, "/mcp").await;
+    let bearer = format!(
+        "Bearer {}",
+        mako_service::oidc::demo::mint(mako_service::oidc::demo::persona("lf").unwrap())
+    );
     for (tool, arguments) in [
+        ("list_unbilled_periods", serde_json::json!({})),
+        ("summarize_billing_deadlines", serde_json::json!({})),
         ("list_review_queue", serde_json::json!({})),
         (
             "get_billing_summary",
@@ -122,7 +128,10 @@ async fn an_mcp_database_failure_answers_with_an_error_id_and_no_driver_text() {
     ] {
         let answer = endpoint
             .post(
-                &[("MCP-Protocol-Version", "2025-11-25")],
+                &[
+                    ("MCP-Protocol-Version", "2025-11-25"),
+                    ("Authorization", &bearer),
+                ],
                 &serde_json::json!({
                     "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                     "params": { "name": tool, "arguments": arguments },
@@ -130,10 +139,11 @@ async fn an_mcp_database_failure_answers_with_an_error_id_and_no_driver_text() {
             )
             .await;
         let text = answer.message.to_string();
-        assert!(
-            text.contains("internal error "),
-            "{tool}: no error_id answer: {text}"
-        );
+        let id = answer.message["error"]["message"]
+            .as_str()
+            .and_then(|message| message.strip_prefix("internal error "))
+            .unwrap_or_else(|| panic!("{tool}: expected opaque internal failure, received {text}"));
+        assert!(uuid::Uuid::parse_str(id).is_ok(), "{tool}: {id}");
         for leak in ["pool", "timed out", "connect", "127.0.0.1"] {
             assert!(!text.contains(leak), "{tool} leaks {leak:?}: {text}");
         }

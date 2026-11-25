@@ -125,8 +125,10 @@ const TENANT: &str = "9910000000002";
 /// Every action the router enforces must be decidable by the policy. A typo in
 /// either place — a renamed action, a handler wired to a string no policy
 /// mentions — turns into an endpoint nobody can reach.
-const ALL_ACTIONS: [&str; 10] = [
+const ALL_ACTIONS: [&str; 12] = [
     "read-billing",
+    "read-billing-watch",
+    "run-billing-sweep",
     "read-billing-by-token",
     "preview-billing",
     "run-billing",
@@ -163,6 +165,8 @@ fn a_foreign_market_role_reads_but_does_not_issue() {
     assert!(e.check(&nb, "read-billing", TENANT).is_ok());
     assert!(e.check(&nb, "preview-billing", TENANT).is_ok());
     for action in [
+        "read-billing-watch",
+        "run-billing-sweep",
         "run-billing",
         "correct-billing",
         "release-billing",
@@ -183,6 +187,8 @@ fn a_roleless_token_cannot_issue_or_reverse_anything() {
     let anon = principal(TENANT, &[]);
     assert!(e.check(&anon, "read-billing", TENANT).is_ok());
     for action in [
+        "read-billing-watch",
+        "run-billing-sweep",
         "run-billing",
         "settle-flexibility",
         "correct-billing",
@@ -228,10 +234,10 @@ fn the_dev_admin_principal_reaches_every_endpoint() {
         // The token route is portald's alone, in the demo too: there portald
         // calls with its own configured service key, so the dev principal is
         // never what reaches it.
-        if action == "read-billing-by-token" {
+        if matches!(action, "read-billing-by-token" | "run-billing-sweep") {
             assert!(
                 e.check(&dev, action, TENANT).is_err(),
-                "dev-admin must not read an invoice by its verify token"
+                "the synthetic dev principal must not {action}"
             );
             continue;
         }

@@ -5,13 +5,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RolleProvider } from "../app/rollen";
 import { createDeskRouter } from "../app/router";
 import { vergessen } from "../data/verweigert";
+import { katalog, ladeSprache, setSprache } from "../i18n";
 
 // A Klärfall as processd keeps it: the cause in words, where it came from,
 // when it is due, what happened to it — and one action: „Korrigieren &
 // senden" where processd proposes a correction, else „Erledigt". Every
 // action is held for undo and leaves with an Idempotency-Key.
 
-async function open(path: string) {
+async function open(path: string, rolle = "lieferant") {
+  localStorage.setItem("mako-desk.rolle", rolle);
   const router = createDeskRouter(createMemoryHistory({ initialEntries: [path] }));
   await router.load();
   render(
@@ -30,6 +32,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vergessen();
   localStorage.clear();
+  setSprache("de");
 });
 
 const fall = (korrektur: unknown) => ({
@@ -38,12 +41,12 @@ const fall = (korrektur: unknown) => ({
   partner_mp_id: "9900357000004",
   process_id: "p-7",
   pid: 55001,
-  owner_role: "NB",
+  owner_role: "LF",
   origins: ["aperak"],
   zustand: "open",
   ursache_code: "Z29",
-  ursache_liste: "APERAK",
-  bedeutung: "Prüfidentifikator unbekannt",
+  ursache_liste: "ERC",
+  bedeutung: "Erforderliche Angabe für diesen Anwendungsfall fehlt",
   aktion: "retry_with_correction",
   hinweis: "resend with a corrected PID",
   korrektur,
@@ -61,7 +64,8 @@ const fall = (korrektur: unknown) => ({
 function stub(
   korrektur: unknown,
   posts: { url: string; body: unknown; key: string | null }[],
-  antwort?: Response,
+  antwort?: Response | Error,
+  fields: Record<string, unknown> = {},
 ) {
   vi.stubGlobal(
     "fetch",
@@ -72,6 +76,7 @@ function stub(
           body: JSON.parse(String(init?.body)),
           key: new Headers(init?.headers).get("idempotency-key"),
         });
+        if (antwort instanceof Error) throw antwort;
         return antwort ?? Response.json({});
       }
       if (url.startsWith("/svc/agentd/")) return Response.json([]);
@@ -81,13 +86,13 @@ function stub(
         m.method === "tools/call" && m.params.name === "get_klaerfall"
           ? {
               structuredContent: {
-                klaerfall: fall(korrektur),
+                klaerfall: { ...fall(korrektur), ...fields },
                 verlauf: [
                   {
                     at: "2031-01-01T08:00:00Z",
                     akteur: "system",
                     schritt: "eroeffnet",
-                    vorgeschlagen: "gpke.anmeldung.korrigieren",
+                    vorgeschlagen: "gpke.kuendigung.bestaetigen",
                     befehl: null,
                     begruendung: null,
                     assignee: null,
@@ -103,18 +108,142 @@ function stub(
   );
 }
 
+const vorschlag = {
+  befehl: "gpke.kuendigung.bestaetigen",
+  erlaubt: ["gpke.kuendigung.bestaetigen", "gpke.kuendigung.ablehnen"],
+};
+
 const flush = () =>
   act(() => {
     window.dispatchEvent(new Event("pagehide"));
   });
 
 describe("the Klärfall view", () => {
+  it.each(["de", "en"] as const)(
+    "undo in %s restores the initiating control and leaves zero writes after pagehide",
+    async (language) => {
+      await ladeSprache(language);
+      setSprache(language);
+      const t = katalog();
+      const posts: { url: string; body: unknown; key: string | null }[] = [];
+      stub(vorschlag, posts, undefined, {
+        due_at: null,
+        due_source: null,
+        aktion: "future_action",
+      });
+      await open("/klaerfall/k-1");
+      const button = await screen.findByRole("button", { name: t.klaerfall.korrigieren });
+      expect(screen.getByText(t.klaerfall.fristUnbekannt)).toBeTruthy();
+      expect(screen.getByText(t.klaerfall.aktionUnbekannt)).toBeTruthy();
+      expect(screen.getByText("future_action").closest("details")?.open).toBe(false);
+      expect(screen.getByText(t.klaerfall.rolle, { exact: false }).textContent).toContain(
+        t.rollenNamen.lieferant,
+      );
+      fireEvent.click(button);
+      expect(screen.getByText(t.klaerfall.vorgemerkt).closest('[aria-live="polite"]')).toBeTruthy();
+      expect(screen.queryByText(t.klaerfall.gesendet)).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(t.halten.rueckgaengig) }));
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: t.klaerfall.korrigieren }),
+      );
+      expect(screen.getByText(t.klaerfall.zurueckgenommen).getAttribute("role")).toBe("status");
+      flush();
+      expect(posts).toHaveLength(0);
+    },
+  );
+
+  it.each(["de", "en"] as const)(
+    "keeps the reason and focuses Details for an unknown refusal in %s",
+    async (language) => {
+      await ladeSprache(language);
+      setSprache(language);
+      const t = katalog();
+      const posts: { url: string; body: unknown; key: string | null }[] = [];
+      stub(
+        vorschlag,
+        posts,
+        Response.json({ code: "future_refusal", detail: "raw diagnostic" }, { status: 422 }),
+      );
+      await open("/klaerfall/k-1");
+      fireEvent.click(
+        await screen.findByRole("radio", { name: language === "de" ? "Ablehnen" : "Reject" }),
+      );
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Rücksprache mit Kunde" } });
+      fireEvent.click(screen.getByRole("button", { name: t.klaerfall.korrigieren }));
+      flush();
+      const fallback = await screen.findByText(t.refusal.unknown);
+      const refusal = fallback.closest('[role="status"]') as HTMLElement;
+      expect(within(refusal).getByText(t.refusal.details)).toBe(document.activeElement);
+      expect(
+        within(refusal).getByText("future_refusal: raw diagnostic").closest("details")?.open,
+      ).toBe(false);
+      expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+        "Rücksprache mit Kunde",
+      );
+      expect(posts).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    new Error("connection reset"),
+    Response.json({ detail: "gateway timeout" }, { status: 504 }),
+  ])("leaves an uncertain dispatch outcome explicit", async (error) => {
+    stub(vorschlag, [], error);
+    await open("/klaerfall/k-1");
+    fireEvent.click(await screen.findByRole("button", { name: katalog().klaerfall.korrigieren }));
+    flush();
+    expect(await screen.findByText(katalog().klaerfall.unbekannt)).toBeTruthy();
+    expect(screen.queryByText(katalog().klaerfall.gesendet)).toBeNull();
+    expect(screen.queryByText(katalog().refusal.unknown)).toBeNull();
+    expect(screen.queryByRole("button", { name: katalog().klaerfall.korrigieren })).toBeNull();
+  });
+  it.each(["open", "dispatched"] as const)(
+    "reads a %s case after a lost response without repeating or attributing the write",
+    async (zustand) => {
+      const posts: { url: string; body: unknown; key: string | null }[] = [];
+      stub(vorschlag, posts, new TypeError("connection interrupted"));
+      await open("/klaerfall/k-1");
+      fireEvent.click(await screen.findByRole("button", { name: katalog().klaerfall.korrigieren }));
+      flush();
+      await screen.findByText(katalog().klaerfall.unbekannt);
+      const storage = localStorage.getItem("mako-desk.unbestaetigt");
+      expect(
+        JSON.parse(storage ?? "[]").map((item: { schluessel: string }) => item.schluessel),
+      ).toEqual([posts[0]?.key]);
+      cleanup();
+      stub(vorschlag, posts, undefined, { zustand, decided_by: "other operator" });
+      await open("/heute", "netz");
+      expect(screen.queryByRole("region", { name: katalog().unbestaetigt.titel })).toBeNull();
+      expect(localStorage.getItem("mako-desk.unbestaetigt")).toBe(storage);
+      cleanup();
+      await open("/heute");
+      const recovery = await screen.findByRole("region", { name: katalog().unbestaetigt.titel });
+      await within(recovery).findByRole("link", { name: /UTILMD-2031-0007/ });
+      expect(recovery.textContent).toContain(katalog().unbestaetigt.fallUnbekannt);
+      expect(recovery.textContent).toContain(
+        katalog().unbestaetigt.fallStand(katalog().klaerfall.zustand[zustand]),
+      );
+      expect(within(recovery).getAllByRole("button")).toHaveLength(1);
+      fireEvent.click(
+        within(recovery).getByRole("button", { name: katalog().unbestaetigt.verstanden }),
+      );
+      expect(posts).toHaveLength(1);
+      expect(localStorage.getItem("mako-desk.unbestaetigt")).toBe("[]");
+    },
+  );
+
   it("reads as its cause, and „Korrigieren & senden“ sends the proposed correction, held for undo", async () => {
     const posts: { url: string; body: unknown; key: string | null }[] = [];
-    stub({ befehl: "gpke.anmeldung.korrigieren", erlaubt: ["gpke.anmeldung.korrigieren"] }, posts);
+    stub(
+      { befehl: "gpke.kuendigung.bestaetigen", erlaubt: ["gpke.kuendigung.bestaetigen"] },
+      posts,
+    );
     await open("/klaerfall/k-1");
     expect(
-      await screen.findByRole("heading", { level: 1, name: /Prüfidentifikator unbekannt/ }),
+      await screen.findByRole("heading", {
+        level: 1,
+        name: /Erforderliche Angabe für diesen Anwendungsfall fehlt/,
+      }),
     ).toBeTruthy();
     const bar = screen.getByRole("region", { name: "Wartet auf deine Entscheidung" });
     const knoepfe = within(bar)
@@ -135,13 +264,13 @@ describe("the Klärfall view", () => {
     const posts: { url: string; body: unknown; key: string | null }[] = [];
     stub(
       {
-        befehl: "gpke.anmeldung.korrigieren",
-        erlaubt: ["gpke.anmeldung.korrigieren", "gpke.anmeldung.stornieren"],
+        befehl: "gpke.kuendigung.bestaetigen",
+        erlaubt: ["gpke.kuendigung.bestaetigen", "gpke.kuendigung.ablehnen"],
       },
       posts,
     );
     await open("/klaerfall/k-1");
-    fireEvent.click(await screen.findByRole("radio", { name: "gpke.anmeldung.stornieren" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Ablehnen" }));
     const senden = screen.getByRole("button", { name: "Korrigieren & senden" });
     expect(senden.hasAttribute("disabled") || senden.getAttribute("data-disabled") === "true").toBe(
       true,
@@ -153,7 +282,7 @@ describe("the Klärfall view", () => {
     flush();
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]?.body).toEqual({
-      befehl: "gpke.anmeldung.stornieren",
+      befehl: "gpke.kuendigung.ablehnen",
       begruendung: "Kunde zieht zurück",
     });
   });
@@ -176,5 +305,11 @@ describe("the Klärfall view", () => {
     );
     expect(posts[0]?.body).toEqual({ begruendung: "telefonisch geklärt" });
     expect(await screen.findByText(/Dieser Klärfall ist schon abgeschlossen/)).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toContain("abgeschlossen");
+    expect(screen.queryByRole("button", { name: "Erledigt" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Zuweisen" })).toBeNull();
+    const reason = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(reason.value).toBe("telefonisch geklärt");
+    expect(reason.readOnly).toBe(true);
   });
 });

@@ -2,7 +2,7 @@
 // (`schema.ts`), built without a client library so Heute's sources stay light.
 // Writes and the views that make them use `openapi-fetch` (`client.ts`).
 
-import { type Service, ServiceUnavailable } from "../mcp";
+import { type NurRest, type Service, ServiceUnavailable } from "../mcp";
 import { problem, sentence } from "../problem";
 import type { paths } from "./schema";
 
@@ -44,9 +44,10 @@ export type Antwort<P extends GetPfad> =
  * first paint carries none (`openapi-fetch` comes with the views that write).
  */
 export async function lesen<P extends GetPfad>(
-  service: Service,
+  service: Service | NurRest,
   pfad: P,
   params: Parameter<P>,
+  signal?: AbortSignal,
 ): Promise<Antwort<P>> {
   const p = params as { path?: Record<string, unknown>; query?: Record<string, unknown> };
   let url = pfad as string;
@@ -60,7 +61,10 @@ export async function lesen<P extends GetPfad>(
   const suche = q.toString();
   let res: Response;
   try {
-    res = await fetch(suche ? `${url}?${suche}` : url, { headers: { accept: "application/json" } });
+    res = await fetch(suche ? `${url}?${suche}` : url, {
+      headers: { accept: "application/json" },
+      ...(signal && { signal }),
+    });
   } catch (e) {
     throw new ServiceUnavailable(service, e);
   }

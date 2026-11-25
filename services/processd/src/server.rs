@@ -399,7 +399,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             outbound_secret: cfg
                 .obs_outbound_secret
                 .as_ref()
-                .map(|s| Arc::new(s.expose_secret().to_owned())),
+                .map(|s| Arc::from(mako_service::webhook::signing_key(s.expose_secret()))),
             tenant: cfg.tenant.clone(),
             deadline_sweep_secs: cfg.obs_worker.deadline_sweep_secs,
             deadline_warn_hours: cfg.obs_worker.deadline_warn_hours,

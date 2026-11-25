@@ -233,6 +233,7 @@ impl From<crate::pg::InsertError> for BillingError {
         let message = e.to_string();
         match e {
             E::PeriodAlreadyIssued {
+                lf_mp_id,
                 malo_id,
                 product_code,
                 period_from,
@@ -241,6 +242,7 @@ impl From<crate::pg::InsertError> for BillingError {
                 "PERIOD_ALREADY_BILLED",
                 message,
                 serde_json::json!({
+                    "lf_mp_id": lf_mp_id,
                     "malo_id": malo_id,
                     "product_code": product_code,
                     "period_from": period_from.to_string(),

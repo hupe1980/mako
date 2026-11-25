@@ -318,7 +318,7 @@ fn every_subscribing_specialist_is_routed_not_just_the_first() {
     // opinions "completing" instantly with somebody else's answer.
     let envelope = agentd::plane::Envelope {
         id: "ce-fanout",
-        source: "urn:mako:test:tenant:9900357000004",
+        source: "urn:mako:billingd:tenant:stadtwerke-musterstadt",
         event_type: mako_events::billing::RECHNUNG_ERSTELLT,
     };
     let keys: std::collections::BTreeSet<String> = matched

@@ -457,3 +457,9 @@ Only profiles added after the cut count — the commit that added the command, o
 `--cut <rev>` — because the repository's history opens after most existing
 profiles were binding, and their figure would be the repository's age. A
 shallow clone is refused: it has no first commit to find.
+
+## Read the candidate preview
+
+Use makod’s authorized `GET /api/v1/format-candidates/{fv}/impact` to compare the candidate with binding profiles on the local interchange archive. `revalidated` counts messages, and `refusals` contains one row per new rule finding. In `not_read`, compressed, unnamed and unparseable input counts files. A missing binding profile counts messages. A truncated interchange counts as one unread file, even when a complete message precedes the truncation. A sample with zero assessed messages supplies no evidence about changed verdicts.
+
+An unavailable catalogue returns `503 candidate_catalog_unavailable`. An incomplete import returns `422 candidate_invalid`. The archive must contain regular files and directories. An unreadable tree, including a link or special file in it, returns `503 archive_unavailable`.

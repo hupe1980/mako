@@ -19,8 +19,7 @@ use super::{
 };
 use crate::{
     domain::{self, Kuendigungsgrund, Vertragsart},
-    events::build_cloud_event,
-    pg,
+    events, pg,
 };
 
 fn heute() -> Date {
@@ -31,6 +30,11 @@ fn heute() -> Date {
 #[derive(Debug, Default, serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ByMaloQuery {
+    /// Invoice issuer, required alongside the full billing interval.
+    #[param(value_type = Option<String>)]
+    pub lf_mp_id: Option<rubo4e::identifiers::MarktpartnerId>,
+    pub from: Option<Date>,
+    pub to: Option<Date>,
     /// `?stichtag=YYYY-MM-DD` — the date a Kündigungsfrist is measured from.
     /// Absent means today.
     pub stichtag: Option<String>,
@@ -310,6 +314,32 @@ pub async fn list_by_kunde(
     ok(rows)
 }
 
+/// Bind every billing read to the same supply, including ended contracts.
+#[must_use = "missing and ambiguous supplies require distinct responses"]
+async fn billing_component(
+    ctx: &Ctx,
+    malo_id: &str,
+    issuer: &str,
+    from: Date,
+    to: Date,
+) -> ApiResult<pg::VertragskomponenteRow> {
+    if from > to {
+        return Err(ApiError::bad_request("from must not be after to"));
+    }
+    let mut matches =
+        pg::supply_components(&ctx.pool, ctx.tenant(), malo_id, Some(issuer), from, to).await?;
+    if matches.len() > 1 {
+        return Err(ApiError::conflict(
+            "multiple supply components overlap the issuer's billing period",
+        )
+        .with_code("ambiguous_supply_period"));
+    }
+    matches
+        .pop()
+        .filter(|k| k.lieferbeginn <= from && k.lieferende.is_none_or(|end| end >= to))
+        .ok_or(ApiError::NotFound)
+}
+
 /// `GET /api/v1/vertraege/by-malo/{malo_id}` — the active contract behind a MaLo.
 ///
 /// The lookup `billingd` uses for the § 40 Abs. 1 EnWG contract facts an
@@ -332,6 +362,8 @@ pub async fn list_by_kunde(
     params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), ByMaloQuery),
     responses(
         (status = 200, body = serde_json::Value),
+        (status = 400, description = "Invalid supply selection", body = ApiError),
+        (status = 409, description = "Ambiguous supply period", body = ApiError),
         (status = 401, description = "No valid token", body = ApiError),
         (status = 403, description = "Cedar refused the action", body = ApiError),
         (status = 404, body = ApiError),
@@ -354,30 +386,32 @@ pub async fn by_malo(
         ),
         None => None,
     };
-    let (vertrag, komponente) = pg::fetch_vertrag_by_malo(&ctx.pool, &malo_id, ctx.tenant())
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or(ApiError::NotFound)?;
+    let (vertrag, komponente) = match (q.lf_mp_id.as_deref(), q.from, q.to) {
+        (Some(issuer), Some(from), Some(to)) => {
+            let component = billing_component(&ctx, &malo_id, issuer, from, to).await?;
+            let contract = pg::fetch_vertrag(&ctx.pool, component.vertrag_id, ctx.tenant())
+                .await
+                .map_err(ApiError::Internal)?
+                .ok_or(ApiError::NotFound)?;
+            (contract, component)
+        }
+        (None, None, None) => pg::fetch_vertrag_by_malo(&ctx.pool, &malo_id, ctx.tenant())
+            .await
+            .map_err(ApiError::Internal)?
+            .ok_or(ApiError::NotFound)?,
+        _ => {
+            return Err(ApiError::bad_request(
+                "supply lookup requires lf_mp_id, from and to together",
+            ));
+        }
+    };
     let kunde = pg::fetch_kunde(&ctx.pool, vertrag.kunden_id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?;
     let haushaltskunde = kunde.as_ref().is_none_or(|k| k.haushaltskunde);
     let frist = naechster_kuendigungstermin(&vertrag, haushaltskunde, stichtag);
 
-    // Best-effort: a missing Kunde must not fail the contract lookup § 40 Abs. 1
-    // needs; the invoice then carries a synthesised buyer and says so.
-    let rechnungsempfaenger =
-        match pg::fetch_rechnungsempfaenger_by_malo(&ctx.pool, &malo_id, ctx.tenant()).await {
-            Ok(re) => re,
-            Err(e) => {
-                tracing::warn!(
-                    malo_id = %malo_id, error = %e,
-                    "vertragd: BG-7 buyer lookup failed; the invoice falls back to the \
-                     synthesised buyer and is not XRechnung-conformant",
-                );
-                None
-            }
-        };
+    let rechnungsempfaenger = kunde.map(pg::rechnungsempfaenger_of);
 
     // `E_0624` Prüfschritt 50 — „Ist der Kunde aus der Anfrage identisch mit
     // dem Kunden beim LFA?" Only `vertragd` knows the contract holder, and the
@@ -431,6 +465,9 @@ fn naechster_kuendigungstermin(
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ProdukteQuery {
+    /// Invoice issuer for a supply-specific period read.
+    #[param(value_type = Option<String>)]
+    pub lf_mp_id: Option<rubo4e::identifiers::MarktpartnerId>,
     /// Point form: the product in force on this day. Defaults to today.
     pub as_of: Option<Date>,
     /// Period form (with `to`): every slice covering `[from, to]`.
@@ -443,6 +480,9 @@ pub struct ProdukteQuery {
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct Sect14aQuery {
+    /// Invoice issuer for a supply-specific period read.
+    #[param(value_type = Option<String>)]
+    pub lf_mp_id: Option<rubo4e::identifiers::MarktpartnerId>,
     pub from: Date,
     pub to: Date,
 }
@@ -460,6 +500,8 @@ pub struct Sect14aQuery {
     params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), Sect14aQuery),
     responses(
         (status = 200, body = serde_json::Value),
+        (status = 400, description = "Invalid supply selection", body = ApiError),
+        (status = 409, description = "Ambiguous supply period", body = ApiError),
         (status = 401, description = "No valid token", body = ApiError),
         (status = 403, description = "Cedar refused the action", body = ApiError),
         (status = 404, body = ApiError),
@@ -477,15 +519,32 @@ pub async fn malo_sect14a(
     if q.from > q.to {
         return Err(ApiError::bad_request("from must not be after to"));
     }
-    let slices = pg::malo_sect14a(&ctx.pool, ctx.tenant(), &malo_id, q.from, q.to)
-        .await
-        .map_err(ApiError::Internal)?;
+    let component = match q.lf_mp_id.as_deref() {
+        Some(issuer) => Some(
+            billing_component(&ctx, &malo_id, issuer, q.from, q.to)
+                .await?
+                .id,
+        ),
+        None => None,
+    };
+    let slices =
+        pg::malo_sect14a_for_component(&ctx.pool, ctx.tenant(), &malo_id, q.from, q.to, component)
+            .await
+            .map_err(ApiError::Internal)?;
     ok(serde_json::json!({
         "malo_id": malo_id,
         "from": q.from.to_string(),
         "to": q.to.to_string(),
         "slices": slices,
     }))
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct IssuerQuery {
+    /// Select the issuer when a MaLo has competing supply components.
+    #[param(value_type = Option<String>)]
+    pub lf_mp_id: Option<rubo4e::identifiers::MarktpartnerId>,
 }
 
 /// `POST /api/v1/malo/{malo_id}/sect14a` — record the § 14a EnWG modules the
@@ -497,13 +556,14 @@ pub async fn malo_sect14a(
     post,
     path = "/api/v1/malo/{malo_id}/sect14a",
     tag = "vertraege",
-    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), IssuerQuery),
     request_body(content = serde_json::Value, description = "`Sect14aInput`"),
     responses(
         (status = 200, body = serde_json::Value),
         (status = 401, description = "No valid token", body = ApiError),
         (status = 403, description = "Cedar refused the action", body = ApiError),
         (status = 404, body = ApiError),
+        (status = 409, description = "Ambiguous supply or later module state", body = ApiError),
         (status = 422, description = "A refusal naming the rule that decided", body = ApiError),
     )
 )]
@@ -512,16 +572,28 @@ pub async fn record_sect14a(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(malo_id): Path<String>,
+    Query(q): Query<IssuerQuery>,
     Json(input): Json<pg::Sect14aInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&enforcer, &claims, "write-netzentgeltmodule", ctx.tenant())?;
-    match pg::record_sect14a(&ctx.pool, ctx.tenant(), &malo_id, &input).await {
+    match pg::record_sect14a_for_issuer(
+        &ctx.pool,
+        ctx.tenant(),
+        &malo_id,
+        q.lf_mp_id.as_deref(),
+        &input,
+    )
+    .await
+    {
         Ok(module) => ok(serde_json::json!({
             "malo_id": malo_id,
             "module": module,
             "gueltig_ab": input.gueltig_ab.to_string(),
         })),
         Err(pg::Sect14aError::KeineKomponente(_)) => Err(ApiError::NotFound),
+        Err(e @ pg::Sect14aError::MehrdeutigeKomponente) => {
+            Err(ApiError::conflict(e.to_string()).with_code("ambiguous_supply_period"))
+        }
         Err(e @ pg::Sect14aError::KeinModul) => Err(ApiError::unprocessable(e.to_string())),
         Err(e @ pg::Sect14aError::SpaetererStand(_)) => Err(ApiError::conflict(e.to_string())),
         Err(pg::Sect14aError::Db(e)) => Err(ApiError::Internal(e.into())),
@@ -549,6 +621,8 @@ pub async fn record_sect14a(
     params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID"), ProdukteQuery),
     responses(
         (status = 200, body = serde_json::Value),
+        (status = 400, description = "Invalid supply selection", body = ApiError),
+        (status = 409, description = "Ambiguous supply period", body = ApiError),
         (status = 401, description = "No valid token", body = ApiError),
         (status = 403, description = "Cedar refused the action", body = ApiError),
         (status = 404, body = ApiError),
@@ -563,13 +637,30 @@ pub async fn malo_produkte(
     Query(q): Query<ProdukteQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
+    if q.from.is_some() != q.to.is_some()
+        || (q.as_of.is_some() && q.from.is_some())
+        || (q.lf_mp_id.is_some() && q.from.is_none())
+    {
+        return Err(ApiError::bad_request(
+            "use as_of or a complete from/to period; issuer selection requires a period",
+        ));
+    }
     if let (Some(from), Some(to)) = (q.from, q.to) {
         if from > to {
             return Err(ApiError::bad_request("from must not be after to"));
         }
-        let slices = pg::malo_slices(&ctx.pool, ctx.tenant(), &malo_id, from, to)
-            .await
-            .map_err(ApiError::Internal)?;
+        let component = match q.lf_mp_id.as_deref() {
+            Some(issuer) => Some(
+                billing_component(&ctx, &malo_id, issuer, from, to)
+                    .await?
+                    .id,
+            ),
+            None => None,
+        };
+        let slices =
+            pg::malo_slices_for_component(&ctx.pool, ctx.tenant(), &malo_id, from, to, component)
+                .await
+                .map_err(ApiError::Internal)?;
         let covered: i64 = slices
             .iter()
             .map(|s| {
@@ -675,10 +766,20 @@ pub struct KuendigungsfristQuery {
     pub preisanpassung_wirksam_zum: Option<Date>,
 }
 
+/// Inclusive range of ended supplies to enumerate beside the active roster.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct CandidateWindow {
+    pub ended_from: Option<Date>,
+    pub ended_through: Option<Date>,
+}
+
 /// `GET /api/v1/vertraege/billing-candidates` — § 40b EnWG billing cadence feed.
 #[utoipa::path(
     get,
     path = "/api/v1/vertraege/billing-candidates",
+    params(CandidateWindow),
     tag = "vertraege",
     responses(
         (status = 200, body = serde_json::Value),
@@ -687,15 +788,33 @@ pub struct KuendigungsfristQuery {
     )
 )]
 pub async fn billing_candidates(
+    Query(window): Query<CandidateWindow>,
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
 ) -> ApiResult<Json<serde_json::Value>> {
     authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
-    let rows = pg::list_billing_candidates(&ctx.pool, ctx.tenant())
+    let today = mako_fristen::heute();
+    let span = i64::from(pg::vertraege::ENDED_SUPPLY_WINDOW_DAYS);
+    let (from, through) =
+        match (window.ended_from, window.ended_through) {
+            (None, None) => (today - time::Duration::days(span), today),
+            (Some(from), Some(through))
+                if from <= through && through <= today && (through - from).whole_days() <= span =>
+            {
+                (from, through)
+            }
+            _ => return Err(ApiError::bad_request(
+                "supply both dates in order, at most 84 days apart and ending no later than today",
+            )
+            .with_code("invalid_candidate_window")),
+        };
+    let rows = pg::billing_candidates_in_window(&ctx.pool, ctx.tenant(), from, through)
         .await
         .map_err(ApiError::Internal)?;
-    ok(serde_json::json!({ "count": rows.len(), "candidates": rows }))
+    ok(
+        serde_json::json!({ "count": rows.len(), "candidates": rows, "ended_from":from, "ended_through":through }),
+    )
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
@@ -822,28 +941,23 @@ pub async fn kuendigen(
     // downstream; what has to be guaranteed here is that the instruction to
     // produce it survives — so it commits with the termination and the
     // timestamp records that the obligation was discharged.
-    let ce = build_cloud_event(
-        mako_events::vertrag::KUENDIGUNG,
+    let ce = events::typed_event(
         id,
         ctx.tenant(),
-        serde_json::json!({
-            "vertrag_id": id,
-            "vertrags_nr": vertrag.vertrags_nr,
-            "kunden_id": vertrag.kunden_id,
-            "lieferende": input.lieferende.to_string(),
-            "eingang": eingang.to_string(),
-            "grund": input.grund,
-            "frist": frist.frist,
-            "rechtsgrundlage": frist.rechtsgrundlage,
-            "mako_dispatched": result.dispatched.len(),
-            "kuendigungsbestaetigung": {
-                "erforderlich": true,
-                "form": "Textform",
-                "rechtsgrundlage": "§ 41 Abs. 8 Nr. 2 EnWG",
-                "vertragsende": input.lieferende.to_string(),
-            },
-        }),
-    );
+        &events::Kuendigung {
+            vertrag_id: id,
+            vertrags_nr: vertrag.vertrags_nr.clone(),
+            kunden_id: vertrag.kunden_id,
+            lieferende: input.lieferende.to_string(),
+            eingang: eingang.to_string(),
+            grund: input.grund,
+            frist: frist.frist.clone(),
+            rechtsgrundlage: frist.rechtsgrundlage,
+            mako_dispatched: result.dispatched.len(),
+            kuendigungsbestaetigung: events::Bestaetigung::zum(input.lieferende),
+        },
+    )
+    .map_err(|e| ApiError::Internal(e.into()))?;
     mako_service::outbox::enqueue(&mut tx, &ce)
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;
@@ -905,12 +1019,12 @@ pub async fn widerruf_kuendigung(
             });
         }
     };
-    let ce = build_cloud_event(
-        mako_events::vertrag::KUENDIGUNG_WIDERRUFEN,
+    let ce = events::typed_event(
         id,
         ctx.tenant(),
-        serde_json::json!({ "vertrag_id": id }),
-    );
+        &events::KuendigungWiderrufen { vertrag_id: id },
+    )
+    .map_err(|e| ApiError::Internal(e.into()))?;
     mako_service::outbox::enqueue(&mut tx, &ce)
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;
@@ -1181,40 +1295,33 @@ pub async fn tarifwechsel(
     .await
     .map_err(|e| ApiError::conflict(e.to_string()))?;
 
-    let ce_type = if is_future {
-        mako_events::vertrag::TARIFWECHSEL_GEPLANT
-    } else {
-        mako_events::vertrag::TARIFWECHSEL
-    };
-    let ce = build_cloud_event(
-        ce_type,
+    let payload = events::Tarifwechsel {
         vertrag_id,
-        ctx.tenant(),
-        serde_json::json!({
-            "vertrag_id": vertrag_id,
-            "komp_id": input.komp_id,
-            "malo_id": komp.malo_id,
-            "old_product_code": bisheriges_produkt,
-            "new_product_code": input.new_product_code,
-            "wirksamkeit": input.wirksamkeit.to_string(),
-            "geplant": is_future,
-            "initiator": input.initiator,
-            // What the customer is to be told, and what they are not. A switch
-            // they asked for is confirmed; only the supplier exercising a
-            // change right announces one with a termination right attached.
-            "preisanpassungsanzeige_erforderlich": anzeigepflichtig,
-            "sonderkuendigungsrecht": if anzeigepflichtig {
-                serde_json::json!({
-                    "besteht": true,
-                    "rechtsgrundlage": "§ 41 Abs. 5 Satz 4 EnWG",
-                    "wirksam_zum": input.wirksamkeit.to_string(),
-                    "entgeltfrei": true,
-                })
-            } else {
-                serde_json::json!({ "besteht": false })
-            },
-        }),
-    );
+        komp_id: input.komp_id,
+        malo_id: komp.malo_id,
+        old_product_code: bisheriges_produkt,
+        new_product_code: input.new_product_code.clone(),
+        wirksamkeit: input.wirksamkeit.to_string(),
+        geplant: is_future,
+        initiator: input.initiator,
+
+        preisanpassungsanzeige_erforderlich: anzeigepflichtig,
+        sonderkuendigungsrecht: if anzeigepflichtig {
+            events::Sonderkuendigungsrecht::zum(input.wirksamkeit)
+        } else {
+            events::Sonderkuendigungsrecht::Keines { besteht: false }
+        },
+    };
+    let ce = if is_future {
+        events::typed_event(
+            vertrag_id,
+            ctx.tenant(),
+            &events::TarifwechselGeplant(payload),
+        )
+    } else {
+        events::typed_event(vertrag_id, ctx.tenant(), &payload)
+    }
+    .map_err(|e| ApiError::Internal(e.into()))?;
     mako_service::outbox::enqueue(&mut tx, &ce)
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;
@@ -1283,15 +1390,15 @@ pub async fn put_preisgarantie(
     {
         return Err(ApiError::NotFound);
     }
-    let ce = build_cloud_event(
-        mako_events::vertrag::PREISGARANTIE_HINTERLEGT,
+    let ce = events::typed_event(
         vertrag_id,
         ctx.tenant(),
-        serde_json::json!({
-            "vertrag_id": vertrag_id,
-            "preisgarantie_bis": bis.map(|d| d.to_string()),
-        }),
-    );
+        &events::PreisgarantieHinterlegt {
+            vertrag_id,
+            preisgarantie_bis: bis.map(|d| d.to_string()),
+        },
+    )
+    .map_err(|e| ApiError::Internal(e.into()))?;
     mako_service::outbox::enqueue(&mut tx, &ce)
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;

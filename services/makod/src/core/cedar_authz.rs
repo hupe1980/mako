@@ -889,6 +889,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn candidate_impact_is_visible_only_to_its_named_readers() {
+        let auth = CedarAuthorizer::new(
+            vec![],
+            Some(include_str!("../cedar/conservative.cedar").to_owned()),
+            None,
+            None,
+            DefaultPolicy::Deny,
+        )
+        .expect("the shipped policy loads");
+        for name in ["erp-operator", "admin-readonly"] {
+            assert!(auth.authorize_format_impact(&id(name), "stadtwerke-musterstadt"));
+        }
+        assert!(!auth.authorize_format_impact(&id("other"), "stadtwerke-musterstadt"));
+    }
+
     /// The service granted `ActOnBehalf` relays approvals, and processd
     /// rehearses each one before it marks the decision taken — so the grant
     /// carries `RehearseCommand` on a least-privilege deployment too, and

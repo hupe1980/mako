@@ -145,6 +145,8 @@ unabsorbed advances a settling invoice may deduct, oldest first, with their rate
 
 ### Guthaben aus Schlussrechnung (§ 40c Abs. 3 EnWG)
 
+The webhook verifies a Standard Webhooks `whsec_` secret using its decoded key. Invoice ingestion requires the local billingd deployment in `source` and the invoice issuer in `data.lf_mp_id`. A different deployment returns `403 invoice_source_mismatch`. A blank or missing CloudEvent ID returns 400. A blank or missing account reference returns `422 invalid_invoice_account`. An absent or invalid issuer returns `422 invalid_invoice_issuer`. The webhook returns `422 invalid_invoice_amount` for a missing gross amount, an unreadable amount, or a deduction outside the ledger’s cent range. An ordinary invoice can omit `zuZahlen`. A zero-gross invoice can still settle advances. These checks precede booking.
+
 A `de.mako.billing.rechnung.erstellt` with `schlussrechnung: true` whose `zuZahlen` is
 negative owes the customer a Guthaben, paid out „binnen zwei Wochen". accountingd
 raises one `credit_payouts` row for it, keyed on (tenant, Rechnungsnummer) so a

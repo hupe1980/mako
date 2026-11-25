@@ -1149,6 +1149,34 @@ pub async fn fetch_vertrag_by_malo(
     Ok(komponente.map(|k| (vertrag, k)))
 }
 
+/// At most two billable components overlapping the requested interval. Two
+/// candidates are sufficient to refuse an ambiguous issuer or customer.
+#[must_use = "a failed lookup cannot establish a supply"]
+pub async fn supply_components(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: Option<&str>,
+    from: Date,
+    to: Date,
+) -> sqlx::Result<Vec<VertragskomponenteRow>> {
+    sqlx::query_as(mako_service::sql::dynamic(format!(
+        "SELECT k.* FROM vertragskomponenten k
+           JOIN versorgungsvertraege v ON v.id = k.vertrag_id AND v.tenant = k.tenant
+          WHERE k.tenant = $1 AND k.malo_id = $2 AND ($3::text IS NULL OR k.lf_mp_id = $3)
+            AND k.lieferbeginn <= $5 AND (k.lieferende IS NULL OR k.lieferende >= $4)
+            AND k.status IN {KOMPONENTE_BILLABLE} AND v.status IN {VERTRAG_BILLABLE}
+          LIMIT 2"
+    )))
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .bind(from)
+    .bind(to)
+    .fetch_all(executor)
+    .await
+}
+
 /// One active supply component with its contract's § 40b billing cadence —
 /// the unit of work for billingd's billing-run worker.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -1195,6 +1223,23 @@ pub async fn list_billing_candidates(
     pool: &PgPool,
     tenant: &str,
 ) -> Result<Vec<BillingCandidateRow>> {
+    let today = mako_fristen::heute();
+    billing_candidates_in_window(
+        pool,
+        tenant,
+        today - time::Duration::days(i64::from(ENDED_SUPPLY_WINDOW_DAYS)),
+        today,
+    )
+    .await
+}
+
+/// Active supplies and ended components inside the inclusive recovery window.
+pub async fn billing_candidates_in_window(
+    pool: &PgPool,
+    tenant: &str,
+    from: Date,
+    through: Date,
+) -> Result<Vec<BillingCandidateRow>> {
     Ok(sqlx::query_as::<_, BillingCandidateRow>(
         "SELECT k.malo_id, k.lf_mp_id, k.nb_mp_id, k.sparte,
                 v.abrechnungszyklus, v.vertragsbeginn, v.vertragsende,
@@ -1209,12 +1254,13 @@ pub async fn list_billing_candidates(
              OR (v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT','ABGELAUFEN')
                  AND k.status = 'BEENDET'
                  AND k.lieferende IS NOT NULL
-                 AND k.lieferende >= heute() - $2::int)
+                 AND k.lieferende BETWEEN $2 AND $3)
            )
          ORDER BY k.malo_id",
     )
     .bind(tenant)
-    .bind(ENDED_SUPPLY_WINDOW_DAYS)
+    .bind(from)
+    .bind(through)
     .fetch_all(pool)
     .await?)
 }

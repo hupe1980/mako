@@ -23,12 +23,13 @@ answers.
 
 In production the Desk is the `mako-desk` image — the static bundle on port
 8080 — behind [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) as
-the gateway. The browser talks to one origin and holds no service token: the
-gateway signs the person in by OIDC, serves the Desk, and forwards
-`/svc/<service>/` to each service the Desk reads — makod, processd, vertragd,
-invoicd, billingd, edmd, netzbilanzd and agentd — with the person's access
-token as `Authorization: Bearer`. `desk/deploy/gateway.yaml` is the
-gateway's routing, ready to adapt.
+the gateway. The browser uses one origin. The gateway authenticates the
+person through OIDC and forwards requests to the service paths listed in
+`desk/deploy/gateway.yaml` with the person's access token.
+`desk/deploy/oauth2-proxy.cfg` enables Secure, HttpOnly and SameSite=Strict
+for the session cookie. Signing out opens `/oauth2/sign_out`. The operator's
+gateway and identity provider determine effective session lifetimes and
+provider logout. [OAuth2 Proxy sign-out](https://oauth2-proxy.github.io/oauth2-proxy/features/endpoints/#sign-out)
 
 Each service verifies that token as it does any other, so its
 `[oidc] audience` must be in the token's `aud` — an audience mapper at the
@@ -43,6 +44,8 @@ opens (default `https://hupe1980.github.io/mako`). Mount your own file over
 `/usr/share/nginx/html/config.json` to point it at a manual you host; a
 missing file or a value that is not an `https:` or same-origin address keeps
 the default.
+
+The gateway forwards the selected invoice’s document-evidence read to the document service with the caller’s token. An installation with `shadowReview` enabled also activates the commented `shadowreview` upstream in `desk/deploy/gateway.yaml` and sets its URI to the isolated review installation. It forwards the review and resolution routes to that installation. [Isolated review setup](@/docs/services/processd.md#isolated-shadow-review)
 
 ## A process, by its business key
 
@@ -413,12 +416,10 @@ it, no proposal is shown.
 
 A Korrekturbedarf opens nothing: the Desk has no Netzentgelte view.
 
-A **Klärfall** is one case per cause the Prozessüberwachung opened — a
-refused message, a dead letter, a missed Frist. Its row reads as the cause in
-the words of the list that defines the code, what to do about it („Korrigieren
-und neu senden", „Selbst klären"), and how often it occurred; it is due when
-the Prozessüberwachung says. „Warum?" only explains it — the case is closed by
-the action, never by the assistant.
+A **Klärfall** groups signals for the same partner and message within the tenant.
+Its row shows the recorded cause, the suggested action and the number of
+occurrences. An APERAK, a dead letter or a missed Frist can open a case.
+Open the row to see which Marktrolle owns it and decide what to do.
 
 On the **Überblick**, „Ohne Eingriff" counts the processes of a PID that ended
 this month with no person touching them, as the Prozessüberwachung counts
@@ -457,6 +458,8 @@ repeat the list.
 
 [![Heute as Lieferant: the Lage, then the items in Frist bands, a Hinweis of the assistant under the item it concerns](heute-light.png)](heute-light.png)
 [![Heute as Lieferant: the Lage, then the items in Frist bands, a Hinweis of the assistant under the item it concerns](heute-dark.png)](heute-dark.png)
+
+The Lieferant’s **Offene Abrechnungen** row shows whether the contract source could enumerate the billing candidates. **Laufdetails** gives the source, the end-of-supply search window, the run times and the next scheduled attempt. A successful empty enumeration states that it found no components. An outage leaves the population unknown. Recorded open periods remain visible with their issuing Lieferant, including two issuers at the same MaLo and dates. **Überblick** counts invoices issued on time and late for each Lieferant.
 
 ## A Marktlokation, its supply, metering and account
 
@@ -502,6 +505,8 @@ computed in the Desk.
 [![Nachrechnen: the verdict first, then each line with its sources](nachrechnen-light.png)](nachrechnen-light.png)
 [![Nachrechnen: the verdict first, then each line with its sources](nachrechnen-dark.png)](nachrechnen-dark.png)
 
+In the Lieferant workspace, **Rechnungsstellung** shows the dispatch time recorded by billing. **Bereitstellung beim Kunden** shows the selected invoice’s channel evidence. Portal publication, opening and channel-confirmed delivery carry their recorded times. A handoff, a suppressed channel or a failed attempt leaves customer availability unknown without another channel’s confirmation.
+
 ## Gegenparteien
 
 **Gegenparteien** lists every market partner the Prozessüberwachung counted,
@@ -517,12 +522,21 @@ every process behind a figure. The terms are defined under „Begriffe";
 
 ## Klärfälle, Zahlungen, Anlagen
 
-A **Klärfall** in Heute opens its own page: the cause in the words of the
-list that defines its code, where it came from, when it is due, and its
-Verlauf. Where the Prozessüberwachung proposes a correction the one action is
-„Korrigieren & senden" — choosing another allowed command asks for a reason —
-otherwise „Erledigt" with a reason, or „Zuweisen". Each is held for undo like
-every decision, and a refusal is said in words.
+Open a **Klärfall** in Heute to read its cause, source list and owning Rolle.
+A missing deadline appears as „Frist unbekannt“. The process monitor proposes
+the next action. When it offers a correction, choose „Korrigieren & senden“.
+Selecting another permitted answer requires a reason. You can inspect the
+service hint and command identifiers under „Aktionsdetails“. The Verlauf
+shows each recorded command under „Befehlsdetails“. Where the monitor offers
+no correction, you can take the case or resolve it with a reason.
+
+„Rückgängig“ during the five-second hold cancels the request and returns focus
+to the action. A refusal keeps your reason and focuses „Details“. If the service reports that
+the case is already closed, the Desk refreshes its status and removes its
+write actions. A lost reply
+leaves the result unknown. On reload, the Desk reads the case again and links
+to its recorded status and Verlauf. That read sends no decision. A later case
+status can also reflect a colleague's action.
 
 **Zahlungen** lists, for the Lieferant, every payment no account took — each
 with the account the Kundenkonten propose and one key, <kbd>A</kbd>, to assign
@@ -719,17 +733,20 @@ violet, kept for what a model wrote: upright text behind a thin violet rule
 and its sparkle. `desk/src/design/tokens.test.ts` refuses a second accent and
 holds every text colour to WCAG AA on every surface, light and dark.
 
-When a service serves one of the tools the Desk was generated against with a
-different schema, a banner at the top names that service, instead of a view
-failing later. Until the Desk matches that service again it offers no
-decision on it, and it checks again whenever the window regains focus.
+When a service's contract differs from the Desk's generated snapshot, the
+banner names the service. The process, Freigabe and Klärfall views withhold
+the affected process decisions. The Desk checks again when the window regains
+focus.
 
 A decision leaves the Desk with an `Idempotency-Key`, so a request repeated
 on the way is one decision at the service. One sent as the tab closed — its
 hold flushed on `pagehide` — may never have its answer read; the next load
 shows it under „Beim letzten Mal gesendet" with what the service says became
-of it (a Freigabe's outcome from the Prozessüberwachung), until you confirm
-you have seen it.
+of it, until you acknowledge it. A Freigabe shows its recorded outcome.
+An LF Klärfall shows the current case status in the initiating Rolle. For a
+Rechnungsdisput, Prüfposten, geparkte Buchung or gehaltene Rechnung, the Desk
+says that the request outcome is unknown and directs you to the corresponding
+list. Opening or acknowledging the notice sends no decision.
 
 When the assistant has prepared a proposal for the Freigabe on a process
 page, the decision bar shows it — labelled, with the gate's verdict

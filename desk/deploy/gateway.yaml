@@ -34,6 +34,12 @@ upstreamConfig:
       path: ^/svc/makod/(mcp|api/v1/openapi\.json|api/v1/probe/[^/]+)$
       rewriteTarget: /$1
       uri: http://makod:8080
+    # An installation with shadowReview enabled supplies a dedicated review
+    # upstream. Set its URI to the isolated service and enable this entry.
+    # - id: shadowreview
+    #   path: ^/svc/processd/(api/v1/shadow/review(?:/[^/]+/resolve)?)$
+    #   rewriteTarget: /$1
+    #   uri: http://processd-review:8580
     - id: processd
       path: ^/svc/processd/(mcp|api/v1/openapi\.json|api/v1/queue/[^/]+/(?:approve|reject)|api/v1/counterparties/[^/]+/[^/]+|api/v1/klaerfaelle/[^/]+/(?:dispatch|resolve|assign)|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
@@ -62,6 +68,10 @@ upstreamConfig:
       path: ^/svc/billingd/(mcp|api/v1/openapi\.json|api/v1/billing/[^/]+/(?:release|reviewed)|api/v1/webhooks/endpoints|api/v1/webhooks/endpoints/[^/]+|api/v1/webhooks/endpoints/[^/]+/(?:rotate-secret|test|deliveries|replay)|api/v1/webhooks/deliveries/[^/]+/replay|api/v1/events)$
       rewriteTarget: /$1
       uri: http://billingd:9280
+    - id: outputd
+      path: ^/svc/outputd/(api/v1/openapi\.json|api/v1/documents/by-subject/INVOICE)$
+      rewriteTarget: /$1
+      uri: http://outputd:9880
     - id: accountingd
       path: ^/svc/accountingd/(mcp|api/v1/openapi\.json|api/v1/bookings/[^/]+/(?:rebook|discard)|api/v1/accounts/[^/]+/(?:balance|ledger)|api/v1/dunning|api/v1/offene-posten|api/v1/payments/match|api/v1/payments/unmatched|api/v1/payments/[^/]+/assign|api/v1/credit-payouts|api/v1/credit-payouts/[^/]+/paid|api/v1/eeg/payouts)$
       rewriteTarget: /$1

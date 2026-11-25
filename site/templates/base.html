@@ -1,10 +1,4 @@
 <!DOCTYPE html>
-{#- The page's own language. An English page carries German only as domain
-    terms (Marktlokation, Prüfidentifikator, Frist) inside English sentences.
-    Per-term `lang="de"` spans would be hundreds of markup insertions for no
-    assistive gain — a screen reader announcing "Prüfidentifikator" with a
-    German voice inside an English sentence is a regression, not an
-    improvement. The German pages under /de/ are German throughout. -#}
 <html lang="{{ lang }}" data-theme="auto">
 <head>
   <meta charset="utf-8">
@@ -50,9 +44,7 @@
   {%- if page is defined and page.description -%}{%- set page_desc = page.description -%}{%- elif section is defined and section.description -%}{%- set page_desc = section.description -%}{%- endif -%}
   {%- set page_url = config.base_url -%}
   {%- if page is defined and page.permalink -%}{%- set page_url = page.permalink -%}{%- elif section is defined and section.permalink -%}{%- set page_url = section.permalink -%}{%- endif -%}
-  {#- Search engines show roughly 155–160 characters. Every front-matter
-      description is written to fit; this bound is the backstop that keeps a
-      longer one from being cut by the engine instead. -#}
+  {#- Keep metadata compact when a page supplies a long description. -#}
   {%- set meta_desc = page_desc | striptags | truncate(length=180, end="…") -%}
   {%- set og_image = get_url(path=config.extra.og_image) -%}
 

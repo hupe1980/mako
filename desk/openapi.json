@@ -5023,12 +5023,14 @@
             "description": "Per Lieferant: owed, on time, late and overdue under § 40c Abs. 2 EnWG",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/billingd.DeadlineSummary"
+                }
               }
             }
           },
           "403": {
-            "description": "Cedar `read-billing` refused",
+            "description": "Cedar `read-billing-watch` refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -5220,6 +5222,99 @@
         }
       }
     },
+    "/svc/billingd/api/v1/billing/runs/sweep": {
+      "post": {
+        "tags": [
+          "deadlines"
+        ],
+        "summary": "Request the scheduled billing workflow on today's Berlin business date.",
+        "operationId": "post_billing_sweep",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "UUID identifying this attempt; reuse it after an uncertain response",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/billingd.SweepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Billing run completed or receipt replayed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/billingd.SweepReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A single UUID Idempotency-Key is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/billingd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar `run-billing-sweep` refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/billingd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another run is active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/billingd.ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown sweep option",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/billingd.ApiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The attempt failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/billingd.ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/svc/billingd/api/v1/billing/sammelrechnung/{rahmenvertrag_id}": {
       "post": {
         "tags": [
@@ -5315,8 +5410,7 @@
         "tags": [
           "deadlines"
         ],
-        "summary": "`GET /api/v1/billing/unbilled?open=&limit=`",
-        "description": "The § 40c Abs. 2 EnWG watch: every period the scheduled run attempted and\ncould not bill, with its refusal code and the day the invoice is owed by,\nthe earliest due first. `open=false` includes the ones an invoice has\nsince discharged.",
+        "summary": "The LF's refused periods, ordered by due date, with the latest discovery evidence.",
         "operationId": "get_unbilled_periods",
         "parameters": [
           {
@@ -5340,15 +5434,17 @@
         ],
         "responses": {
           "200": {
-            "description": "Periods the scheduled run could not bill, the earliest due first",
+            "description": "Refused periods ordered by due date, with the latest discovery evidence",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/billingd.UnbilledPeriods"
+                }
               }
             }
           },
           "403": {
-            "description": "Cedar `read-billing` refused",
+            "description": "Cedar `read-billing-watch` refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -16995,7 +17091,7 @@
           "format-candidates"
         ],
         "summary": "Which of the operator's archived messages candidate `fv` would newly\nrefuse.",
-        "description": "# Errors\n\n`invalid_format_version`, `candidate_not_found`, `candidate_invalid`,\n`archive_unavailable`, `invalid_format`.",
+        "description": "# Errors\n\n`invalid_format_version`, `candidate_not_found`, `candidate_invalid`,\n`candidate_catalog_unavailable`, `archive_unavailable`, `invalid_format`.",
         "operationId": "impact_route",
         "parameters": [
           {
@@ -17041,7 +17137,7 @@
             "description": "candidate_invalid"
           },
           "503": {
-            "description": "archive_unavailable"
+            "description": "archive_unavailable or candidate_catalog_unavailable"
           }
         },
         "security": [
@@ -28162,6 +28258,97 @@
         }
       }
     },
+    "/svc/outputd/api/v1/documents/by-subject/{kind}": {
+      "get": {
+        "tags": [
+          "delivery evidence"
+        ],
+        "summary": "Read channel evidence by an opaque reference, including separators in invoice numbers.",
+        "operationId": "get_document_by_reference",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Document kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/outputd.TemplateKind"
+            }
+          },
+          {
+            "name": "subject_ref",
+            "in": "query",
+            "description": "The issuer's nonempty reference. Send exactly once as a query value.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel states and their recorded timestamps for this document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/outputd.SubjectEvidence"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid kind or reference",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/outputd.DocumentProblem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access token refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/outputd.ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cedar read-document refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/outputd.DocumentProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document matches the kind and reference in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/outputd.DocumentProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure with a correlation identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/outputd.DocumentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/svc/portald/api/v1/portal/{malo_id}/balance": {
       "get": {
         "tags": [
@@ -31082,6 +31269,63 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/svc/processd/api/v1/shadow/review": {
+      "get": {
+        "tags": [
+          "shadow"
+        ],
+        "operationId": "get_review",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/processd.ReviewResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/svc/processd/api/v1/shadow/review/{id}/resolve": {
+      "post": {
+        "tags": [
+          "shadow"
+        ],
+        "summary": "Record that the incumbent answer differs from the reviewed evidence (alt_falsch).",
+        "operationId": "resolve",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/processd.Resolve"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "412": {
+            "description": ""
           }
         }
       }
@@ -36900,6 +37144,15 @@
             }
           },
           {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "Invoice issuer for a supply-specific period read.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "as_of",
             "in": "query",
             "description": "Point form: the product in force on this day. Defaults to today.",
@@ -36939,6 +37192,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid supply selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No valid token",
             "content": {
@@ -36961,6 +37224,16 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous supply period",
             "content": {
               "application/json": {
                 "schema": {
@@ -37001,6 +37274,15 @@
             }
           },
           {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "Invoice issuer for a supply-specific period read.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "from",
             "in": "query",
             "required": true,
@@ -37025,6 +37307,16 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid supply selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
               }
             }
           },
@@ -37058,6 +37350,16 @@
               }
             }
           },
+          "409": {
+            "description": "Ambiguous supply period",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "A refusal naming the rule that decided",
             "content": {
@@ -37083,6 +37385,15 @@
             "in": "path",
             "description": "11-digit Marktlokations-ID",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "Select the issuer when a MaLo has competing supply components.",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -37128,6 +37439,16 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous supply or later module state",
             "content": {
               "application/json": {
                 "schema": {
@@ -37954,6 +38275,26 @@
         ],
         "summary": "`GET /api/v1/vertraege/billing-candidates` — § 40b EnWG billing cadence feed.",
         "operationId": "billing_candidates",
+        "parameters": [
+          {
+            "name": "ended_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "ended_through",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -38005,6 +38346,33 @@
             }
           },
           {
+            "name": "lf_mp_id",
+            "in": "query",
+            "description": "Invoice issuer, required alongside the full billing interval.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
             "name": "stichtag",
             "in": "query",
             "description": "`?stichtag=YYYY-MM-DD` — the date a Kündigungsfrist is measured from.\nAbsent means today.",
@@ -38032,6 +38400,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid supply selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No valid token",
             "content": {
@@ -38054,6 +38432,16 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/vertragd.ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous supply period",
             "content": {
               "application/json": {
                 "schema": {
@@ -41348,6 +41736,68 @@
         },
         "additionalProperties": false
       },
+      "billingd.DeadlineSummary": {
+        "type": "object",
+        "description": "`summarize_billing_deadlines`' answer.",
+        "required": [
+          "lieferanten"
+        ],
+        "properties": {
+          "discovery": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/billingd.Discovery"
+              }
+            ]
+          },
+          "lieferanten": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/billingd.DeadlineSummaryRow"
+            },
+            "description": "One row per Lieferant (MP-ID)."
+          }
+        }
+      },
+      "billingd.DeadlineSummaryRow": {
+        "type": "object",
+        "description": "One Lieferant's § 40c Abs. 2 EnWG standing — the Überblick tile.",
+        "required": [
+          "lf_mp_id",
+          "owed",
+          "issued_on_time",
+          "issued_late",
+          "overdue"
+        ],
+        "properties": {
+          "issued_late": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Invoices issued after their `due_on`."
+          },
+          "issued_on_time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Invoices issued on or before their `due_on` (Berlin date of issue)."
+          },
+          "lf_mp_id": {
+            "type": "string"
+          },
+          "overdue": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Open unbilled periods past their deadline."
+          },
+          "owed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Open unbilled periods still inside their deadline."
+          }
+        }
+      },
       "billingd.Delivery": {
         "type": "object",
         "description": "One event to one endpoint.",
@@ -41451,6 +41901,84 @@
           "delivered",
           "dead_lettered"
         ]
+      },
+      "billingd.Discovery": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "business_date",
+          "started_at",
+          "source",
+          "origin",
+          "status",
+          "ended_from",
+          "ended_through"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "candidate_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "ended_through": {
+            "type": "string",
+            "format": "date"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_failure_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
       },
       "billingd.Endpoint": {
         "type": "object",
@@ -42027,6 +42555,24 @@
           }
         }
       },
+      "billingd.SweepReceipt": {
+        "type": "object",
+        "description": "Receipt of a committed manual run. Its evidence is available in the billing watch.",
+        "required": [
+          "run_id"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "billingd.SweepRequest": {
+        "type": "object",
+        "description": "The run uses the installation's clock and policy. Unknown options are refused.",
+        "additionalProperties": false
+      },
       "billingd.TestDelivery": {
         "type": "object",
         "description": "What a test delivery came to.",
@@ -42080,6 +42626,104 @@
             "type": "integer",
             "format": "int64",
             "description": "The rows counted, at most 10 000."
+          }
+        }
+      },
+      "billingd.UnbilledPeriodRow": {
+        "type": "object",
+        "description": "One recorded unbilled period, as the Desk's Heute and the MCP tool read it.",
+        "required": [
+          "malo_id",
+          "lf_mp_id",
+          "period_from",
+          "period_to",
+          "final_invoice",
+          "reason_code",
+          "due_on",
+          "days_left",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "days_left": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Days from today (Europe/Berlin) to `due_on`; negative once overdue."
+          },
+          "due_on": {
+            "type": "string",
+            "format": "date",
+            "description": "§ 40c Abs. 2 EnWG: the last day the invoice may reach the customer."
+          },
+          "final_invoice": {
+            "type": "boolean",
+            "description": "The period ends with the supply and is owed an Abschlussrechnung."
+          },
+          "lf_mp_id": {
+            "type": "string"
+          },
+          "malo_id": {
+            "type": "string"
+          },
+          "period_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_to": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason_code": {
+            "type": "string",
+            "description": "Stable refusal code — word it from the catalogue, never show it raw."
+          },
+          "settled_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The invoice that discharged the period; `None` while it is open."
+          }
+        }
+      },
+      "billingd.UnbilledPeriods": {
+        "type": "object",
+        "description": "`list_unbilled_periods`' answer.",
+        "required": [
+          "periods",
+          "count",
+          "saturated"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "How many periods `periods` holds.",
+            "minimum": 0
+          },
+          "discovery": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/billingd.Discovery"
+              }
+            ]
+          },
+          "periods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/billingd.UnbilledPeriodRow"
+            },
+            "description": "The earliest `due_on` first."
+          },
+          "saturated": {
+            "type": "boolean",
+            "description": "At least `limit` periods matched: more may be waiting than were listed."
           }
         }
       },
@@ -45815,7 +46459,7 @@
           },
           "not_read": {
             "type": "object",
-            "description": "Files not read, per reason (`compressed`, `unnamed`, `unparseable`,\n`no_binding_profile`).",
+            "description": "Unassessed input by reason. `compressed`, `unnamed` and `unparseable`\ncount files. `no_binding_profile` counts messages.",
             "additionalProperties": {
               "type": "integer",
               "minimum": 0
@@ -49835,6 +50479,152 @@
           }
         }
       },
+      "outputd.ApiError": {
+        "type": "object",
+        "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
+        "required": [
+          "error",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable English machine code (`limit_too_large`), where the refusal has one."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for the developer."
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status's reason phrase."
+          },
+          "error_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "On a 5xx: the id the service's log line carries; the cause is never in the body."
+          },
+          "upstream": {
+            "type": "string",
+            "description": "On a 502/503/504: the service this one called that failed."
+          }
+        },
+        "additionalProperties": true
+      },
+      "outputd.ChannelEvidence": {
+        "type": "object",
+        "required": [
+          "channel",
+          "status",
+          "first_sent_at",
+          "delivered_at",
+          "read_at"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "PORTAL, EMAIL, POST or ERP."
+          },
+          "delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "first_sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "PENDING, SENT, DELIVERED, FAILED or SUPPRESSED. SENT records a handoff."
+          }
+        }
+      },
+      "outputd.DocumentProblem": {
+        "type": "object",
+        "description": "An outputd business refusal.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/outputd.DocumentProblemDetail"
+          }
+        }
+      },
+      "outputd.DocumentProblemDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable code identifying the refusal."
+          },
+          "error_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Correlation identifier on internal failures."
+          },
+          "message": {
+            "type": "string",
+            "description": "Diagnostic for the caller."
+          }
+        }
+      },
+      "outputd.SubjectEvidence": {
+        "type": "object",
+        "description": "Delivery proof for a selected document, without recipient addresses or relay payloads.",
+        "required": [
+          "kind",
+          "subject_ref",
+          "deliveries"
+        ],
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/outputd.ChannelEvidence"
+            }
+          },
+          "kind": {
+            "type": "string"
+          },
+          "subject_ref": {
+            "type": "string"
+          }
+        }
+      },
+      "outputd.TemplateKind": {
+        "type": "string",
+        "description": "Which document a template renders.\n\nEvery kind shares one store and one engine, deliberately: an operator\nmaintaining two template systems for one brand is how a logo change reaches\nthe invoice and not the Mahnung.",
+        "enum": [
+          "INVOICE",
+          "MAHNUNG",
+          "PREISANPASSUNG",
+          "GEBUEHRENBESCHEID",
+          "VERTRAGSZUSAMMENFASSUNG",
+          "VERTRAGSBESTAETIGUNG",
+          "WIDERRUFSBESTAETIGUNG"
+        ]
+      },
       "portald.ApiError": {
         "type": "object",
         "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
@@ -49973,6 +50763,28 @@
         },
         "additionalProperties": false
       },
+      "processd.Answer": {
+        "type": "object",
+        "required": [
+          "pid",
+          "tree",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "tree": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "processd.ApiError": {
         "type": "object",
         "description": "The problem body every refusal answers with. Branch on `code`; `detail` is for the developer.",
@@ -50005,6 +50817,73 @@
         },
         "additionalProperties": true
       },
+      "processd.Assessment": {
+        "type": "object",
+        "required": [
+          "expected",
+          "actual",
+          "expected_fingerprint",
+          "facts_fingerprint",
+          "answer_sha256",
+          "release",
+          "ebd_revision",
+          "pruefschritt",
+          "timing",
+          "deadline",
+          "producer"
+        ],
+        "properties": {
+          "actual": {
+            "$ref": "#/components/schemas/processd.Answer"
+          },
+          "answer_sha256": {
+            "type": "string"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/processd.Deadline"
+          },
+          "ebd_revision": {
+            "type": "string"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/processd.Answer"
+          },
+          "expected_fingerprint": {
+            "type": "string"
+          },
+          "facts_fingerprint": {
+            "type": "string"
+          },
+          "incumbent_received_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "observation_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "producer": {
+            "type": "string"
+          },
+          "pruefschritt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "release": {
+            "type": "string"
+          },
+          "timing": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "processd.AssignKlaerfallRequest": {
         "type": "object",
         "description": "The body of `POST /api/v1/klaerfaelle/{id}/assign`.",
@@ -50015,6 +50894,103 @@
               "null"
             ],
             "description": "Who takes the case; absent or null releases it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "processd.Cohort": {
+        "type": "object",
+        "required": [
+          "version",
+          "nb",
+          "role",
+          "scope",
+          "coverage",
+          "directions",
+          "start",
+          "end",
+          "complete_werktage",
+          "rows"
+        ],
+        "properties": {
+          "complete_werktage": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/processd.Coverage"
+          },
+          "directions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "nb": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/processd.Occurrence"
+            }
+          },
+          "scope": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "processd.Coverage": {
+        "type": "object",
+        "required": [
+          "journal",
+          "inventory",
+          "observed"
+        ],
+        "properties": {
+          "inventory": {
+            "type": "string"
+          },
+          "journal": {
+            "type": "string"
+          },
+          "observed": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "processd.Deadline": {
+        "type": "object",
+        "required": [
+          "due_at",
+          "source"
+        ],
+        "properties": {
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -50488,6 +51464,36 @@
           }
         }
       },
+      "processd.Occurrence": {
+        "type": "object",
+        "required": [
+          "id",
+          "batch_revision",
+          "request_sha256"
+        ],
+        "properties": {
+          "assessment": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/processd.Assessment"
+              }
+            ]
+          },
+          "batch_revision": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "request_sha256": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "processd.Owner": {
         "type": "string",
         "description": "Who owns an endpoint.",
@@ -50805,6 +51811,68 @@
           }
         }
       },
+      "processd.Resolution": {
+        "type": "object",
+        "required": [
+          "occurrence",
+          "generation",
+          "disposition",
+          "actor",
+          "evidence",
+          "reason",
+          "recorded_at"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "occurrence": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "processd.Resolve": {
+        "type": "object",
+        "required": [
+          "generation",
+          "revision",
+          "evidence",
+          "reason"
+        ],
+        "properties": {
+          "evidence": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "processd.ResolveKlaerfallRequest": {
         "type": "object",
         "description": "The body of `POST /api/v1/klaerfaelle/{id}/resolve`.",
@@ -50828,6 +51896,85 @@
           "operator",
           "nobody"
         ]
+      },
+      "processd.ReviewResult": {
+        "type": "object",
+        "required": [
+          "cohort",
+          "generation",
+          "revision",
+          "resolutions",
+          "eligible",
+          "assessed",
+          "unassessed",
+          "different",
+          "open_differences",
+          "timing_unassessed",
+          "required_werktage",
+          "ready",
+          "can_resolve",
+          "corrections"
+        ],
+        "properties": {
+          "assessed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "can_resolve": {
+            "type": "boolean"
+          },
+          "cohort": {
+            "$ref": "#/components/schemas/processd.Cohort"
+          },
+          "corrections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "different": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "eligible": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "open_differences": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "required_werktage": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "resolutions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/processd.Resolution"
+            }
+          },
+          "revision": {
+            "type": "string"
+          },
+          "timing_unassessed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unassessed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "processd.RotateSecret": {
         "type": "object",

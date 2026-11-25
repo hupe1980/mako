@@ -65,28 +65,15 @@ async fn announce_due(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-/// Announce every order whose IFTSTA was dead-lettered or is overdue, once.
-///
-/// The escalation is **claimed before it is announced**: `mark_iftsta_escalated`
-/// only matches an order that has not been escalated yet, and it runs first
-/// inside the transaction that also writes the event. Announcing first and
-/// stamping afterwards let two replicas — which both read the same stuck list —
-/// each emit `de.mako.sperr.iftsta.ausstehend` for one order, and only then have one
-/// of them lose the stamp.
+/// Claim the undelivered IFTSTA and commit their notices together.
 async fn escalate_stuck(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
-    let stuck = pg::list_stuck_iftsta(pool, tenant).await?;
-    if stuck.is_empty() {
-        return Ok(false);
+    let mut tx = pool.begin().await?;
+    let stuck = pg::claim_stuck_iftsta(&mut tx, tenant).await?;
+    for order in &stuck {
+        events::iftsta_ausstehend(&mut tx, tenant, order).await?;
     }
-    for order in stuck {
-        let mut tx = pool.begin().await?;
-        if !pg::mark_iftsta_escalated(&mut *tx, order.id, tenant).await? {
-            // Another replica announced this one between the list and here.
-            tx.rollback().await?;
-            continue;
-        }
-        events::iftsta_ausstehend(&mut tx, tenant, &order).await?;
-        tx.commit().await?;
+    tx.commit().await?;
+    for order in &stuck {
         tracing::error!(
             order_id = %order.id, malo_id = %order.malo_id,
             last_error = %order.last_error, attempts = order.attempts,
@@ -95,31 +82,23 @@ async fn escalate_stuck(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
              and their process cannot close",
         );
     }
-    Ok(true)
+    Ok(!stuck.is_empty())
 }
 
-/// Announce every pending order past the Kap. 3.5.1.2 Nr. 1 execution window, once.
-///
-/// This is a **regulatory** deadline, not a queue-depth signal: GPKE Teil 2
-/// gives the NB 6 Werktage after the frühestmöglicher Sperrtermin to carry the
-/// disconnection out, and an order sitting past it is a compliance finding a
-/// BNetzA audit can see.
+/// Claim the missed execution windows and commit their notices together.
 async fn announce_overdue_executions(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
-    let overdue = pg::list_ausfuehrung_ueberfaellig(pool, tenant).await?;
-    if overdue.is_empty() {
-        return Ok(false);
+    let mut tx = pool.begin().await?;
+    let overdue = pg::claim_overdue_executions(&mut tx, tenant).await?;
+    for (id, order, faellig_am) in &overdue {
+        events::ausfuehrung_ueberfaellig(&mut tx, tenant, *id, order, *faellig_am).await?;
     }
-    for (id, order, faellig_am) in overdue {
-        let malo_id = &order.malo_id;
-        let mut tx = pool.begin().await?;
-        events::ausfuehrung_ueberfaellig(&mut tx, tenant, id, &order, faellig_am).await?;
-        pg::mark_ausfuehrung_escalated(&mut *tx, id, tenant).await?;
-        tx.commit().await?;
+    tx.commit().await?;
+    for (id, order, faellig_am) in &overdue {
         tracing::warn!(
-            order_id = %id, %malo_id, %faellig_am,
+            order_id = %id, malo_id = %order.malo_id, %faellig_am,
             "processd sperr: Sperrauftrag past the 6-Werktage execution window \
              (BK6-24-174 GPKE Teil 2 Kap. 3.5.1.2 Nr. 1)"
         );
     }
-    Ok(true)
+    Ok(!overdue.is_empty())
 }

@@ -31,7 +31,7 @@ mako-invoic      = { path = "../../crates/mako-invoic" }
 # Naming them is the point: inherited through `mako-wim` they would leave makod
 # depending on another crate's feature choice, and dropping it there would break
 # this crate with an error pointing somewhere else entirely.
-mako-pruefung      = { workspace = true, features = ["role-msb", "role-emob", "role-mabis"] }
+mako-pruefung      = { workspace = true, features = ["role-nb", "role-msb", "role-emob", "role-mabis"] }
 mako-wim         = { path = "../../crates/mako-wim" }
 mako-geli-gas    = { path = "../../crates/mako-geli-gas" }
 dvgw-edi         = { path = "../../crates/dvgw-edi" }
@@ -68,7 +68,7 @@ edi-energy   = { path = "../../crates/edi-energy", default-features = false, fea
 anyhow             = { workspace = true }
 axum               = { version = "0.8", features = [] }
 clap               = { version = "4", features = ["derive", "env"] }
-fd-lock            = "4"
+tempfile           = "3"
 object_store       = { version = "0.14", features = ["aws", "gcp", "azure"] }
 serde              = { version = "1", features = ["derive"] }
 toml               = { version = "0.8", default-features = false, features = ["parse"] }
@@ -116,7 +116,6 @@ mako-service = { workspace = true, features = ["testing"] }
 # `asx::testkit`: an SM-PKI-like test CA, BDEW parties with the MP-ID as OU,
 # an in-process loopback partner and the dedup conformance suite.
 asx-rs       = { workspace = true, features = ["test-util"] }
-tempfile     = "3"
 tokio        = { version = "1", features = ["full"] }
 serde_json   = { workspace = true }
 time         = { workspace = true }

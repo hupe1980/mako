@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BestellungAngenommen",
+  "type": "object",
+  "properties": {
+    "bestellung_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "bestellreferenz": {
+      "type": "string"
+    },
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "kunden_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "vertrags_nr": {
+      "type": "string"
+    },
+    "vertragsschluss_am": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "widerrufsfrist": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Widerrufsfrist"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "bestellung_id",
+    "bestellreferenz",
+    "vertrag_id",
+    "kunden_id",
+    "vertrags_nr",
+    "vertragsschluss_am"
+  ],
+  "$defs": {
+    "Widerrufsfrist": {
+      "type": "object",
+      "properties": {
+        "beginn": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "ende": {
+          "type": "string",
+          "format": "date"
+        },
+        "erloeschen": {
+          "type": "string",
+          "format": "date"
+        }
+      },
+      "required": [
+        "ende",
+        "erloeschen"
+      ]
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.bestellung.angenommen.json"
+}

@@ -1,7 +1,7 @@
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { RolleProvider } from "../app/rollen";
 import { createDeskRouter } from "../app/router";
 import { vergessen } from "../data/verweigert";
@@ -11,6 +11,11 @@ import { vergessen } from "../data/verweigert";
 // history states; a decision bar only while a Freigabe is held for the
 // process; the Verlauf with its Nachweise beside the details. Every figure on
 // it is a service's.
+
+// Route imports are lazy in production. This suite measures the process facts once the view is loaded.
+beforeAll(async () => {
+  await import("./Prozess");
+});
 
 async function open(path: string) {
   const router = createDeskRouter(createMemoryHistory({ initialEntries: [path] }));

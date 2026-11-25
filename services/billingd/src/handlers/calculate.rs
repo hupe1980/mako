@@ -208,7 +208,7 @@ pub async fn post_calculate(
         .await
         {
             Ok(id) => id,
-            Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+            Err(e) => return Err(period_conflict(&mut tx, &cfg.tenant, e).await),
         };
         tx.commit().await?;
         return Ok((
@@ -291,7 +291,7 @@ pub async fn post_calculate(
     .await;
     let record_id = match record_id {
         Ok(id) => id,
-        Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+        Err(e) => return Err(period_conflict(&mut tx, &cfg.tenant, e).await),
     };
     if held {
         tracing::warn!(
@@ -300,7 +300,14 @@ pub async fn post_calculate(
             "billingd: invoice HELD by risk gate — issuance requires POST …/release"
         );
     } else {
-        let ce = rechnung_erstellt_ce(record_id, &malo_id, &req.lf_mp_id, &rechnung_json, false);
+        let ce = rechnung_erstellt_ce(
+            &cfg.tenant,
+            record_id,
+            &malo_id,
+            &req.lf_mp_id,
+            &rechnung_json,
+            false,
+        );
         issue_record(&mut tx, &cfg, record_id, &ce).await?;
     }
     persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
@@ -325,7 +332,7 @@ pub async fn post_calculate(
                 "netto_eur": g.netto_eur,
                 "brutto_eur": g.brutto_eur,
             })),
-            Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+            Err(e) => return Err(period_conflict(&mut tx, &cfg.tenant, e).await),
         },
         None => None,
     };
@@ -359,12 +366,13 @@ pub async fn post_calculate(
 /// reading the message knows which invoice to storno. An internal error would
 /// read as "try again" for something that can never succeed.
 pub(crate) async fn period_conflict(
-    pool: &PgPool,
+    executor: &mut sqlx::PgConnection,
     tenant: &str,
     e: crate::pg::InsertError,
 ) -> crate::error::BillingError {
     let crate::pg::InsertError::PeriodAlreadyIssued {
         ref malo_id,
+        ref lf_mp_id,
         ref product_code,
         period_from,
         period_to,
@@ -372,9 +380,16 @@ pub(crate) async fn period_conflict(
     else {
         return e.into();
     };
-    let Some((id, nr, outcome)) =
-        crate::pg::find_live_original(pool, tenant, malo_id, product_code, period_from, period_to)
-            .await
+    let Some((id, nr, outcome)) = crate::pg::find_live_original(
+        executor,
+        tenant,
+        malo_id,
+        lf_mp_id,
+        product_code,
+        period_from,
+        period_to,
+    )
+    .await
     else {
         return e.into();
     };
@@ -386,6 +401,7 @@ pub(crate) async fn period_conflict(
             "rechnungsnummer": nr,
             "outcome": outcome,
             "malo_id": malo_id,
+            "lf_mp_id": lf_mp_id,
             "period_from": period_from.to_string(),
             "period_to": period_to.to_string(),
         }),
@@ -486,12 +502,65 @@ pub async fn get_review_queue(
     ))
 }
 
-/// `GET /api/v1/billing/unbilled?open=&limit=`
-///
-/// The § 40c Abs. 2 EnWG watch: every period the scheduled run attempted and
-/// could not bill, with its refusal code and the day the invoice is owed by,
-/// the earliest due first. `open=false` includes the ones an invoice has
-/// since discharged.
+/// Receipt of a committed manual run. Its evidence is available in the billing watch.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct SweepReceipt {
+    pub run_id: Uuid,
+}
+
+/// The run uses the installation's clock and policy. Unknown options are refused.
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SweepRequest {}
+
+/// Request the scheduled billing workflow on today's Berlin business date.
+#[utoipa::path(
+    post, path = "/api/v1/billing/runs/sweep", tag = "deadlines",
+    request_body = SweepRequest,
+    params(("Idempotency-Key" = Uuid, Header, description = "UUID identifying this attempt; reuse it after an uncertain response")),
+    responses(
+        (status = 200, description = "Billing run completed or receipt replayed", body = SweepReceipt),
+        (status = 400, description = "A single UUID Idempotency-Key is required", body = mako_service::ApiError),
+        (status = 403, description = "Cedar `run-billing-sweep` refused", body = mako_service::ApiError),
+        (status = 409, description = "Another run is active", body = mako_service::ApiError),
+        (status = 422, description = "Unknown sweep option", body = mako_service::ApiError),
+        (status = 502, description = "The attempt failed", body = mako_service::ApiError),
+    )
+)]
+pub async fn post_billing_sweep(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
+    headers: axum::http::HeaderMap,
+    Json(_request): Json<SweepRequest>,
+) -> mako_service::ApiResult<Json<SweepReceipt>> {
+    use mako_service::ApiError;
+    authorize(&cedar, &claims, "run-billing-sweep", &deps.cfg.tenant)
+        .map_err(|_| ApiError::forbidden("the LF role is required to run the billing sweep"))?;
+    let id = mako_service::headers::single_str(&headers, "Idempotency-Key")
+        .ok()
+        .flatten()
+        .and_then(|key| Uuid::parse_str(key).ok())
+        .ok_or_else(|| {
+            ApiError::bad_request("supply a single UUID Idempotency-Key")
+                .with_code("invalid_idempotency_key")
+        })?;
+    let now = time::OffsetDateTime::now_utc();
+    let next = crate::billing_runs::next_scheduled_at(&deps.cfg.billing_runs, now);
+    let run_id =
+        crate::billing_runs::sweep(&deps, &pool, mako_fristen::berlin_date(now), next, Some(id))
+            .await
+            .map_err(|error| {
+                ApiError::upstream("billing sweep", error).with_code("billing_sweep_failed")
+            })?
+            .ok_or_else(|| {
+                ApiError::conflict("a billing sweep is in progress").with_code("billing_sweep_busy")
+            })?;
+    Ok(Json(SweepReceipt { run_id }))
+}
+
+/// The LF's refused periods, ordered by due date, with the latest discovery evidence.
 #[utoipa::path(
     get,
     path = "/api/v1/billing/unbilled",
@@ -500,8 +569,8 @@ pub async fn get_review_queue(
         UnbilledQuery,
     ),
     responses(
-        (status = 200, description = "Periods the scheduled run could not bill, the earliest due first", body = serde_json::Value),
-        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+        (status = 200, description = "Refused periods ordered by due date, with the latest discovery evidence", body = crate::discovery::UnbilledPeriods),
+        (status = 403, description = "Cedar `read-billing-watch` refused", body = crate::openapi::Problem),
     )
 )]
 pub async fn get_unbilled_periods(
@@ -512,16 +581,15 @@ pub async fn get_unbilled_periods(
     Query(q): Query<UnbilledQuery>,
 ) -> BillingResult<impl IntoResponse> {
     let cfg = &deps.cfg;
-    authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
-    let rows = crate::pg::list_unbilled_periods(
-        &pool,
-        &cfg.tenant,
-        q.open.unwrap_or(true),
-        q.limit.unwrap_or(100).clamp(1, 1000),
-    )
-    .await?;
+    authorize(&cedar, &claims, "read-billing-watch", &cfg.tenant)?;
     Ok(Json(
-        serde_json::json!({ "count": rows.len(), "periods": rows }),
+        crate::discovery::UnbilledPeriods::read(
+            &pool,
+            &cfg.tenant,
+            q.open.unwrap_or(true),
+            q.limit,
+        )
+        .await?,
     ))
 }
 
@@ -542,8 +610,8 @@ pub struct UnbilledQuery {
     path = "/api/v1/billing/deadline-summary",
     tag = "deadlines",
     responses(
-        (status = 200, description = "Per Lieferant: owed, on time, late and overdue under § 40c Abs. 2 EnWG", body = serde_json::Value),
-        (status = 403, description = "Cedar `read-billing` refused", body = crate::openapi::Problem),
+        (status = 200, description = "Per Lieferant: owed, on time, late and overdue under § 40c Abs. 2 EnWG", body = crate::discovery::DeadlineSummary),
+        (status = 403, description = "Cedar `read-billing-watch` refused", body = crate::openapi::Problem),
     )
 )]
 pub async fn get_deadline_summary(
@@ -553,9 +621,10 @@ pub async fn get_deadline_summary(
     Extension(deps): Extension<Arc<BillingDeps>>,
 ) -> BillingResult<impl IntoResponse> {
     let cfg = &deps.cfg;
-    authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
-    let rows = crate::pg::deadline_summary(&pool, &cfg.tenant).await?;
-    Ok(Json(serde_json::json!({ "lieferanten": rows })))
+    authorize(&cedar, &claims, "read-billing-watch", &cfg.tenant)?;
+    Ok(Json(
+        crate::discovery::DeadlineSummary::read(&pool, &cfg.tenant).await?,
+    ))
 }
 
 /// `GET /api/v1/billing/{id}/nachrechnung`
@@ -734,6 +803,7 @@ pub async fn post_release(
             )
         })?;
     let ce = rechnung_erstellt_ce(
+        &cfg.tenant,
         row.id,
         &row.malo_id,
         &row.lf_mp_id,

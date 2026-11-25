@@ -1,17 +1,8 @@
 //! PyO3 bindings backing the `makotest` Python toolkit.
 //!
-//! Only the concerns a *regulator* defines in a table are bound here — BDEW
-//! identifier check digits, the Werktag/Feiertag calendar, the published
-//! answer-Frist table, AHB/MIG validation and the message builders. Everything
-//! shaped by test ergonomics (price curves, counterparty behaviour, fixtures)
-//! stays in Python.
-//!
-//! The reason for the split is drift. A second implementation of the AHB rule
-//! tables, of the BDEW check digit, or of "how long does a Netzbetreiber have
-//! to answer a 55001" would disagree with production at the first
-//! Formatumstellung — and a harness that disagrees with the system under test
-//! about what is valid, or about when a Frist expires, is worse than no
-//! harness.
+//! The bindings reuse the production check-digit validators, calendar, decision
+//! trees, AHB/MIG profiles and message builders. Python supplies fixture data,
+//! controls simulated counterparties and compares the observed outcomes.
 //!
 //! Module map:
 //!
@@ -32,6 +23,7 @@ pub mod events;
 pub mod fristen;
 pub mod identifiers;
 pub mod pids;
+mod rehearsal;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
@@ -56,6 +48,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "Rust core of makotest — BDEW identifiers, Fristen, EDIFACT.",
     )?;
     m.add_function(wrap_pyfunction!(bo4e_schema_version, m)?)?;
+    m.add_function(wrap_pyfunction!(rehearsal::decommissioned_nb_refusal, m)?)?;
+    m.add_function(wrap_pyfunction!(rehearsal::esa_invoice_verdict, m)?)?;
     identifiers::register(m)?;
     events::register(m)?;
     fristen::register(m)?;

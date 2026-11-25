@@ -61,11 +61,9 @@ pub async fn ingest_event(
     // 1. Verify the inbound signature through the shared verifier, which also
     //    refuses a stale `webhook-timestamp` — this is the ingest every other
     //    service's events arrive on, so a replay here re-enters the fan-out.
-    if let Err(err) = mako_service::webhook::verify_request(
-        secret.0.as_deref().map(str::as_bytes),
-        &headers,
-        &body,
-    ) {
+    if let Err(err) =
+        mako_service::webhook::verify_configured_request(secret.0.as_deref(), &headers, &body)
+    {
         warn!(%err, "event_ingest: refused");
         return StatusCode::from(err).into_response();
     }

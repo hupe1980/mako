@@ -24,36 +24,17 @@ use std::time::Duration;
 use mako_service::CloudEvent;
 use mako_service::outbox::{self, OutboxConfig, OutboxWorker};
 use sqlx::postgres::PgPoolOptions;
-use testcontainers::ImageExt as _;
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
 
 // ── PostgreSQL ──────────────────────────────────────────────────────────────
 
-async fn boot() -> sqlx::PgPool {
-    let container = Postgres::default()
-        .with_tag("17-alpine")
-        .start()
-        .await
-        .expect("start postgres");
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("postgres port");
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    Box::leak(Box::new(container));
-
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .expect("connect");
+async fn boot() -> super::support::Database {
+    let (pool, container) = super::support::postgres(5).await;
     sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto")
         .execute(&pool)
         .await
         .expect("pgcrypto");
     outbox::ensure_schema(&pool).await.expect("outbox schema");
-    pool
+    (pool, container)
 }
 
 // ── Scriptable receiver ─────────────────────────────────────────────────────
@@ -97,10 +78,10 @@ async fn spawn_receiver(statuses: Vec<u16>) -> (String, Arc<Received>) {
 
 fn sample_event() -> CloudEvent {
     CloudEvent::new(
-        mako_service::source("billingd", "9900000000001"),
+        mako_service::source("billingd", "stadtwerke-musterstadt"),
         mako_events::billing::RECHNUNG_ERSTELLT,
-        "DE0001",
-        serde_json::json!({"betrag": "42.00"}),
+        "51238696012",
+        serde_json::json!({"lf_mp_id":"9900357000028", "malo_id":"51238696012"}),
     )
 }
 
@@ -130,7 +111,7 @@ async fn pending_count(pool: &sqlx::PgPool) -> i64 {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn rolled_back_enqueue_leaves_no_row() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let ce = sample_event();
     let mut tx = pool.begin().await.unwrap();
     outbox::enqueue(&mut tx, &ce).await.unwrap();
@@ -146,7 +127,7 @@ async fn rolled_back_enqueue_leaves_no_row() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn committed_event_is_delivered_and_signed() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let (url, rx) = spawn_receiver(vec![200]).await;
     let ce = sample_event();
     let expected_body = ce.to_bytes().unwrap();
@@ -155,8 +136,8 @@ async fn committed_event_is_delivered_and_signed() {
     outbox::enqueue(&mut tx, &ce).await.unwrap();
     tx.commit().await.unwrap();
 
-    let worker =
-        OutboxWorker::new(pool.clone(), url, Some("s3cr3t".into())).with_config(fast_config());
+    let worker = OutboxWorker::new(pool.clone(), url, Some("whsec_czNjcjN0".into()))
+        .with_config(fast_config());
     let n = worker.flush_once().await.unwrap();
     assert_eq!(n, 1);
 
@@ -188,7 +169,7 @@ async fn committed_event_is_delivered_and_signed() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn duplicate_enqueue_is_idempotent_on_event_id() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let ce = sample_event();
     for _ in 0..3 {
         let mut tx = pool.begin().await.unwrap();
@@ -205,7 +186,7 @@ async fn duplicate_enqueue_is_idempotent_on_event_id() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn transient_failures_exhaust_to_dead_letter_then_requeue() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let (url, rx) = spawn_receiver(vec![503]).await; // always 5xx
     let ce = sample_event();
 
@@ -241,7 +222,7 @@ async fn transient_failures_exhaust_to_dead_letter_then_requeue() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn prune_removes_old_delivered_rows_only() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let (url, _rx) = spawn_receiver(vec![200]).await;
     let ce = sample_event();
     let mut tx = pool.begin().await.unwrap();
@@ -281,7 +262,7 @@ async fn prune_removes_old_delivered_rows_only() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn permanent_4xx_dead_letters_immediately() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let (url, rx) = spawn_receiver(vec![400]).await; // permanent
     let ce = sample_event();
 
@@ -327,7 +308,7 @@ async fn spawn_hanging_receiver() -> String {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_worker_killed_mid_delivery_still_spends_the_budget() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let url = spawn_hanging_receiver().await;
     let ce = sample_event();
     let mut tx = pool.begin().await.unwrap();
@@ -362,7 +343,7 @@ async fn a_worker_killed_mid_delivery_still_spends_the_budget() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn sweep_exhausted_takes_only_spent_rows() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     for _ in 0..2 {
         let mut tx = pool.begin().await.unwrap();
         outbox::enqueue(&mut tx, &sample_event()).await.unwrap();
@@ -397,7 +378,7 @@ fn sample_command(key: &str) -> outbox::Command {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_command_survives_its_upstream_being_down() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let mut tx = pool.begin().await.unwrap();
     outbox::enqueue_command(&mut tx, &sample_command("abb:1:51238696012"))
         .await
@@ -446,7 +427,7 @@ async fn a_command_survives_its_upstream_being_down() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_settled_status_discharges_a_command() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let mut tx = pool.begin().await.unwrap();
     outbox::enqueue_command(&mut tx, &sample_command("a"))
         .await
@@ -489,7 +470,7 @@ async fn a_settled_status_discharges_a_command() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_delivery_handler_commits_with_the_delivered_mark() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     sqlx::query("CREATE TABLE links (subject TEXT, reply TEXT)")
         .execute(&pool)
         .await
@@ -547,14 +528,14 @@ async fn the_delivery_handler_commits_with_the_delivered_mark() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!((subject.as_str(), reply.as_str()), ("DE0001", "R-1"));
+    assert_eq!((subject.as_str(), reply.as_str()), ("51238696012", "R-1"));
 }
 
 /// An event for a named receiver is drained by that receiver's worker only.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_targeted_event_reaches_only_its_receiver() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     let mut tx = pool.begin().await.unwrap();
     outbox::enqueue_to(&mut tx, "eog", &sample_event())
         .await
@@ -584,7 +565,7 @@ async fn a_targeted_event_reaches_only_its_receiver() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_signed_command_verifies_and_its_follow_up_sees_the_reply() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     sqlx::query("CREATE TABLE seen (key TEXT, reply TEXT)")
         .execute(&pool)
         .await
@@ -627,15 +608,21 @@ async fn a_signed_command_verifies_and_its_follow_up_sees_the_reply() {
                 .map(|_| ())
         })
     });
-    OutboxWorker::commands(pool.clone(), "relay", url, Some("relay-key".into()))
-        .signed()
-        .on_delivered(follow_up)
-        .with_config(fast_config())
-        .flush_once()
-        .await
-        .unwrap();
+    OutboxWorker::commands(
+        pool.clone(),
+        "relay",
+        url,
+        Some("whsec_cmVsYXkta2V5".into()),
+    )
+    .signed()
+    .on_delivered(follow_up)
+    .with_config(fast_config())
+    .flush_once()
+    .await
+    .unwrap();
 
     let (headers, body) = captured.lock().unwrap().take().expect("request");
+    assert_eq!(headers["authorization"], "Bearer whsec_cmVsYXkta2V5");
     assert_eq!(
         mako_service::webhook::verify_request(Some(b"relay-key"), &headers, &body),
         Ok(Some(mako_service::webhook::WebhookId(
@@ -658,7 +645,7 @@ async fn a_signed_command_verifies_and_its_follow_up_sees_the_reply() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_timeout_is_retried_and_a_refusal_is_not() {
-    let pool = boot().await;
+    let (pool, _postgres) = boot().await;
     for (status, key) in [
         (408u16, "t408"),
         (429, "t429"),
@@ -710,7 +697,7 @@ async fn a_timeout_is_retried_and_a_refusal_is_not() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_listener_takes_no_connection_from_the_pool() {
-    let setup = boot().await;
+    let (setup, _postgres) = boot().await;
     let pool = PgPoolOptions::new()
         .max_connections(1)
         .acquire_timeout(Duration::from_secs(2))

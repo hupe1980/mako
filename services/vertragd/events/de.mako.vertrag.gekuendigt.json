@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gekuendigt",
+  "type": "object",
+  "properties": {
+    "vertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "vertrags_nr": {
+      "type": "string"
+    },
+    "rahmenvertrag_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "rahmenvertrag_nr": {
+      "type": "string"
+    },
+    "lieferende": {
+      "type": "string",
+      "format": "date"
+    },
+    "grund": {
+      "$ref": "#/$defs/Kuendigungsgrund"
+    },
+    "rechtsgrundlage": {
+      "type": "string"
+    },
+    "kuendigungsbestaetigung": {
+      "$ref": "#/$defs/Bestaetigung"
+    }
+  },
+  "required": [
+    "vertrag_id",
+    "vertrags_nr",
+    "rahmenvertrag_id",
+    "rahmenvertrag_nr",
+    "lieferende",
+    "grund",
+    "rechtsgrundlage",
+    "kuendigungsbestaetigung"
+  ],
+  "$defs": {
+    "Kuendigungsgrund": {
+      "description": "Why a contract is being terminated. The reason, not the contract, decides\nthe notice period — a Sonderkündigung overrides whatever the contract says.",
+      "oneOf": [
+        {
+          "description": "Ordinary termination on the contractual notice period.",
+          "type": "string",
+          "const": "ORDENTLICH"
+        },
+        {
+          "description": "§ 41 Abs. 5 Satz 4 EnWG / § 5 Abs. 3 GVV — the supplier changed prices or\nterms, so the customer terminates without notice, effective the day the\nchange would take effect.",
+          "type": "string",
+          "const": "PREISANPASSUNG"
+        },
+        {
+          "description": "§ 41b Abs. 5 EnWG — Haushaltskunde moving house: six weeks.",
+          "type": "string",
+          "const": "UMZUG"
+        },
+        {
+          "description": "Termination declared by the new supplier on the customer's behalf in a\nLieferantenwechsel. Same period as an ordinary one; it exists as its own\nreason because § 41 Abs. 8 Nr. 3 EnWG obliges the outgoing supplier to\nreturn an electronic Kündigungsbestätigung to that supplier as well.",
+          "type": "string",
+          "const": "LIEFERANTENWECHSEL"
+        }
+      ]
+    },
+    "Bestaetigung": {
+      "type": "object",
+      "properties": {
+        "erforderlich": {
+          "type": "boolean"
+        },
+        "form": {
+          "type": "string"
+        },
+        "rechtsgrundlage": {
+          "type": "string"
+        },
+        "vertragsende": {
+          "type": "string",
+          "format": "date"
+        }
+      },
+      "required": [
+        "erforderlich",
+        "form",
+        "rechtsgrundlage",
+        "vertragsende"
+      ]
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.gekuendigt.json"
+}

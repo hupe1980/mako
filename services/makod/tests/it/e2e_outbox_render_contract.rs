@@ -1,15 +1,8 @@
-//! Outbox entries must reach the wire as EDIFACT, not as JSON.
+//! A market outbox entry must render as a valid EDIFACT interchange.
 //!
-//! An outbox `message_type` with no renderer behind it does not fail loudly.
-//! `render_to_wire_bytes` returns `InsufficientPayload`, and the AS4 sender
-//! substitutes the raw domain **JSON** for the interchange: the message leaves
-//! the system, looks delivered, and cannot be parsed by the receiving partner.
-//! Only the in-process loopback path dead-letters.
-//!
-//! Workflow-level tests cannot see this. They assert that an outbox entry
-//! exists and carries the expected fields, which it does — the mismatch is
-//! between the producer's key names and the renderer's contract. These tests
-//! cross that boundary: render the entry, then parse the bytes back.
+//! The AS4 sender dead-letters an entry that cannot render. Rendering each
+//! workflow payload and parsing the result detects mismatched fields before
+//! a counterparty is left waiting for an answer.
 
 use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};
 use mako_engine::outbox::OutboxMessage;
@@ -196,8 +189,7 @@ fn the_lf_stornierung_renders_to_parseable_utilmd() {
 
     let entry = out.outbox.first().expect("the Stornierung is sent");
     let msg = outbox(&entry.message_type, GNB, entry.payload.clone());
-    let wire = render_to_wire_bytes(&msg, &registry())
-        .expect("the 44022 must render, not fall back to raw JSON");
+    let wire = render_to_wire_bytes(&msg, &registry()).expect("the 44022 must render as EDIFACT");
     let text = String::from_utf8_lossy(&wire.bytes);
 
     assert_eq!(pid_of(&wire.bytes), 44_022);
@@ -226,14 +218,8 @@ fn the_old_intent_only_type_names_have_no_renderer() {
 
 // ── INSRPT ────────────────────────────────────────────────────────────────────
 
-/// The WiM Störungsmeldung must render to an interchange that passes AHB
-/// validation — not merely one that parses.
-///
-/// `mako-wim` emitted `INSRPT` outbox entries with no renderer behind them, so
-/// the AS4 sender substituted raw domain JSON. Adding a renderer is only half
-/// the fix: the INSRPT AHB marks `BGM`, `DOC`, `DTM`, `LIN`, `LOC`, `NAD`,
-/// `RFF` and `STS` mandatory, and the builder emitted only three of them. This
-/// asserts the full set by validating the result.
+/// Validate the complete WiM Störungsmeldung against its AHB column.
+/// Parsing alone cannot establish that every mandatory segment is present.
 #[test]
 fn wim_stoerungsmeldung_renders_to_ahb_valid_insrpt() {
     use edi_energy::EdiEnergyMessage as _;
@@ -907,7 +893,7 @@ fn a_mabis_zp_answer_renders_to_parseable_utilmd() {
         .expect("the answer is a UTILMD");
     let msg = outbox("UTILMD", GNB, entry.payload.clone());
     let wire = render_to_wire_bytes(&msg, &registry())
-        .expect("the MaBiS-ZP answer must render, not fall back to raw JSON");
+        .expect("the MaBiS-ZP answer must render as EDIFACT");
     let text = String::from_utf8_lossy(&wire.bytes);
     assert!(
         text.contains(&format!("LOC+Z15+{ZP}")),
@@ -980,8 +966,8 @@ fn a_mabis_korrekturliste_renders_as_a_list_with_its_positions() {
         .find(|o| o.message_type.as_ref() == "UTILMD")
         .expect("the Korrekturliste is a UTILMD");
     let msg = outbox("UTILMD", GNB, entry.payload.clone());
-    let wire = render_to_wire_bytes(&msg, &registry())
-        .expect("the Korrekturliste must render, not fall back to raw JSON");
+    let wire =
+        render_to_wire_bytes(&msg, &registry()).expect("the Korrekturliste must render as EDIFACT");
     let text = String::from_utf8_lossy(&wire.bytes);
 
     // Message level: `BGM+Z05` Clearingliste and the Bilanzierungsmonat in 610.
@@ -1078,7 +1064,7 @@ fn a_mabis_gesamtablehnung_renders_to_parseable_utilmd() {
         .expect("the Gesamtablehnung is a UTILMD");
     let msg = outbox("UTILMD", GNB, entry.payload.clone());
     let wire = render_to_wire_bytes(&msg, &registry())
-        .expect("a positionless Ablehnung must render, not fall back to raw JSON");
+        .expect("a positionless Ablehnung must render as EDIFACT");
     let text = String::from_utf8_lossy(&wire.bytes);
     assert!(
         text.contains("STS+E01++"),

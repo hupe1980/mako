@@ -157,8 +157,10 @@ describe("the readiness checklist", () => {
     expect(link.getAttribute("href")).toBe(
       "https://hupe1980.github.io/mako/docs/services/makod/#policy-as4-unbekannte-absender",
     );
-    expect(screen.getByText("Eine Frage, die der Desk noch nicht kennt")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "kuenftig", level: 4 })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Eine Frage, die der Desk noch nicht kennt", level: 4 }),
+    ).toBeTruthy();
+    expect(screen.queryByText("kuenftig")).toBeNull();
   });
 
   it("opens the manual under the address the runtime configuration names", async () => {

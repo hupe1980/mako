@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useBelegZiel } from "../app/belege";
 import { fristArt } from "../app/prozesse";
 import { offeneFristen } from "../app/prozessStand";
-import { ROLLEN, useRolle } from "../app/rollen";
+import { rollenName, useRolle } from "../app/rollen";
 import type { DeadlineView, HistoryEntry } from "../data/gen/makod";
 import { call } from "../data/mcp";
 import { FristUhr } from "../design/FristUhr";
@@ -12,11 +12,6 @@ import { antwortTeile } from "../format/antwort";
 import { formatCount } from "../format/count";
 import { formatInstant } from "../format/date";
 import { eintrag, useT } from "../i18n";
-
-/** The Desk's name for a Marktrolle (`LF` → „Lieferant"), the code itself where it has none. */
-function rollenName(marktrolle: string): string {
-  return Object.values(ROLLEN).find((r) => r.marktrolle === marktrolle)?.label ?? marktrolle;
-}
 
 function Message({ entry }: { entry: HistoryEntry }) {
   const t = useT();

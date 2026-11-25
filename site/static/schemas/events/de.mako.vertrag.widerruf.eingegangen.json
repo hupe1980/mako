@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WiderrufEingegangen",
+  "type": "object",
+  "properties": {
+    "bestellung_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "bestellreferenz": {
+      "type": "string"
+    },
+    "vertrag_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "widerruf": {
+      "$ref": "#/$defs/Widerruf"
+    }
+  },
+  "required": [
+    "bestellung_id",
+    "bestellreferenz",
+    "widerruf"
+  ],
+  "$defs": {
+    "Widerruf": {
+      "type": "object",
+      "properties": {
+        "widerruf_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "rechtzeitig": {
+          "type": "boolean"
+        },
+        "frist": {
+          "$ref": "#/$defs/WiderrufTermine"
+        },
+        "wirkung": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lieferende": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "wertersatz_geschuldet": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "eingegangen_am": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "eingangsbestaetigung": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "widerruf_id",
+        "rechtzeitig",
+        "frist",
+        "eingegangen_am",
+        "eingangsbestaetigung"
+      ]
+    },
+    "WiderrufTermine": {
+      "type": "object",
+      "properties": {
+        "beginn": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "ende": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "erloeschen": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        }
+      }
+    }
+  },
+  "$id": "https://hupe1980.github.io/mako/schemas/events/de.mako.vertrag.widerruf.eingegangen.json"
+}

@@ -1798,8 +1798,8 @@ pub async fn post_remadv_webhook(
     // A forged REMADV would mark an invoice paid, or contest one that was not —
     // and a *replayed* one would do it twice, which is why this goes through the
     // shared verifier's timestamp check rather than a local signature compare.
-    if let Err(err) = mako_service::webhook::verify_request(
-        cfg.inbound_secret.as_deref().map(str::as_bytes),
+    if let Err(err) = mako_service::webhook::verify_configured_request(
+        cfg.inbound_secret.as_deref(),
         &headers,
         &raw,
     ) {

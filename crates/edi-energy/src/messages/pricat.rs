@@ -8,34 +8,7 @@ use crate::{
     },
 };
 
-/// PRICAT — Price/Sales Catalogue (Preisliste) message.
-///
-/// PRICAT is the EDI@Energy message used to transmit price lists and tariff
-/// information, for example Ausgleichsenergiepreise (PID 27001),
-/// Preisblatt MSB-Leistungen (PID 27002), and Preisblatt NB-Leistungen
-/// (PID 27003).
-///
-/// **Note on Prüfidentifikator**: Like COMDIS, PRICAT stores its
-/// Prüfidentifikator in a top-level `SG1 RFF+Z13` segment rather than
-/// `BGM DE 1004`. The parser extracts the PID from `RFF+Z13` at parse time;
-/// `detect_pruefidentifikator()` returns the correct value when the segment
-/// is present.
-///
-/// **Annual format change**: The SG4 (CTA/COM contact details) sub-group of
-/// SG2 was removed in MIG 2.1 (fv20260401) compared to MIG 2.0e (fv20250401).
-/// Both profile versions are supported via the profile registry.
-///
-/// **Builder**: Use `crate::PricatBuilder` to create PRICAT messages
-/// programmatically. The builder covers the header (UNH, BGM, RFF+Z13,
-/// DTM+137, NAD+MR/MS, UNT); SG17/SG36/SG40 price body segments are not
-/// yet supported (see REFACTOR.md).
-///
-/// | Field      | Segment | Meaning                             |
-/// |------------|---------|-------------------------------------|
-/// | `bgm`      | BGM     | Document type / message reference   |
-/// | `dtm`      | DTM     | Date / time segments                |
-/// | `sender`   | NAD+MS  | Message sender                      |
-/// | `receiver` | NAD+MR  | Message receiver                    |
+/// A PRICAT price catalogue. [`PricatBuilder`](crate::builders::PricatBuilder) builds its header and price groups.
 #[derive(Debug, Clone)]
 pub struct PricatMessage {
     pub(crate) core: MessageCore,

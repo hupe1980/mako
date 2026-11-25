@@ -96,13 +96,11 @@ pub async fn handle_webhook(
     body: Bytes,
 ) -> impl IntoResponse {
     // ── 1. Verify HMAC signature ──────────────────────────────────────────
-    let inbound_secret = (*state.inbound_secret)
-        .as_ref()
-        .map(|s| s.expose_secret().as_bytes().to_vec());
+    let inbound_secret = (*state.inbound_secret).as_ref().map(|s| s.expose_secret());
     // The shared verifier also refuses a stale `webhook-timestamp`, so a
     // captured POST cannot be replayed into the projection.
     if let Err(err) =
-        mako_service::webhook::verify_request(inbound_secret.as_deref(), &headers, &body)
+        mako_service::webhook::verify_configured_request(inbound_secret, &headers, &body)
     {
         warn!(%err, "processd: inbound webhook refused");
         return StatusCode::from(err).into_response();

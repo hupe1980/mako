@@ -35,6 +35,22 @@ async fn account(pool: &sqlx::PgPool) {
         .expect("account");
 }
 
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_unreadable_issuer_account_refuses_the_advances_read() {
+    let (app, pool, _pg) = dev_app().await.expect("PostgreSQL is required");
+    account(&pool).await;
+    // Leave the advance register readable while the issuer account cannot be decoded.
+    sqlx::query("ALTER TABLE accounts RENAME COLUMN billing_day TO unavailable_fixture_day")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let path = format!("/api/v1/accounts/{MALO}/abschlaege?lf_mp_id={LF}");
+    let (status, body) = call(app, get(&path)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body["error_id"].is_string(), "{body}");
+}
+
 /// A bank line no account claims is kept, listed, booked once by the
 /// operator's assignment and then gone from the list; the same line imported
 /// again is a duplicate, not a second unmatched line.
@@ -159,11 +175,109 @@ fn invoice_event(id: &str, rechnungsnummer: &str, zu_zahlen: &str, extra: Value)
     json!({
         "specversion": "1.0",
         "id": id,
-        "source": "billingd/9900357000004",
+        "source": mako_service::source("billingd", TENANT),
         "type": "de.mako.billing.rechnung.erstellt",
         "subject": MALO,
         "data": data,
     })
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_invoice_uses_its_deployment_source_and_explicit_issuer() {
+    let (app, pool, _pg) = dev_app().await.expect("PostgreSQL is required");
+    let mut event = invoice_event("ce-issuer", "RE-2026-000042", "-42.17", json!({}));
+    for source in [
+        mako_service::source("billingd", "other-tenant"),
+        mako_service::source("billingd", LF),
+    ] {
+        event["source"] = json!(source);
+        let (status, body) = call(app.clone(), post("/webhook", &event)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "invoice_source_mismatch");
+    }
+    event["source"] = json!(mako_service::source("billingd", TENANT));
+    for invalid_id in [Value::Null, json!(""), json!(" ")] {
+        event["id"] = invalid_id.clone();
+        let (status, body) = call(app.clone(), post("/webhook", &event)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        event["id"] = json!("ce-issuer");
+        event["data"]["malo_id"] = invalid_id;
+        let (status, body) = call(app.clone(), post("/webhook", &event)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["code"], "invalid_invoice_account");
+        event["data"]["malo_id"] = json!(MALO);
+    }
+    for issuer in [Value::Null, json!("")] {
+        event["data"]["lf_mp_id"] = issuer;
+        let (status, body) = call(app.clone(), post("/webhook", &event)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["code"], "invalid_invoice_issuer");
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM accounts WHERE tenant=$1")
+        .bind(TENANT)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let other_issuer = "9800357000028";
+    event["data"]["lf_mp_id"] = json!(other_issuer);
+    let (status, body) = call(app, post("/webhook", &event)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let issuer: String = sqlx::query_scalar("SELECT lf_mp_id FROM credit_payouts WHERE tenant=$1")
+        .bind(TENANT)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(issuer, other_issuer);
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn invoice_amounts_must_fit_both_postings_before_any_money_is_booked() {
+    let (app, pool, _pg) = dev_app().await.expect("PostgreSQL is required");
+    let mut event = invoice_event(
+        "ce-amount",
+        "RE-2026-000043",
+        "1.00",
+        json!({"schlussrechnung": false}),
+    );
+    for (gross, payable) in [
+        (Value::Null, json!({"wert":"1"})),
+        (json!({"wert":"invalid"}), Value::Null),
+        (json!({"wert":"79228162514264337593543950335"}), Value::Null),
+        (json!({"wert":"92233720368547758.08"}), Value::Null),
+        (json!({"wert":"-92233720368547758.08"}), Value::Null),
+        (json!({"wert":"1"}), json!({"wert":"invalid"})),
+        (
+            json!({"wert":"92233720368547758.07"}),
+            json!({"wert":"-0.01"}),
+        ),
+    ] {
+        event["data"]["rechnung"]["gesamtbrutto"] = gross;
+        event["data"]["rechnung"]["zuZahlen"] = payable;
+        let (status, body) = call(app.clone(), post("/webhook", &event)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["code"], "invalid_invoice_amount");
+    }
+    let accounts: i64 = sqlx::query_scalar("SELECT count(*) FROM accounts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(accounts, 0);
+    let invoice = event["data"]["rechnung"].as_object_mut().unwrap();
+    invoice.insert("gesamtbrutto".into(), json!({"wert":"0.00"}));
+    invoice.remove("zuZahlen");
+    let (status, body) = call(app.clone(), post("/webhook", &event)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    event["id"] = json!("ce-settled-advances");
+    event["data"]["schlussrechnung"] = json!(true);
+    event["data"]["rechnung"]["zuZahlen"] = json!({"wert":"-42.17"});
+    let (status, body) = call(app, post("/webhook", &event)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (balance, credit): (i64,i64) = sqlx::query_as("SELECT a.balance_ct,c.amount_ct FROM accounts a JOIN credit_payouts c ON c.tenant=a.tenant AND c.malo_id=a.malo_id AND c.lf_mp_id=a.mp_id")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!((balance, credit), (-4217, 4217));
 }
 
 /// SR-058: a Schlussrechnung credit raises one payout item however often its
@@ -199,7 +313,7 @@ async fn credit_payout_is_raised_once_per_invoice() {
     let storno = json!({
         "specversion": "1.0",
         "id": "ce-storno-1",
-        "source": "billingd/9900357000004",
+        "source": mako_service::source("billingd", TENANT),
         "type": "de.mako.billing.rechnung.erstellt",
         "subject": MALO,
         "data": {

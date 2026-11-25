@@ -230,7 +230,21 @@ pub fn verify_signature(
         .any(|entry| bool::from(entry.as_bytes().ct_eq(expected)))
 }
 
-/// Verify an inbound webhook and return the id to deduplicate on.
+/// Verify with the configured Standard Webhooks secret and return the authenticated ID.
+///
+/// # Errors
+///
+/// See [`verify_request`] for signature and freshness refusals.
+#[must_use = "a failed verification must refuse the delivery"]
+pub fn verify_configured_request(
+    secret: Option<&str>,
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+) -> Result<Option<WebhookId>, WebhookError> {
+    verify_request(secret.map(signing_key).as_deref(), headers, body)
+}
+
+/// Verify an inbound webhook using raw key bytes and return the id to deduplicate on.
 ///
 /// This is the one-call inbound guard every `CloudEvent` handler shares. It
 /// checks all three things a receiver owes: the signature, the timestamp's
@@ -314,6 +328,25 @@ pub fn verify_request_only(
 mod tests {
     use super::*;
     use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+
+    #[test]
+    fn configured_keys_are_decoded_once_and_raw_keys_remain_opaque() {
+        let id = "fixture";
+        let ts = time::OffsetDateTime::now_utc().unix_timestamp();
+        let key = b"whsec_AQID";
+        let body = b"one event";
+        let headers = signed(key, id, ts, body);
+        let expected = Ok(Some(WebhookId(id.into())));
+        assert_eq!(
+            verify_configured_request(Some("whsec_d2hzZWNfQVFJRA=="), &headers, body),
+            expected
+        );
+        assert_eq!(verify_request(Some(key), &headers, body), expected);
+        assert_eq!(
+            verify_configured_request(Some("whsec_AQID"), &headers, body),
+            Err(WebhookError::SignatureMismatch)
+        );
+    }
 
     /// A `whsec_` secret signs with its decoded key; any other with its bytes.
     #[test]

@@ -111,7 +111,7 @@ pub mod baum {
 }
 
 pub use abmeldung::evaluate_abmeldung;
-pub use anmeldung::evaluate;
+pub use anmeldung::{evaluate, evaluate_anmeldung_teilnahme};
 pub use config::NetzCheckConfig;
 pub use lieferbeginn::{CODES_REQUIRING_DRITTER, evaluate_lieferbeginn};
 pub use neuanlage::{

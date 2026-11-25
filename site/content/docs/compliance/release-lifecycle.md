@@ -14,7 +14,7 @@ Cutovers are **staggered per message type**: each format version carries its own
 | Event | Timing |
 |---|---|
 | BDEW publishes a new specification | on the Änderungsmanagement schedule, **six months** before its Anwendungszeitpunkt (Allgemeine Festlegungen 6.1d Kap. 2.5.1/Kap. 2.5.2); a deviating date names the Mitteilung that set it (`publikation_quelle`) |
-| The specification becomes **valid** | its own `valid_from` — **January 1**, **April 1** or **October 1** (e.g. `fv20260101`, `fv20260401`, `fv20261001`) |
+| The specification becomes **valid** | the published Anwendungszeitpunkt recorded in `valid_from` |
 | The predecessor **expires** | the day before its successor's `valid_from` |
 | Transition window (both valid) | **none** — EDIFACT changes at a single Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 Kap. 2.5) |
 
@@ -99,8 +99,8 @@ Nachrichtentypversionen.
 
 When all profile and code changes are merged and `just ci` is green:
 
-1. **Bump the workspace version** with `cargo xtask bump-version <X.Y.Z>`.
-2. **Create and push a tag**: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+1. Run `just bump X.Y.Z`, date the changelog section and commit the manifest, lockfiles and regenerated references.
+2. Push the release commit and verify its CI and site checks. Tag that exact commit with `git tag vX.Y.Z <commit>` and push the tag with `git push origin vX.Y.Z`.
 3. The `release.yml` GitHub Actions workflow runs automatically:
    - Runs pre-flight `fmt` / `clippy` / `test` and checks the tag equals the
      workspace version and the publish order resolves; beside it, the

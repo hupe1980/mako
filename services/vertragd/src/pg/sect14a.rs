@@ -180,6 +180,8 @@ pub async fn open_initial(
 pub enum Sect14aError {
     /// No billable supply component carries the MaLo.
     KeineKomponente(String),
+    /// Multiple supply components own the same effective day.
+    MehrdeutigeKomponente,
     /// An empty module list states nothing.
     KeinModul,
     /// A later state is already recorded; history is not rewritten here.
@@ -192,6 +194,9 @@ impl std::fmt::Display for Sect14aError {
         match self {
             Self::KeineKomponente(malo) => {
                 write!(f, "keine Vertragskomponente beliefert MaLo {malo}")
+            }
+            Self::MehrdeutigeKomponente => {
+                f.write_str("multiple supply components cover the effective date")
             }
             Self::KeinModul => f.write_str("mindestens ein § 14a-Modul ist anzugeben"),
             Self::SpaetererStand(d) => {
@@ -225,6 +230,18 @@ pub async fn record_sect14a(
     malo_id: &str,
     input: &Sect14aInput,
 ) -> std::result::Result<Vec<String>, Sect14aError> {
+    record_sect14a_for_issuer(pool, tenant, malo_id, None, input).await
+}
+
+/// Record the module only on the unique supply in force on its effective day.
+#[must_use = "a refused module change must reach the caller"]
+pub async fn record_sect14a_for_issuer(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: Option<&str>,
+    input: &Sect14aInput,
+) -> std::result::Result<Vec<String>, Sect14aError> {
     let mut module: Vec<Sect14aModul> = input.module.clone();
     module.sort();
     module.dedup();
@@ -235,21 +252,17 @@ pub async fn record_sect14a(
     let ab = input.gueltig_ab;
 
     let mut tx = pool.begin().await?;
-    let komp: Option<(Uuid,)> = sqlx::query_as(mako_service::sql::dynamic(format!(
-        "SELECT k.id FROM vertragskomponenten k
-           JOIN versorgungsvertraege v ON v.id = k.vertrag_id
-          WHERE k.malo_id = $1 AND k.tenant = $2
-            AND k.status IN {komponente}
-          ORDER BY v.vertragsbeginn DESC, k.created_at DESC LIMIT 1",
-        komponente = crate::pg::vertraege::KOMPONENTE_BILLABLE,
-    )))
-    .bind(malo_id)
-    .bind(tenant)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some((komp_id,)) = komp else {
-        return Err(Sect14aError::KeineKomponente(malo_id.to_owned()));
+    let components = super::supply_components(&mut *tx, tenant, malo_id, lf_mp_id, ab, ab).await?;
+    let komp_id = match components.as_slice() {
+        [] => return Err(Sect14aError::KeineKomponente(malo_id.to_owned())),
+        [k] => k.id,
+        _ => return Err(Sect14aError::MehrdeutigeKomponente),
     };
+    sqlx::query("SELECT id FROM vertragskomponenten WHERE id = $1 AND tenant = $2 FOR UPDATE")
+        .bind(komp_id)
+        .bind(tenant)
+        .fetch_one(&mut *tx)
+        .await?;
 
     let spaeter: Option<(Date,)> = sqlx::query_as(
         "SELECT gueltig_von FROM komponenten_sect14a
@@ -304,6 +317,19 @@ pub async fn malo_sect14a(
     von: Date,
     bis: Date,
 ) -> Result<Vec<Sect14aSlice>> {
+    malo_sect14a_for_component(pool, tenant, malo_id, von, bis, None).await
+}
+
+/// Restrict the period feed to the supply component selected for its issuer.
+#[must_use = "a failed read cannot establish the period"]
+pub async fn malo_sect14a_for_component(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    von: Date,
+    bis: Date,
+    component: Option<Uuid>,
+) -> Result<Vec<Sect14aSlice>> {
     anyhow::ensure!(von <= bis, "von ({von}) darf nicht nach bis ({bis}) liegen");
     let bis_exkl = bis.next_day().unwrap_or(bis);
     Ok(
@@ -315,7 +341,7 @@ pub async fn malo_sect14a(
                FROM komponenten_sect14a s
                JOIN vertragskomponenten k ON k.id = s.komp_id
               WHERE s.tenant = $1 AND k.malo_id = $2
-                AND k.status IN {komponente}
+                AND ($5::uuid IS NULL OR k.id = $5) AND k.status IN {komponente}
                 AND daterange(s.gueltig_von, s.gueltig_bis, '[)')
                     && daterange($3::DATE, $4::DATE, '[)')
               ORDER BY s.gueltig_von",
@@ -325,6 +351,7 @@ pub async fn malo_sect14a(
         .bind(malo_id)
         .bind(von)
         .bind(bis_exkl)
+        .bind(component)
         .fetch_all(pool)
         .await?,
     )

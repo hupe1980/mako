@@ -73,7 +73,7 @@ fn order() -> CreateOrderRequest {
         lf_mp_id: "9900012345678".to_owned(),
         order_type: OrderType::Sperrung,
         process_id: Some(format!("proc-{}", uuid::Uuid::new_v4().simple())),
-        ausfuehrung_am: Some(time::macros::date!(2026 - 09 - 01)),
+        ausfuehrung_am: Some(mako_fristen::heute() + time::Duration::days(7)),
         fruehestens_am: None,
         arbeitszeit: None,
         treffpunkt: Treffpunkt {

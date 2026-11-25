@@ -1,0 +1,47 @@
+{
+  "periods": [
+    {
+      "malo_id": "51238696012",
+      "lf_mp_id": "9900357000004",
+      "period_from": "2026-10-01",
+      "period_to": "2026-10-31",
+      "final_invoice": false,
+      "reason_code": "NO_METER_DATA",
+      "message": "missing meter data for the period",
+      "due_on": "2026-11-21",
+      "days_left": 18,
+      "attempts": 1,
+      "settled_by": null
+    },
+    {
+      "malo_id": "51238696012",
+      "lf_mp_id": "9900357000028",
+      "period_from": "2026-10-01",
+      "period_to": "2026-10-31",
+      "final_invoice": false,
+      "reason_code": "NO_METER_DATA",
+      "message": "missing meter data for the period",
+      "due_on": "2026-11-21",
+      "days_left": 18,
+      "attempts": 1,
+      "settled_by": null
+    }
+  ],
+  "count": 2,
+  "saturated": false,
+  "discovery": {
+    "run_id": "db78dde4-37e9-4b44-8644-15db22feeff3",
+    "business_date": "2026-11-03",
+    "started_at": "2026-11-03T05:00:00Z",
+    "finished_at": "2026-11-03T05:00:07Z",
+    "next_attempt_at": "2026-11-04T04:00:00Z",
+    "source": "vertragd",
+    "origin": "scheduled",
+    "status": "completed",
+    "error_code": null,
+    "candidate_count": 2,
+    "last_failure_at": "2026-11-02T04:00:04Z",
+    "ended_from": "2026-08-11",
+    "ended_through": "2026-11-03"
+  }
+}

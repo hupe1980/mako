@@ -178,7 +178,7 @@ fn the_webhook_verifies_its_signature() {
         .expect("the REMADV webhook is defined");
     let body = &text[start..text.len().min(start + 1_400)];
     assert!(
-        body.contains("mako_service::webhook::verify_request"),
+        body.contains("mako_service::webhook::verify_configured_request("),
         "post_remadv_webhook takes no token and does not verify the inbound HMAC, so a \
          forged REMADV marks an invoice paid"
     );

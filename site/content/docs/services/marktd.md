@@ -351,7 +351,7 @@ is a `422` naming the stage in `code`:
 | `GET/PUT` | `/api/v1/technische-ressourcen/{tr_id}` | `read-device` / `write-device` | `TechnischeRessource` |
 | `GET` | `/api/v1/malos/{malo_id}/technische-ressourcen` | `read-device` | Those linked to a MaLo |
 | `GET` | `/api/v1/malos/{id}/lokationen` · `/api/v1/melos/{id}/lokationen` | `read-lokationszuordnung` | Location graph (`?at=`) |
-| `GET` | `/api/v1/malos/{id}/buendel` | `read-lokationszuordnung` | The [Lokationsbündel](#lokationsbuendel) and its audit |
+| `GET` | `/api/v1/malos/{id}/buendel` | `read-lokationszuordnung` | The [Lokationsbündel and its audit](#lokationsbuendel-audit) |
 | `PUT` | `/api/v1/lokationszuordnungen` | `write-lokationszuordnung` | Upsert an edge; `data` is a gated `Bo4e<Lokationszuordnung>` |
 | `DELETE` | `/api/v1/lokationszuordnungen/{von_id}/{nach_id}` | `write-lokationszuordnung` | Delete an edge pair, every temporal variant |
 | `GET` | `/api/v1/melos/{melo_id}/zaehler` | `read-device` | Zähler of a MeLo |
@@ -1313,7 +1313,7 @@ with a recursive CTE (max depth 8), ordered by `depth`; `?at=` filters by
 validity. Several edges per `(von_id, nach_id)` are allowed with distinct
 `valid_from`, at most one open-started.
 
-### Lokationsbündel {#lokationsbuendel}
+### Lokationsbündel structure audit {#lokationsbuendel-audit}
 
 `GET /api/v1/malos/{id}/buendel` projects the bundle of MeLos, NeLos, SRs and
 TRs under a MaLo (`mako_markt::repository::Lokationsbuendel`). A consuming MaLo
