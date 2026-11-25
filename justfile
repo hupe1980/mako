@@ -517,7 +517,7 @@ recovery-drill *args:
 # `tenant` column it does not have, an INSERT naming nineteen columns against
 # eighteen placeholders. One throwaway server answers for all fourteen services.
 # Not in `just ci`: locally it starts a Docker container, and it fails rather
-# than skipping when there is no daemon. CI runs it in the `check-sql` job
+# than skipping when there is no daemon. CI also runs it in the `guards` job
 # instead, where `services: postgres` supplies the server and
 # `MAKO_CHECK_SQL_URL` points the check at it — set that variable here too to
 # prepare against a server you already have.
