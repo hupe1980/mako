@@ -106,10 +106,8 @@ When all profile and code changes are merged and `just ci` is green:
      workspace version and the publish order resolves; beside it, the
      `guards` job runs every `just ci` recipe that is one `cargo xtask` call
      (`validate-profiles` among them). Nothing is published unless both pass.
-   - Runs `just semver` (`cargo-semver-checks` against the previous `v*` tag,
-     over every crate the workflow publishes): a public-API break the new
-     version number does not admit stops the release before anything is
-     published. It runs only here, not in `just ci`.
+   - Runs `just semver` against the latest version of each published crate on crates.io: a public-API break the new
+     version number does not admit blocks publication.
    - Publishes the 24 library crates (every crate under `crates/`
      but `mako-service`, which is `publish = false`) to [crates.io](https://crates.io)
      with `cargo publish`, in dependency order, by Trusted Publishing.

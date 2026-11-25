@@ -22,8 +22,7 @@ env:
   CARGO_INCREMENTAL: 0
 
 # Nothing is published until `preflight`, `test`, `guards` and `semver` have
-# passed: `publish` needs all four, `makotest-publish` needs `test` and
-# `guards`, and the images are baked only after `publish`.
+# passed. The Python upload also requires semver, and images are baked only after `publish`.
 jobs:
   # ── Pre-flight checks ────────────────────────────────────────────────────────
   preflight:
@@ -187,8 +186,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          fetch-depth: 0   # the baseline is the previous release tag
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
@@ -636,7 +633,7 @@ jobs:
     name: Publish makotest to PyPI
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [makotest-wheels, makotest-sdist, test, guards]
+    needs: [makotest-wheels, makotest-sdist, test, guards, semver]
     environment: pypi
     permissions:
       # Required for PyPI Trusted Publishing — mints the OIDC token in place

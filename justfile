@@ -1220,18 +1220,8 @@ event-catalog:
 bump version:
     cargo xtask bump-version {{ version }}
 
-# Every crate under crates/ is published; a consumer finds a breaking change
-# when their build fails unless this does first. The baseline is each crate's
-# newest version on crates.io — what consumers actually resolve — never a git
-# tag: a tag whose release stopped before publishing would otherwise become
-# the baseline and let the next patch carry the break onto crates.io. A change
-# the current version number does not admit (a minor bump, under 0.x) fails.
-# It runs in the release workflow before anything is published, not in `ci`:
-# between releases the API may break freely, and the bump that admits a break
-# is made when the release is cut.
-# The crate set is the release workflow's publish list, as for
-# check-publishable. Needs cargo-semver-checks; name crates to check a subset.
-#
+# Compare each release crate with its latest published API on crates.io.
+# A first publication has no baseline. An unavailable registry cannot establish that.
 # Refuse a public-API break the version number does not admit
 [group('release')]
 semver *crates:
@@ -1245,14 +1235,16 @@ semver *crates:
     args=()
     for c in $crates; do
         # A crate never published has no baseline, so nothing it can break.
-        if curl -sf -o /dev/null -A "mako-release (https://github.com/hupe1980/mako)" \
-            "https://crates.io/api/v1/crates/$c"; then
-            args+=(-p "$c")
-        else
-            echo "semver: $c is not on crates.io yet — its first release has no baseline"
-        fi
+        status=$(curl -sS --retry 3 --connect-timeout 15 --max-time 60 -o /dev/null -w '%{http_code}' \
+            -A "mako-release (https://github.com/hupe1980/mako)" "https://crates.io/api/v1/crates/$c")
+        case "$status" in
+            200) args+=(-p "$c") ;;
+            404) echo "semver: $c has no published baseline" ;;
+            *) echo "semver: cannot determine the baseline for $c (HTTP $status)" >&2; exit 1 ;;
+        esac
     done
-    echo "semver: ${#args[@]} flags against the versions published on crates.io"
+    if (( ${#args[@]} == 0 )); then exit 0; fi
+    echo "semver: checking ${#args[@]} package flags against crates.io"
     cargo semver-checks check-release "${args[@]}"
 
 # `cargo publish` verifies each crate **alone, with default features**, where
