@@ -385,42 +385,30 @@ fn push(to: &asx::Partner, bytes: Vec<u8>, id: &str) -> asx::as4::Message {
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
 
-/// `asx::testkit::dedup::conformance` over `SlateDbDedup`.
-///
-/// The SlateDB lease runs on the wall clock, so the store is given a one-second
-/// lease and the suite runs unpaused (the suite's documented shape for a store
-/// with its own clock). Every check opens a fresh, empty store.
-#[tokio::test(flavor = "multi_thread")]
+/// The persisted lease uses wall time. Four seconds gives the testkit its
+/// full one-second scheduling margin on each side of expiry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slatedb_dedup_conforms() {
-    struct Harness(Mutex<Vec<SlateDbDedup>>);
-    impl std::fmt::Debug for Harness {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("SlateDbDedup harness")
-        }
-    }
+    #[derive(Debug)]
+    struct Harness;
     impl asx::testkit::dedup::DedupHarness for Harness {
         type Store = SlateDbDedup;
+
         fn open(&self) -> SlateDbDedup {
-            self.0
-                .lock()
-                .unwrap()
-                .pop()
-                .expect("enough pre-opened stores")
+            // The testkit requests a fresh store synchronously for each check.
+            let store = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(SlateDbStore::open_in_memory())
+            })
+            .expect("open the in-memory SlateDB");
+            SlateDbDedup::new(store.as_inbox_store().with_claim_lease(self.lease()))
         }
+
         fn lease(&self) -> std::time::Duration {
-            std::time::Duration::from_secs(1)
+            std::time::Duration::from_secs(4)
         }
     }
-    let mut stores = Vec::new();
-    for _ in 0..(asx::testkit::dedup::CHECKS.len() * 2) {
-        let store = SlateDbStore::open_in_memory().await.unwrap();
-        stores.push(SlateDbDedup::new(
-            store
-                .as_inbox_store()
-                .with_claim_lease(std::time::Duration::from_secs(1)),
-        ));
-    }
-    let failures = asx::testkit::dedup::conformance(&Harness(Mutex::new(stores))).await;
+
+    let failures = asx::testkit::dedup::conformance(&Harness).await;
     assert!(failures.is_empty(), "{failures:#?}");
 }
 

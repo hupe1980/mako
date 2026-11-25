@@ -26,7 +26,7 @@ Versioned changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/
 - Historical billing resolves the price, § 14a module and recipient for the issuing supplier and period. Incomplete or overlapping assignments refuse calculation. A price-change notice uses its own contract’s customer.
 - Concurrent Sperrauftrag sweeps claim an overdue order once. A committed cancellation prevents a stale overdue notice.
 - Unfamiliar Desk statuses are localized. Concurrent browser checks serve separate builds, and long landing-page commands fit narrow screens.
-- The validator parity check honors the Cargo target directory. macOS wheels retain a loadable Python extension. Webhook and policy integration tests release their PostgreSQL containers.
+- The validator parity check honors the Cargo target directory. macOS wheels retain a loadable Python extension. Webhook and policy integration tests release their PostgreSQL containers. AS4 duplicate detection has a deterministic test at the exact claim deadline.
 - The utility guide identifies registered GS1 GLNs for both Sparten. The landing page and PRICAT reference describe the implemented profiles and builder. Profile tests identify the binding date under test.
 
 ## [0.46.0] — 2026-11-22

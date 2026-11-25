@@ -4017,6 +4017,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn inbox_lease_expires_at_its_persisted_deadline() {
+        let until = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(4);
+        let claim = SlateDbInboxStore::claimed_value(InboxClaimId::new(), until);
+        assert!(!SlateDbInboxStore::lease_expired(
+            &claim,
+            until - time::Duration::nanoseconds(1)
+        ));
+        assert!(SlateDbInboxStore::lease_expired(&claim, until));
+    }
+
     #[tokio::test]
     async fn inbox_new_message_is_claimed() {
         let (store, _) = make_deadline_store().await;
