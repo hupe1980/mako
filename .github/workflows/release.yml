@@ -178,8 +178,8 @@ jobs:
 
   # ── Semver ───────────────────────────────────────────────────────────────────
   # A public-API break the new version number does not admit stops the release
-  # before any crate is published. Its own job: it builds rustdoc for every
-  # published crate twice, at this tag and at the previous one.
+  # before any crate is published. Each comparison uses the latest published
+  # crates.io version as its baseline.
   semver:
     name: Published API admitted by the version (cargo-semver-checks)
     runs-on: ubuntu-latest

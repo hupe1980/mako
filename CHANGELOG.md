@@ -17,6 +17,7 @@ Versioned changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/
 - **Breaking.** Invoice events carry the deployment tenant in `source` and the issuer in `data.lf_mp_id`. accountingd requires both, a nonblank event ID and an account reference before booking. Invalid amounts and deductions return 422. A zero-gross invoice can settle advances.
 - **Breaking.** Billing watch reads require the tenant’s LF role. The feed reports its inclusive discovery range, refusals and issuer-scoped periods. Scheduled settlement deducts the issuing supplier’s paid advances. The billing schema changes in place.
 - Standard Webhooks senders and receivers derive the same signing key from an issued secret. The signed relay retains its configured bearer credential. Replay wakes the delivery worker when the pending row commits.
+- Crate and Python uploads wait for the crates.io API compatibility check. A registry error stops publication.
 - The candidate-format preview counts truncated interchanges as unread. Its API distinguishes unread files from messages without a binding profile.
 - vertragd publishes schemas for all 22 contract events. The HTTP catalogue links each documented operation to its response schemas.
 
