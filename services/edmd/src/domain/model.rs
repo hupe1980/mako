@@ -878,6 +878,11 @@ pub struct MeterRead {
     pub ablesung_herkunft: Option<AblesungHerkunft>,
 }
 
+/// PostgreSQL and Iceberg identify a reading by its interval at microsecond precision.
+pub(crate) fn storage_instant(at: OffsetDateTime) -> OffsetDateTime {
+    at - time::Duration::nanoseconds(i64::from(at.nanosecond() % 1_000))
+}
+
 impl MeterRead {
     /// The read as a typed `metering` interval on its own register.
     ///

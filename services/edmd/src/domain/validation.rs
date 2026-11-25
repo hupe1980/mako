@@ -32,7 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::domain::model::MeterRead;
+use crate::domain::model::{MeterRead, storage_instant};
 use crate::domain::vee;
 use metering::ObisCode;
 use metering::vee::validation::{Rule, Severity};
@@ -113,6 +113,10 @@ impl ValidatedReads {
     /// by another route, which is the hole this type exists to close.
     #[must_use]
     pub fn validate(mut batch: Vec<MeterRead>, ctx: IngestContext<'_>) -> (Self, BatchValidation) {
+        for read in &mut batch {
+            read.dtm_from = storage_instant(read.dtm_from);
+            read.dtm_to = storage_instant(read.dtm_to);
+        }
         let summary = validate_and_annotate(&mut batch, ctx);
         (Self { reads: batch }, summary)
     }
@@ -735,6 +739,17 @@ mod tests {
         batch.push(read(base, 0, "2.0", Sparte::Strom, Some("1-0:1.8.0")));
         let rules = rules_of(batch);
         assert_eq!(rules, vec!["EMPTY_SPAN".to_owned()]);
+    }
+
+    #[test]
+    fn a_span_within_one_stored_microsecond_is_empty() {
+        let base = datetime!(2026-07-01 00:00 UTC);
+        let mut row = read(base, 0, "2.0", Sparte::Strom, Some("1-0:1.8.0"));
+        row.dtm_from += time::Duration::nanoseconds(1);
+        row.dtm_to += time::Duration::nanoseconds(999);
+        let (batch, summary) = ValidatedReads::validate(vec![row], ctx());
+        assert_eq!(summary.rules, ["EMPTY_SPAN"]);
+        assert!(batch.as_slice()[0].interval().is_err());
     }
 
     /// A clean batch says which rules stood behind that verdict.

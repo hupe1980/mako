@@ -174,6 +174,13 @@ fn read(malo: &str, from: OffsetDateTime, value: &str, sparte: Sparte, obis: &st
     }
 }
 
+/// The residual 789 ns exercise the store boundary on hosts with a microsecond clock.
+fn submicrosecond_start() -> OffsetDateTime {
+    (OffsetDateTime::now_utc() - Duration::days(1))
+        .replace_nanosecond(123_456_789)
+        .unwrap()
+}
+
 fn window(malo: &str, around: OffsetDateTime) -> TimeSeriesQuery {
     TimeSeriesQuery {
         malo_id: malo.to_owned(),
@@ -523,11 +530,9 @@ async fn query_as_of_reconstructs_the_value_in_force() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn query_as_of_hides_an_interval_first_stored_later() {
-    // The set-membership property the old audit-table overlay could not give:
-    // an interval first stored after the as-of instant is absent, not merely
-    // unchanged.
+    // An as-of query includes only the intervals known at that instant.
     let (repo, _pool, _pg, _wh) = setup().await;
-    let interval = OffsetDateTime::now_utc() - Duration::days(1);
+    let interval = submicrosecond_start();
 
     let mut early = read("51238696012", interval, "3.5", Sparte::Strom, "1-0:1.8.0");
     early.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(3));
@@ -557,7 +562,10 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
         1,
         "only the interval known 2h ago is present"
     );
-    assert_eq!(as_of_reads[0].dtm_from, interval);
+    assert_eq!(
+        as_of_reads[0].dtm_from,
+        interval - Duration::nanoseconds(789)
+    );
 
     // Current knowledge holds both.
     let now_reads = repo.query(&q).await.expect("query");
@@ -568,7 +576,7 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn latest_read_returns_the_newest_interval() {
     let (repo, _pool, _pg, _wh) = setup().await;
-    let base = OffsetDateTime::now_utc() - Duration::days(1);
+    let base = submicrosecond_start();
     let earlier = base;
     let later = base + Duration::minutes(15);
 
@@ -584,7 +592,11 @@ async fn latest_read_returns_the_newest_interval() {
         .await
         .expect("latest_read")
         .expect("a reading exists");
-    assert_eq!(latest.dtm_from, later, "the newest interval wins");
+    assert_eq!(
+        latest.dtm_from,
+        later - Duration::nanoseconds(789),
+        "the newest interval wins"
+    );
     assert_eq!(latest.quantity_kwh, kwh("2.0"));
 }
 
@@ -650,7 +662,7 @@ async fn ingest_overwrite_audit_row_covers_the_full_interval() {
     // interval end, so the audit row spans `[dtm_from, dtm_to)` rather than
     // collapsing to a zero-width `[dtm_from, dtm_from)`.
     let (repo, pool, _pg, _wh) = setup().await;
-    let t = OffsetDateTime::now_utc() - Duration::days(1);
+    let t = submicrosecond_start();
 
     let mut first = read("51238696012", t, "3.5", Sparte::Strom, "1-0:1.8.0");
     first.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(2));
@@ -672,10 +684,11 @@ async fn ingest_overwrite_audit_row_covers_the_full_interval() {
     .fetch_one(&pool)
     .await
     .expect("the overwrite wrote a § 60 Abs. 6 audit row");
-    assert_eq!(dtm_from, t);
+    let stored_start = t - Duration::nanoseconds(789);
+    assert_eq!(dtm_from, stored_start);
     assert_eq!(
         dtm_to,
-        t + Duration::minutes(15),
+        stored_start + Duration::minutes(15),
         "the audit row covers the interval, not a zero-width collapse to its start"
     );
 }
@@ -2272,7 +2285,7 @@ async fn a_replaced_gateway_is_not_swept() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_correction_supersedes_a_reading_that_carried_an_mscons_version() {
     let (repo, pool, _pg, _wh) = setup().await;
-    let t = OffsetDateTime::now_utc() - Duration::days(1);
+    let t = submicrosecond_start();
 
     // The original arrives *with* the version its network operator assigned —
     // 14 digits, as the MSCONS AHB mandates.
@@ -2330,7 +2343,7 @@ async fn a_correction_supersedes_a_reading_that_carried_an_mscons_version() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn an_ersatzwert_displaces_a_faulty_reading_that_carried_an_mscons_version() {
     let (repo, _pool, _pg, _wh) = setup().await;
-    let t = OffsetDateTime::now_utc() - Duration::days(1);
+    let t = submicrosecond_start();
 
     let mut faulty = read("51238696012", t, "0", Sparte::Strom, "1-0:1.8.0");
     faulty.quality = QualityFlag::Faulty;

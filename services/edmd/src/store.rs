@@ -1,9 +1,6 @@
 //! Meterstore-backed storage layer for `edmd`: `TimeSeriesRepository` +
 //! `Typ2Repository`.
 //!
-//! Replaces the former hand-rolled `pg/` + `iceberg/` tiers with a single
-//! [`MeterStore`].
-//!
 //! `edmd`'s authoritative meter-data store. The hot (recent) window lives in
 //! PostgreSQL and the settled history in Apache Iceberg — both tiers owned by a
 //! [`MeterStore`], which routes each interval to the tier that owns it and
@@ -49,6 +46,7 @@ use crate::domain::{
     error::EdmError,
     messtyp_as_str, messtyp_from_str,
     repository::{TimeSeriesRepository, Typ2Repository},
+    storage_instant,
 };
 
 /// Map a `meterstore` failure onto edmd's error type, **keeping whether a retry
@@ -1151,20 +1149,6 @@ fn read_to_stored(
     r: &MeterRead,
     own: Option<&metering::ids::BdewCode>,
 ) -> Result<StoredSeries, EdmError> {
-    read_to_stored_at(r, None, own)
-}
-
-/// [`read_to_stored`], optionally overriding the version the delivery resolves
-/// under.
-///
-/// The override exists for values **edmd itself authors** — an operator
-/// correction and a § 60 Abs. 1 Ersatzwert — which must supersede whatever
-/// currently holds. See [`MeterStoreTimeSeriesRepository::append_superseding`].
-fn read_to_stored_at(
-    r: &MeterRead,
-    version: Option<Version>,
-    own: Option<&metering::ids::BdewCode>,
-) -> Result<StoredSeries, EdmError> {
     // An empty or reversed span carries no energy over time and is refused at
     // the boundary, before it can enter either tier.
     let interval = r.interval().map_err(input_err)?;
@@ -1175,11 +1159,8 @@ fn read_to_stored_at(
     // The Bilanzierungsmonat the version scope names is Sparte-dependent: gas
     // balances on the Gastag, so 01.02. 03:00 still belongs to January.
     let scope = VersionScope::for_interval(operator, r.dtm_from, r.sparte).map_err(store_err)?;
-    let recorded_at = r.valid_from_tx.unwrap_or_else(OffsetDateTime::now_utc);
-    let version = match version {
-        Some(v) => v,
-        None => version_of(r.mscons_version, recorded_at)?,
-    };
+    let recorded_at = storage_instant(r.valid_from_tx.unwrap_or_else(OffsetDateTime::now_utc));
+    let version = version_of(r.mscons_version, recorded_at)?;
 
     let source = MeasurementSource::Mscons {
         pid: r.pid,
@@ -1347,9 +1328,9 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                     continue;
                 }
                 let key = (slot.malo_id.as_str(), slot.obis_code.clone(), slot.from);
-                let Some((read, subject)) = by_key.get(&key).copied() else {
-                    continue;
-                };
+                let (read, subject) = by_key.get(&key).copied().ok_or_else(|| {
+                    EdmError::Internal("store displacement has no matching input interval".into())
+                })?;
                 if let Some(d) = self.append_superseding(read, subject).await? {
                     *slot = d;
                 }
@@ -1761,6 +1742,13 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         let mut touched: Vec<(String, String, OffsetDateTime, OffsetDateTime)> =
             Vec::with_capacity(records.len());
         for rec in records {
+            let from = storage_instant(rec.dtm_from);
+            let to = storage_instant(rec.dtm_to);
+            if from >= to {
+                return Err(input_err(
+                    "correction interval must span at least one stored microsecond",
+                ));
+            }
             // 1. Immutable audit row — the original value is carried by the
             //    correction request itself. § 147 Abs. 1 AO / GoBD: the record
             //    of the superseded figure is a Buchungsbeleg and must stay
@@ -1782,8 +1770,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                   RETURNING correction_id",
             )
             .bind(&rec.malo_id)
-            .bind(rec.dtm_from)
-            .bind(rec.dtm_to)
+            .bind(from)
+            .bind(to)
             .bind(rec.original_kwh)
             .bind(quality_to_str(rec.original_quality))
             .bind(rec.corrected_kwh)
@@ -1800,12 +1788,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             .map_err(pg_err)?;
             let correction_id: uuid::Uuid = row.try_get("correction_id").map_err(pg_err)?;
             ids.push(correction_id);
-            touched.push((
-                rec.tenant.clone(),
-                rec.malo_id.clone(),
-                rec.dtm_from,
-                rec.dtm_to,
-            ));
+            touched.push((rec.tenant.clone(), rec.malo_id.clone(), from, to));
 
             // 2. Append the corrected interval at a HIGHER version — the store
             //    routes it to the tier that owns the (possibly archived) interval
@@ -1832,7 +1815,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 // at these instants and a series can describe only one.
                 .obis(rec.obis_code.as_deref().unwrap_or_default())
                 .map_err(store_err)?
-                .range(rec.dtm_from, rec.dtm_to)
+                .range(from, to)
                 .collect_resolved()
                 .await
                 .map_err(store_err)?
@@ -1841,14 +1824,14 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                     input_err(format!(
                         "MaLo {}: no stored reading in [{}, {}) to correct — its Sparte and \
                          reporting operator come from that reading",
-                        rec.malo_id, rec.dtm_from, rec.dtm_to
+                        rec.malo_id, from, to
                     ))
                 })?;
             let corrected = MeterRead {
                 malo_id: rec.malo_id.clone(),
                 melo_id: None,
-                dtm_from: rec.dtm_from,
-                dtm_to: rec.dtm_to,
+                dtm_from: from,
+                dtm_to: to,
                 quantity_kwh: rec.corrected_kwh,
                 quality: rec.corrected_quality,
                 pid: rec.pid.unwrap_or(0),
@@ -1869,11 +1852,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             // A correction is another write to the subject store, so it carries
             // the same pseudonymous reference; `register` returns the existing one.
             let subject = registry(&self.store)?
-                .register(
-                    &subject_natural_id(&rec.tenant, &rec.malo_id),
-                    rec.dtm_from,
-                    sparte,
-                )
+                .register(&subject_natural_id(&rec.tenant, &rec.malo_id), from, sparte)
                 .await
                 .map_err(store_err)?;
             // A correction is edmd asserting a value, not a delivery arriving:
@@ -1897,7 +1876,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                         AND status IN ('OFFEN','UEBERFAELLIG')",
                 )
                 .bind(&rec.malo_id)
-                .bind(rec.dtm_from)
+                .bind(from)
                 .bind(&obis_norm)
                 .bind(&rec.tenant)
                 .bind(source_str)
@@ -2284,14 +2263,19 @@ fn typ2_to_stored(
     own: Option<&metering::ids::BdewCode>,
 ) -> Result<StoredSeries, EdmError> {
     let obis: Option<ObisCode> = r.obis_code.as_deref().and_then(|s| s.parse().ok());
-    let mut interval =
-        MeterInterval::new(r.dtm_from, r.dtm_to, r.quantity_kwh, r.quality).map_err(input_err)?;
+    let mut interval = MeterInterval::new(
+        storage_instant(r.dtm_from),
+        storage_instant(r.dtm_to),
+        r.quantity_kwh,
+        r.quality,
+    )
+    .map_err(input_err)?;
     if let Some(code) = obis {
         interval = interval.with_obis(code);
     }
     let operator = reading_operator(r.sender_mp_id.as_deref(), own)?;
     let scope = VersionScope::for_interval(operator, r.dtm_from, r.sparte).map_err(store_err)?;
-    let recorded_at = r.received_at.unwrap_or_else(OffsetDateTime::now_utc);
+    let recorded_at = storage_instant(r.received_at.unwrap_or_else(OffsetDateTime::now_utc));
     // Typ-2 values are stored as delivered and never corrected, so arrival order
     // is the only order there is — but it still has to be an order, hence the
     // millisecond resolution (see `version_of`): two deliveries in the same

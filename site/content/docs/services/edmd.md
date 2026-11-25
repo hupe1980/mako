@@ -376,9 +376,10 @@ boundary.
 |---|---|
 | **Tenant is part of a reading's identity** | `meter_reads` is keyed `(tenant, malo_id, dtm_from, obis_code_norm)`; `tenant` is meterstore's identity column, so two tenants' readings for one MaLo never merge, and every read binds it |
 | **One batched, validated write** | Every door goes through `store_reads`: one meterstore `append`, whole or not at all, accepting only a `ValidatedReads` — whose sole constructor runs the validation |
-| **The operator is a checked Marktpartner-ID** | The version scope is keyed on the reading's `sender_mp_id`, else the tenant, parsed as a `metering::ids::BdewCode`: its thirteenth digit must satisfy the BDEW or the GS1 procedure. Any other is refused (`422`) before it is stored |
+| **Reporting operator** | The version scope uses `sender_mp_id` or the deployment’s configured `[identity] own_mp_id`. A missing or malformed operator ID is refused. |
 | **Provenance rides along** | `source` (`IngestionSource`), `sender_mp_id` (§ 60 Abs. 1 per-interval MSB attribution) and `allocation_version` are meterstore attribute columns folded from the newest delivery; `source` is CHECK-constrained |
 | **Billing unit** | Gas is converted with the Brennwert before storage, so the stored `unit` is the Sparte's billing unit (`kWh`); water stays `m³`; heat is `kWh_th`. The unit reaches BO4E `Mengeneinheit` and the Iceberg Parquet |
+| **Interval precision** | Meter readings, corrections and audit records use whole microseconds. Finer fractions are truncated. A span whose endpoints then coincide is refused. |
 | **Constraints** | The 8-value `QualityFlag` vocabulary is a `CHECK` on every quality column; every interval/period table enforces `dtm_to > dtm_from`, and a read whose end is not after its start is refused at the store boundary |
 | **Version resolution** | A stated MSCONS version (≥ 14 digits) decides which delivery wins; without one, arrival milliseconds (13 digits), so a stated version always outranks it. Values edmd authors (corrections, Ersatzwerte) are appended above the version in force |
 | **Displacement audit** | An overwritten interval leaves an immutable § 60 Abs. 6 MsbG audit row spanning `[dtm_from, dtm_to)` |

@@ -22,6 +22,7 @@ Versioned changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/
 
 ### Fixed
 
+- Meter readings, corrections and Ersatzwerte share the same microsecond interval key in PostgreSQL and Iceberg. A timestamp with finer precision can no longer leave a faulty value in place or detach a correction from its audit record.
 - The acceptance kit recognizes the signed webhook test for its own endpoint when ordinary contract events arrive first.
 - Local makod checks, migrations and daemon startup lock the writer directory before opening SlateDB.
 - Historical billing resolves the price, § 14a module and recipient for the issuing supplier and period. Incomplete or overlapping assignments refuse calculation. A price-change notice uses its own contract’s customer.
